@@ -78,3 +78,24 @@ Verified in QEMU via the same screendump technique as the first boot sector: all
 Files: `boot/stage1.asm`, `boot/stage2.asm`, `boot/Makefile` (`make` builds `disk.img` = `stage1.bin` + `stage2.bin` concatenated; `make run` boots it in `qemu-system-i386`).
 
 Next up: with protected mode working, the next milestone is bringing up a C kernel — compiling a freestanding C file, linking it with a custom linker script to a known address, and having stage2 jump into it instead of just printing and halting.
+
+## 2026-08-02 — First C kernel boots
+
+Added `kernel/` with Rave-OS's first C code, and wired stage2 up to load and jump into it instead of doing its own VGA print.
+
+**Getting a C file to run with no OS underneath it:**
+- `kernel/kernel_entry.asm` is a tiny 32-bit asm stub (`_start: call kmain` then halt-loop) that becomes the very first bytes of the kernel binary. A bare C file has no guaranteed "this is where execution starts at this exact address" property on its own — the linker script's `ENTRY(_start)` plus listing `kernel_entry.o` before `kernel.o` on the link line is what pins `_start` to the first byte.
+- `kernel/kernel.c` is `kmain()`: writes `"Rave-OS kernel: hello from C!"` directly to the VGA text buffer at `0xB8000` (2 bytes/char: ASCII + color attribute), same technique used in raw asm for the protected-mode proof last stage, now from C. No `printf`, no libc — there isn't one linked in (`-nostdlib`).
+- `kernel/linker.ld` places `.text`/`.rodata`/`.data`/`.bss` starting at `0x10000` — this has to match `KERNEL_LOAD_ADDR` in `boot/stage2.asm`, since stage2 jumps to that literal physical address. `.eh_frame`/`.comment`/`.note.*` are explicitly discarded since nothing loads/needs them and they'd otherwise bloat the flat binary.
+- Compiled freestanding: `-m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -nostdlib`. `-ffreestanding` tells gcc not to assume a hosted environment (no standard library, no `main` with argc/argv semantics); `-nostdlib` stops it linking against one; the rest suppress code (stack-protector canaries, exception-unwind tables) that assumes runtime support we don't have.
+- `objcopy -O binary kernel.elf kernel.bin` strips all ELF metadata (headers, section table) down to just the raw loadable bytes — the CPU has no idea what an ELF file is; stage2 is just going to jump to a physical address and start executing whatever's there, so it needs to be the bare instruction bytes starting exactly at `_start`. Verified with `objdump -d kernel.elf` that `_start` disassembles at address `0x10000` as expected.
+
+**Loading it off disk:** `boot/stage2.asm` now reads `KERNEL_SECTORS` (8, i.e. 4KB — generous headroom for now) more sectors starting at `KERNEL_START_SECTOR` (4, i.e. right after stage1's 1 sector + stage2's 2 sectors) into `0x1000:0x0000` (physical `0x10000`) via the same BIOS `int 0x13` mechanism as stage1 loading stage2 — still real mode, so BIOS disk services are still available at this point. *Then* it does A20 + GDT + `CR0.PE` + far jump, exactly as before, except the far jump target is now `KERNEL_LOAD_ADDR` (the kernel's `_start`) instead of stage2's own inline print-and-halt code.
+
+**Known rough edge (unchanged from last stage, now touching 3 places instead of 2):** sector counts/offsets are manually-synced constants across `boot/stage1.asm` (`STAGE2_SECTORS`), `boot/stage2.asm` (`KERNEL_START_SECTOR`, `KERNEL_SECTORS`), and `kernel/Makefile` (`KERNEL_SECTORS`, used to pad `kernel.bin` to a whole number of sectors via `truncate`). This is fine while sizes are small and stable, but growing the kernel much further should probably come with a real fix — e.g. a build step that greps the actual compiled sizes and generates these constants automatically, or a stage2 that reads a size header instead of a hardcoded count.
+
+Build: `boot/Makefile`'s `disk.img` target now depends on `kernel/kernel.bin` and invokes `make -C ../kernel` to build it, then concatenates `stage1.bin + stage2.bin + kernel.bin` — 512 + 1024 + 4096 = 5632 bytes total. `make -C boot clean` also cleans the kernel dir.
+
+Verified end-to-end in QEMU: SeaBIOS → stage1 ("loading stage2...") → stage2 ("loading kernel...") → kernel prints its message in green and halts.
+
+Next up: the kernel can currently only write directly to fixed VGA memory offsets. Reasonable next steps: a proper VGA text-mode driver (cursor tracking, scrolling, clear-screen) as a small first abstraction layer, and/or basic keyboard input (reading scancodes off the PS/2 controller) — both are groundwork before anything resembling the roadmap's GUI stage (see the Vision section at the top of this log).
