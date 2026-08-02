@@ -10,6 +10,7 @@
 #include "interrupts.h"
 #include "window.h"
 #include "button.h"
+#include "io.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
  * kernel even starts, so raw VGA text-mode writes at 0xB8000 don't apply
@@ -18,6 +19,18 @@
 
 #define CURSOR_SIZE 8
 #define TYPED_MAX 24
+
+/* QEMU's default i440fx/PIIX4 machine emulates just enough ACPI to honor
+ * this: writing 0x2000 to the PM1a control port (0x604) requests an S5
+ * ("soft off") transition, which quits QEMU the same as closing its
+ * window -- unlike a triple-fault or infinite hlt loop, this actually
+ * ends the process, so there's nothing left holding the mouse grab. */
+static void power_shutdown(void) {
+    outw(0x604, 0x2000);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
 
 static uint32_t plasma_color(int x, int y, int w, int h) {
     uint8_t r = (uint8_t)(x * 255 / w);
@@ -60,7 +73,8 @@ static void str_append(char *dst, int *pos, const char *src) {
  * then button, then text, then cursor on top) every time. gfx_present()
  * still blits the entire backbuffer regardless (a known, deferred
  * performance tradeoff -- see docs/BUILD_LOG.md). */
-static void draw_scene(int w, int h, const struct window *panel, const struct button *btn, int click_count,
+static void draw_scene(int w, int h, const struct window *panel, const struct button *btn,
+                       const struct button *exit_btn, int click_count,
                        const char *typed, int mx, int my, uint32_t cursor_color) {
     int x, y;
     const char *title = "RAVE-OS";
@@ -81,6 +95,7 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
 
     window_draw(panel);
     button_draw(btn);
+    button_draw(exit_btn);
 
     pos = 0;
     str_append(line, &pos, "CLICKS: ");
@@ -109,6 +124,7 @@ void kmain(void) {
     int typed_len = 0;
     struct window panel;
     struct button btn;
+    struct button exit_btn;
 
     gfx_init();
     w = gfx_width();
@@ -128,6 +144,14 @@ void kmain(void) {
     btn.hovered = 0;
     btn.pressed = 0;
 
+    exit_btn.x = btn.x + btn.w + 20;
+    exit_btn.y = btn.y;
+    exit_btn.w = panel.x + panel.w - 20 - exit_btn.x;
+    exit_btn.h = 30;
+    exit_btn.label = "EXIT";
+    exit_btn.hovered = 0;
+    exit_btn.pressed = 0;
+
     typed[0] = 0;
 
     mx = w / 2;
@@ -141,7 +165,7 @@ void kmain(void) {
     mouse_init();
     interrupts_enable();
 
-    draw_scene(w, h, &panel, &btn, click_count, typed, mx, my, cursor_color);
+    draw_scene(w, h, &panel, &btn, &exit_btn, click_count, typed, mx, my, cursor_color);
     gfx_present();
 
     for (;;) {
@@ -175,6 +199,13 @@ void kmain(void) {
                 click_count++;
             }
             btn.pressed = btn.hovered && left_held;
+
+            exit_btn.hovered = button_hit_test(&exit_btn, cx, cy);
+            if (exit_btn.hovered && left_held && !prev_left_held) {
+                power_shutdown();
+            }
+            exit_btn.pressed = exit_btn.hovered && left_held;
+
             prev_left_held = left_held;
             cursor_color = left_held ? 0xFF0000 : 0xFFFFFF;
 
@@ -197,7 +228,7 @@ void kmain(void) {
         }
 
         if (had_event) {
-            draw_scene(w, h, &panel, &btn, click_count, typed, mx, my, cursor_color);
+            draw_scene(w, h, &panel, &btn, &exit_btn, click_count, typed, mx, my, cursor_color);
             gfx_present();
         } else {
             __asm__ volatile("hlt");

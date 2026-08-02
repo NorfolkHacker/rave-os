@@ -271,3 +271,17 @@ No new features this stage -- a pause to work through the gaps flagged across pr
 Files: deleted `kernel/vga.c`, `kernel/vga.h`; `boot/Makefile` (sector-count automation), `boot/stage1.asm`/`stage2.asm` (`%ifndef`-guarded constants), `kernel/Makefile` (dropped fixed budget/padding); `kernel/linker.ld` (`__bss_start`/`__bss_end`), `kernel/kernel_entry.asm` (`.bss` zeroing); `kernel/isr.c` (`panic()`, four named exception handlers).
 
 Next up: unchanged from before this pass -- window dragging, more widget variety, multiple windows with z-ordering, and revisiting damage-rect `gfx_present()` once it's an actual observed problem.
+
+## 2026-08-02 — An EXIT button, so QEMU's mouse grab doesn't require a force-reboot to escape
+
+Small but overdue fix: there was no way to leave a running Rave-OS session cleanly. QEMU (run via `boot/Makefile`'s `run` target, no special display flags) grabs the host mouse the moment you click into its window, since the PS/2 mouse protocol is relative-motion and QEMU needs exclusive pointer input to generate those deltas. QEMU's own release shortcut (Ctrl+Alt+G) exists for this, but with nothing in the guest OS itself offering a way out, a force-reboot ended up being the escape hatch in practice.
+
+**The real fix is to make the guest exit cleanly, not to rely on remembering a host-side shortcut.** QEMU's default machine type (`pc`, i440fx chipset) emulates a PIIX4 ACPI power-management block; writing `0x2000` to I/O port `0x604` (the PM1a control register) requests an ACPI S5 ("soft off") transition -- the same mechanism a real BIOS/ACPI-aware OS uses to power off hardware, and one of the most common tricks hobby OSes use to shut down cleanly under QEMU without needing any extra `-device`/`-machine` flags. Added `outw()` to `io.h` (alongside the existing `outb`/`inb`) and a `power_shutdown()` helper in `kernel.c` that does exactly this, halting in a loop afterward as a fallback in case the write is ever a no-op on a different machine type.
+
+**Wired up as a second button**, reusing the existing generic `struct button`/`button_draw`/`button_hit_test` from the previous GUI-primitives stage rather than adding any new widget code: an "EXIT" button sits next to "CLICK ME" in the panel, sized to fill the remaining panel width. The event loop's existing hover/press-edge logic (already tracking `prev_left_held` for click-edge detection) extended naturally to a second button by just repeating the same hit-test/edge-detect block against `exit_btn` and calling `power_shutdown()` on its click edge instead of incrementing a counter.
+
+**Verified headlessly**, since the point was confirming an actual mouse click makes QEMU's process exit (not just that the code compiles): booted `disk.img` with `-display none -monitor unix:...`, drove the guest via monitor `mouse_move`/`mouse_button` commands to hover and click the EXIT button, then confirmed the QEMU process itself was gone from `/proc` afterward -- process exit, not a hang or a crash. A `screendump` before the click also confirmed the new button renders correctly alongside the existing panel (border, label, and hover/press coloring all shared with `CLICK ME` for free, being the same widget code).
+
+Files: `kernel/io.h` (`outw`); `kernel/kernel.c` (`power_shutdown()`, `exit_btn`, event loop wiring).
+
+Next up: unchanged from before this pass -- window dragging, more widget variety, multiple windows with z-ordering, and revisiting damage-rect `gfx_present()` once it's an actual observed problem.
