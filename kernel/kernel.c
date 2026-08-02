@@ -4,6 +4,7 @@
  * address. */
 
 #include "vga.h"
+#include "keyboard.h"
 
 void kmain(void) {
     int i;
@@ -21,7 +22,12 @@ void kmain(void) {
         vga_puts("scroll test line\n");
     }
 
+    vga_set_color(0x0E, 0x00); /* yellow */
+    vga_puts("\nKeyboard driver online -- type something:\n");
+    vga_set_color(0x07, 0x00); /* back to light grey */
+
     for (;;) {
-        __asm__ volatile("hlt");
+        char c = keyboard_read_char();
+        vga_putc(c);
     }
 }

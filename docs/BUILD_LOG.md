@@ -117,3 +117,21 @@ Build note: linking now produces a `ld` warning ("LOAD segment with RWX permissi
 Files: `kernel/vga.c`, `kernel/vga.h`, `kernel/io.h`; `kernel/Makefile` updated to compile and link `vga.o` alongside `kernel.o`.
 
 Next up: keyboard input — reading scancodes off the PS/2 controller (port `0x60`, using the new `inb`) — is the natural next driver, since `io.h` already exists for it and it's the next piece needed before anything interactive.
+
+## 2026-08-02 — PS/2 keyboard driver
+
+Added `kernel/keyboard.c` / `kernel/keyboard.h`: a polling-based PS/2 keyboard driver, and wired `kmain()` up to echo whatever's typed to the VGA driver.
+
+**How PS/2 keyboard input works, no interrupts yet:**
+- The keyboard controller has a status port (`0x64`) and a data port (`0x60`). Bit 0 of the status byte is "output buffer full" — set when the controller has a byte ready to read. `keyboard_read_scancode()` just spins (`while (!(inb(0x64) & 1)) {}`) until that bit is set, then reads the byte from `0x60`. This is polling rather than interrupt-driven — simpler to get right first, at the cost of burning CPU while waiting; using the keyboard IRQ instead requires an IDT (Interrupt Descriptor Table), which is a real future stage in its own right (also needed for exceptions, the timer, etc.), not a small addition to this one.
+- The byte read is a **scancode**, not ASCII — specifically "scancode set 1", the legacy set the controller still emits by default for compatibility. Pressing a key sends its **make code**; releasing it sends the same value with the top bit set (**break code** = make code `| 0x80`). `keyboard_read_char()` masks that bit off to check `released`, and ignores break codes for every key except shift (see below).
+- Two lookup tables (`scancode_to_ascii`, `scancode_to_ascii_shift`), indexed directly by make code, cover the main alphanumeric block (letters, digits, punctuation, space, tab, enter, backspace, escape). Entries of `0` mean "no printable character" — ctrl, alt, capslock, function keys, etc. aren't handled yet, and `keyboard_read_char()` just keeps polling past them rather than returning garbage.
+- **Shift is tracked as state, not looked up in the table directly**: `SC_LSHIFT`/`SC_RSHIFT` (`0x2A`/`0x36`) update a `shift_held` flag on press/release instead of producing a character, and every other key's lookup picks the shifted or unshifted table based on that flag. This is the standard approach for any modifier key (ctrl, alt would work the same way) — the hard part of "keyboard input" is this kind of state tracking, not the port I/O itself.
+
+**VGA driver got one addition to support this cleanly:** `vga_putc()` now handles `'\b'` (backspace) by moving the cursor back a column (wrapping to the previous row's last column if already at column 0) and blanking that cell, rather than printing byte `8` as a raw (garbage-looking) glyph.
+
+**Testing an interactive driver without touching a real keyboard:** QEMU's monitor `sendkey` command injects synthetic key events into the guest (e.g. `sendkey a`, `sendkey backspace`, `sendkey shift-a` for a shifted combo) — sent over the same monitor socket used for `screendump`, with a short delay between each command so the guest's polling loop has time to consume each event before the next arrives (sending them with no delay between at all was tried first and didn't register — timing between injected events and the guest's poll loop matters). Verified: typing `a`, `b`, `c`, backspace, `d`, enter, then `shift-a` echoed exactly `abd` on one line and `A` on the next — confirming scancode reading, the backspace erase, and shift-modifier tracking all work correctly together.
+
+Files: `kernel/keyboard.c`, `kernel/keyboard.h`; `kernel/vga.c` (backspace handling added to `vga_putc`); `kernel/kernel.c` now ends in a `keyboard_read_char()` → `vga_putc()` echo loop instead of halting; `kernel/Makefile` updated to build `keyboard.o`.
+
+Next up: this closes out the immediate "bare-metal basics" work (VGA output + keyboard input). Bigger structural pieces still ahead before the GUI stage: an IDT for real interrupt-driven input (and exceptions), a memory allocator, and eventually paging. Worth deciding with the user which of those to tackle next, versus starting to sketch GUI-stage groundwork (VESA/VBE graphics mode) directly.

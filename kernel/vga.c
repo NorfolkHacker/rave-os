@@ -70,6 +70,16 @@ void vga_putc(char c) {
         cursor_row++;
     } else if (c == '\r') {
         cursor_col = 0;
+    } else if (c == '\b') {
+        if (cursor_col > 0) {
+            cursor_col--;
+        } else if (cursor_row > 0) {
+            cursor_row--;
+            cursor_col = VGA_COLS - 1;
+        }
+        int offset = (cursor_row * VGA_COLS + cursor_col) * 2;
+        VGA_MEMORY[offset] = ' ';
+        VGA_MEMORY[offset + 1] = current_attr;
     } else {
         int offset = (cursor_row * VGA_COLS + cursor_col) * 2;
         VGA_MEMORY[offset] = (unsigned char)c;
