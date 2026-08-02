@@ -12,6 +12,7 @@
 #include "button.h"
 #include "textfield.h"
 #include "checkbox.h"
+#include "taskbar.h"
 #include "io.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
@@ -328,7 +329,8 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
  * update_and_present() below). */
 static void draw_scene(int w, int h, const struct window *windows, const struct button *btn,
                        const struct button *exit_btn, int click_count, const struct textfield *tf,
-                       const struct checkbox *cb, const int *z_order, int mx, int my, uint32_t cursor_color) {
+                       const struct checkbox *cb, const int *z_order, const struct taskbar *bar, int hovered_entry,
+                       int mx, int my, uint32_t cursor_color) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -346,17 +348,25 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
         }
     }
 
+    taskbar_draw(bar, windows, z_order, MAX_WINDOWS, hovered_entry);
+
     gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
 }
+
+/* Region index constants for update_and_present()'s damage array: one
+ * slot per window, plus the title block, plus the taskbar. */
+#define TITLE_REGION (MAX_WINDOWS)
+#define TASKBAR_REGION (MAX_WINDOWS + 1)
+#define DAMAGE_REGIONS (MAX_WINDOWS + 2)
 
 /* Per-event redraw: repaints only a damage rectangle instead of the whole
  * screen, then presents just that rectangle (see the previous
  * damage-rect stage in docs/BUILD_LOG.md for why -- redrawing everything
  * per event is what let a real mouse's packet rate outrun the redraw
  * loop and overflow the ring buffer in an earlier stage). The damage rect
- * has to track MAX_WINDOWS + 1 independent regions -- each window, plus
- * the title block -- rather than a fixed few named ones, now that windows
- * are a real array:
+ * has to track DAMAGE_REGIONS independent regions -- each window, the
+ * title block, and the taskbar -- rather than a fixed few named ones, now
+ * that windows are a real array:
  *
  * - It starts as the union of the cursor's old and new position, since
  *   the cursor moves on nearly every event.
@@ -371,7 +381,7 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
  *   that nothing ever restores. This is what correctly handles the
  *   cursor sweeping across a window it didn't otherwise touch, and a
  *   window that moved away revealing whatever (window or backdrop) was
- *   underneath it. MAX_WINDOWS + 1 regions total, so this converges in at
+ *   underneath it. DAMAGE_REGIONS regions total, so this converges in at
  *   most that many passes.
  *
  * Whatever ends up dirty is still redrawn as a whole reconstructed unit,
@@ -383,13 +393,15 @@ static void update_and_present(int w, int h, const struct window *windows, const
                                const struct button *exit_btn, int click_count, const struct textfield *tf,
                                const struct checkbox *cb, const int *z_order, const int *old_z, int old_mx,
                                int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
-                               const int *touched, int fx_changed) {
+                               const int *touched, int fx_changed, const struct taskbar *bar, int hovered_entry,
+                               int old_hovered_entry) {
     int dx0, dy0, dx1, dy1;
-    int rx0[MAX_WINDOWS + 1], ry0[MAX_WINDOWS + 1], rx1[MAX_WINDOWS + 1], ry1[MAX_WINDOWS + 1];
-    int redraw[MAX_WINDOWS + 1];
+    int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
+    int redraw[DAMAGE_REGIONS];
     int changed;
     int i, x, y;
     int z_reordered = 0;
+    int taskbar_touched;
 
     for (i = 0; i < MAX_WINDOWS; i++) {
         if (z_order[i] != old_z[i]) {
@@ -415,12 +427,28 @@ static void update_and_present(int w, int h, const struct window *windows, const
         dy1 = (old_my > my ? old_my : my) + CURSOR_SIZE;
     }
 
+    /* The taskbar's own appearance only depends on state/z-order (which
+     * window is "active") and hover, not window position -- but folding
+     * any window's touched flag in too (position included) is a harmless
+     * superset, not worth a separate finer-grained check for a 24px bar. */
+    taskbar_touched = z_reordered || (hovered_entry != old_hovered_entry);
+    for (i = 0; i < MAX_WINDOWS; i++) {
+        if (touched[i]) {
+            taskbar_touched = 1;
+        }
+    }
+
     for (i = 0; i < MAX_WINDOWS; i++) {
         window_outer_rect(&windows[i], &rx0[i], &ry0[i], &rx1[i], &ry1[i]);
         redraw[i] = touched[i] || z_reordered;
     }
-    title_block_rect(w, &rx0[MAX_WINDOWS], &ry0[MAX_WINDOWS], &rx1[MAX_WINDOWS], &ry1[MAX_WINDOWS]);
-    redraw[MAX_WINDOWS] = 0;
+    title_block_rect(w, &rx0[TITLE_REGION], &ry0[TITLE_REGION], &rx1[TITLE_REGION], &ry1[TITLE_REGION]);
+    redraw[TITLE_REGION] = 0;
+    rx0[TASKBAR_REGION] = bar->x;
+    ry0[TASKBAR_REGION] = bar->y;
+    rx1[TASKBAR_REGION] = bar->x + bar->w;
+    ry1[TASKBAR_REGION] = bar->y + bar->h;
+    redraw[TASKBAR_REGION] = taskbar_touched;
 
     for (i = 0; i < MAX_WINDOWS; i++) {
         if (touched[i]) {
@@ -436,10 +464,14 @@ static void update_and_present(int w, int h, const struct window *windows, const
             rect_union(&dx0, &dy0, &dx1, &dy1, rx0[i], ry0[i], rx1[i], ry1[i]);
         }
     }
+    if (redraw[TASKBAR_REGION]) {
+        rect_union(&dx0, &dy0, &dx1, &dy1, rx0[TASKBAR_REGION], ry0[TASKBAR_REGION], rx1[TASKBAR_REGION],
+                  ry1[TASKBAR_REGION]);
+    }
 
     do {
         changed = 0;
-        for (i = 0; i <= MAX_WINDOWS; i++) {
+        for (i = 0; i < DAMAGE_REGIONS; i++) {
             if (!redraw[i] && rects_overlap(dx0, dy0, dx1, dy1, rx0[i], ry0[i], rx1[i], ry1[i])) {
                 redraw[i] = 1;
                 rect_union(&dx0, &dy0, &dx1, &dy1, rx0[i], ry0[i], rx1[i], ry1[i]);
@@ -467,7 +499,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
         }
     }
 
-    if (redraw[MAX_WINDOWS]) {
+    if (redraw[TITLE_REGION]) {
         draw_title_subtitle(w);
     }
 
@@ -476,6 +508,10 @@ static void update_and_present(int w, int h, const struct window *windows, const
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
             draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb);
         }
+    }
+
+    if (redraw[TASKBAR_REGION]) {
+        taskbar_draw(bar, windows, z_order, MAX_WINDOWS, hovered_entry);
     }
 
     gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
@@ -489,11 +525,13 @@ void kmain(void) {
     int click_count = 0;
     int prev_left_held = 0;
     int dragging_window = -1;
+    int taskbar_hovered = -1;
     uint32_t cursor_color = CURSOR_IDLE_COLOR;
     struct textfield tf;
     struct checkbox cb;
     struct window windows[MAX_WINDOWS];
     int z_order[MAX_WINDOWS];
+    struct taskbar bar;
     struct button btn;
     struct button exit_btn;
 
@@ -543,6 +581,11 @@ void kmain(void) {
     z_order[0] = WIN_KIND_PANEL;
     z_order[1] = WIN_KIND_INFO;
 
+    bar.x = 0;
+    bar.y = h - TASKBAR_HEIGHT;
+    bar.w = w;
+    bar.h = TASKBAR_HEIGHT;
+
     /* Sits to the right of the "TYPE:" label drawn by draw_window_group(),
      * on the same baseline (see textfield_draw()'s vertical-centering math
      * for why tf.y is offset by -3), extending to the same right margin
@@ -577,7 +620,8 @@ void kmain(void) {
     mouse_init();
     interrupts_enable();
 
-    draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, mx, my, cursor_color);
+    draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, &bar, taskbar_hovered, mx, my,
+              cursor_color);
     gfx_present();
 
     for (;;) {
@@ -597,6 +641,7 @@ void kmain(void) {
         int old_tf_focused = tf.focused;
         int old_cb_checked = cb.checked;
         int old_cb_hovered = cb.hovered;
+        int old_taskbar_hovered = taskbar_hovered;
         int i;
 
         for (i = 0; i < MAX_WINDOWS; i++) {
@@ -659,13 +704,31 @@ void kmain(void) {
 
                     windows[dragging_window].x += dx;
                     windows[dragging_window].y += dy;
-                    clamp_window_to_screen(&windows[dragging_window], w, h);
+                    clamp_window_to_screen(&windows[dragging_window], w, h - TASKBAR_HEIGHT);
 
                     applied_dx = windows[dragging_window].x - drag_start_x;
                     applied_dy = windows[dragging_window].y - drag_start_y;
                     move_window_content(dragging_window, &btn, &exit_btn, &tf, &cb, applied_dx, applied_dy);
                 } else {
                     dragging_window = -1;
+                }
+            } else if (left_held && !prev_left_held && taskbar_hit_entry(&bar, windows, MAX_WINDOWS, cx, cy) >= 0) {
+                /* The taskbar sits above every window (windows are
+                 * clamped to never go under it), so its clicks are
+                 * checked before window hit-testing rather than folded
+                 * into topmost_window_at() -- it isn't part of the
+                 * window stack at all. Clicking the already-active
+                 * window's entry minimizes it (a toggle, same as
+                 * clicking a real taskbar button twice); clicking any
+                 * other entry (minimized, or open but not frontmost)
+                 * restores/raises it. */
+                int entry = taskbar_hit_entry(&bar, windows, MAX_WINDOWS, cx, cy);
+
+                if (windows[entry].state == WINDOW_OPEN && z_order[0] == entry) {
+                    windows[entry].state = WINDOW_MINIMIZED;
+                } else {
+                    windows[entry].state = WINDOW_OPEN;
+                    raise_window(z_order, entry);
                 }
             } else if (left_held && !prev_left_held) {
                 int target = topmost_window_at(windows, z_order, cx, cy);
@@ -703,6 +766,8 @@ void kmain(void) {
                     windows[wi].close_hovered = is_target && window_close_hit_test(&windows[wi], cx, cy);
                 }
             }
+
+            taskbar_hovered = taskbar_hit_entry(&bar, windows, MAX_WINDOWS, cx, cy);
 
             /* The panel's buttons only respond if the panel is actually
              * the topmost thing under the cursor -- otherwise a click on
@@ -770,7 +835,8 @@ void kmain(void) {
                                       (cb.checked != old_cb_checked) || (cb.hovered != old_cb_hovered);
 
             update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, old_z, old_mx, old_my,
-                               mx, my, cursor_color, old_x, old_y, touched, cb.checked != old_cb_checked);
+                               mx, my, cursor_color, old_x, old_y, touched, cb.checked != old_cb_checked, &bar,
+                               taskbar_hovered, old_taskbar_hovered);
         } else {
             __asm__ volatile("hlt");
         }
