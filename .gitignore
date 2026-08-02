@@ -4,3 +4,4 @@ build/
 *.elf
 *.bin
 *.iso
+*.img

@@ -58,3 +58,23 @@ Next up: write the first boot sector — a 512-byte program BIOS loads at `0x7C0
 Files: `boot/boot.asm`, `boot/Makefile` (`make` assembles `boot.bin` via `nasm -f bin`; `make run` boots it in `qemu-system-i386`).
 
 Next up: this boot sector currently just prints and halts. The next real milestone is switching from 16-bit real mode into 32-bit protected mode — setting up a Global Descriptor Table (GDT), enabling the A20 line, and making the jump — as the foundation for running actual C kernel code.
+
+## 2026-08-02 — Two-stage bootloader + 32-bit protected mode
+
+A single 512-byte sector isn't enough room for GDT setup, a protected-mode switch, and (eventually) a C kernel, so this stage splits the boot process in two:
+
+- **`boot/stage1.asm`** (renamed from the old `boot.asm`, still the MBR boot sector at `0x7C00`): prints a message, then uses BIOS `int 0x13` function `0x02` ("read sectors", CHS addressing) to read the next `STAGE2_SECTORS` (2) sectors off the boot disk into memory at `0x0000:0x8000`, and far-jumps there. The boot drive number the BIOS passes in `dl` at entry is saved to a variable before the disk-read call clobbers `dl`, since we need it for `int 0x13`.
+- **`boot/stage2.asm`** (loaded at `0x8000`, still starts in 16-bit real mode): does the actual real-mode → protected-mode transition:
+  1. **Enable the A20 line** — on the original 8086, address bit 20 didn't exist, so addresses wrapped at 1MB; later chips added a gate (disabled by default at boot, for backward compatibility) that must be explicitly enabled to access memory above 1MB. Used the "fast A20" method: set bit 1 of I/O port `0x92`. (One of several historical methods — others go through the keyboard controller or BIOS `int 0x15` — this one is simplest and QEMU supports it.)
+  2. **Build a flat GDT** (Global Descriptor Table) — protected mode requires a GDT describing memory segments before it can be entered. Built the minimal legal one: a required null descriptor, one code segment, one data segment, both base `0` / limit `0xFFFFF` with 4K granularity (→ 4GB) and 32-bit flag set, so segmentation is effectively a no-op and segment:offset addresses are just linear addresses.
+  3. **Set `CR0.PE`** (bit 0 of control register 0, "Protection Enable") — this is the actual switch that turns on protected mode.
+  4. **Far jump to the code segment selector** (`jmp CODE_SEG:protected_mode_entry`) — required immediately after setting `CR0.PE`: it's what flushes the CPU's prefetch queue (which may hold real-mode-decoded instructions) and loads `CS` with the new segment selector; falling through without a far jump leaves the CPU in a broken half-switched state.
+  5. Once in 32-bit code (`BITS 32` from here on), load the other segment registers (`ds`/`es`/`fs`/`gs`/`ss`) from the data selector, set up a stack (`esp = 0x90000`), then **write directly to the VGA text-mode framebuffer at physical `0xB8000`** (2 bytes per character: ASCII byte + attribute byte) to prove protected mode is live — BIOS interrupts like `int 0x10` no longer work once real mode is left, since the BIOS's own interrupt handlers are 16-bit real-mode code.
+
+Verified in QEMU via the same screendump technique as the first boot sector: all three expected messages appear (stage1's real-mode print, stage2's real-mode print, and the direct VGA write from 32-bit protected-mode code, visible overwriting SeaBIOS's own banner text at the top-left of the screen — the only way that text could appear there is if the write path used was the direct `0xB8000` framebuffer write, confirming the code executing it was really running in protected mode).
+
+**Rough edge, noted for later:** `STAGE2_SECTORS` is a manually-synchronized constant in `stage1.asm` that must match stage2's actual padded size (currently hardcoded to exactly 1024 bytes via a `times` padding directive in `stage2.asm`) — if stage2 grows past that, both files need updating together. Fine for now; will likely need a more robust approach once stage2 needs to load a variably-sized C kernel.
+
+Files: `boot/stage1.asm`, `boot/stage2.asm`, `boot/Makefile` (`make` builds `disk.img` = `stage1.bin` + `stage2.bin` concatenated; `make run` boots it in `qemu-system-i386`).
+
+Next up: with protected mode working, the next milestone is bringing up a C kernel — compiling a freestanding C file, linking it with a custom linker script to a known address, and having stage2 jump into it instead of just printing and halting.
