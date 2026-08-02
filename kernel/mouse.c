@@ -134,6 +134,19 @@ int mouse_poll_packet(int *dx, int *dy, int *buttons) {
         raw_dy -= 256; /* sign-extend Y */
     }
 
+    /* Bits 6/7 mean the real motion overflowed the 9-bit signed range this
+     * packet can carry -- the device is telling us raw_dx/raw_dy are not
+     * trustworthy, not just large. A fast real mouse flick can trip this;
+     * the slow one-packet-at-a-time monitor commands used to test this
+     * driver never moved fast enough to. Clamp to the max representable
+     * magnitude in the reported direction rather than trust a bogus delta. */
+    if (b0 & 0x40) {
+        raw_dx = (raw_dx < 0) ? -255 : 255;
+    }
+    if (b0 & 0x80) {
+        raw_dy = (raw_dy < 0) ? -255 : 255;
+    }
+
     *dx = raw_dx;
     *dy = -raw_dy; /* PS/2 reports +Y as "up"; screen coordinates want +Y as "down" */
     *buttons = b0 & 0x07;

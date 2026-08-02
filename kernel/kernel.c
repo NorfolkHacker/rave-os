@@ -173,7 +173,16 @@ void kmain(void) {
         int dx, dy, buttons;
         char c;
 
-        if (mouse_poll_packet(&dx, &dy, &buttons)) {
+        /* Drain every mouse packet already queued before redrawing, rather
+         * than redrawing once per packet: a real mouse streams packets far
+         * faster than a full-screen software redraw can keep up with under
+         * QEMU's TCG emulation, and the 32-byte ring buffer in mouse.c
+         * drops individual bytes (not whole packets) once it backs up --
+         * desyncing packet framing and producing garbage dx/dy decodes
+         * (seen as the cursor jumping erratically). Collapsing a burst of
+         * queued packets into one redraw keeps the loop caught up instead
+         * of falling further behind with every packet. */
+        while (mouse_poll_packet(&dx, &dy, &buttons)) {
             int left_held, cx, cy;
 
             mx += dx;
