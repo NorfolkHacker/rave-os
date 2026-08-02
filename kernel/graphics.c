@@ -5,14 +5,25 @@
 #include "graphics.h"
 #include "boot_info.h"
 
-/* Assumes a 32-bit-per-pixel packed-RGB mode, true for the VBE mode 0x112
- * stage2 sets. A driver supporting other bit depths would branch on
- * boot_info->bpp here; not needed yet since stage2 only ever asks for one
- * mode. */
+/* Writes bytes_per_pixel bytes per call rather than always writing a fixed
+ * 32-bit word: VBE mode 0x112 was assumed to be 32bpp (matching its
+ * standard VESA definition) but this BIOS/QEMU's ModeInfoBlock actually
+ * reports BitsPerPixel=24 (confirmed by BytesPerScanLine = 640*3, not
+ * 640*4) -- writing 4-byte words at a 3-bytes/pixel stride corrupted
+ * every single pixel, each write bleeding into the next one's bytes.
+ * Reading boot_info->bpp instead of hardcoding 4 makes this correct for
+ * whatever the BIOS actually handed back. */
 void gfx_put_pixel(int x, int y, uint32_t rgb) {
+    int bytes_per_pixel = boot_info->bpp / 8;
     volatile uint8_t *fb = (volatile uint8_t *)(uintptr_t)boot_info->framebuffer_addr;
-    uint32_t offset = (uint32_t)y * boot_info->pitch + (uint32_t)x * 4;
-    *(volatile uint32_t *)(fb + offset) = rgb;
+    volatile uint8_t *pixel = fb + (uint32_t)y * boot_info->pitch + (uint32_t)x * bytes_per_pixel;
+
+    pixel[0] = (uint8_t)(rgb & 0xFF);         /* blue */
+    pixel[1] = (uint8_t)((rgb >> 8) & 0xFF);   /* green */
+    pixel[2] = (uint8_t)((rgb >> 16) & 0xFF);  /* red */
+    if (bytes_per_pixel >= 4) {
+        pixel[3] = 0;
+    }
 }
 
 void gfx_fill_rect(int x, int y, int w, int h, uint32_t rgb) {

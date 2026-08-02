@@ -9,14 +9,14 @@ CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-un
 KERNEL_SECTORS := 12
 KERNEL_BYTES := $(shell echo $$(($(KERNEL_SECTORS) * 512)))
 
-C_OBJS := kernel.o vga.o keyboard.o graphics.o font.o text.o
+C_OBJS := kernel.o vga.o keyboard.o mouse.o graphics.o font.o text.o
 
 all: kernel.bin
 
 kernel_entry.o: kernel_entry.asm
 	$(AS) -f elf32 kernel_entry.asm -o kernel_entry.o
 
-kernel.o: kernel.c graphics.h text.h
+kernel.o: kernel.c graphics.h text.h mouse.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 vga.o: vga.c vga.h io.h
@@ -24,6 +24,9 @@ vga.o: vga.c vga.h io.h
 
 keyboard.o: keyboard.c keyboard.h io.h
 	$(CC) $(CFLAGS) -c keyboard.c -o keyboard.o
+
+mouse.o: mouse.c mouse.h io.h
+	$(CC) $(CFLAGS) -c mouse.c -o mouse.o
 
 graphics.o: graphics.c graphics.h boot_info.h
 	$(CC) $(CFLAGS) -c graphics.c -o graphics.o
