@@ -26,8 +26,13 @@ struct window {
 
 void window_draw(const struct window *win);
 
-/* Point-in-rect test against just the title bar strip (not the body) --
- * what a caller should check before starting a drag. */
+/* Point-in-rect test against just the title bar strip, excluding the
+ * minimize/close control cluster at its right end -- what a caller
+ * should check before starting a drag, so grabbing a control doesn't
+ * also start dragging the window out from under the click. */
 int window_titlebar_hit_test(const struct window *win, int px, int py);
+
+int window_minimize_hit_test(const struct window *win, int px, int py);
+int window_close_hit_test(const struct window *win, int px, int py);
 
 #endif

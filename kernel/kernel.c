@@ -71,7 +71,10 @@ static void power_shutdown(void) {
 #define BACKDROP_B 7
 #define GLOW_PEAK 36
 
-static uint32_t backdrop_color(int x, int y, int w, int h) {
+/* fx_enabled gates the glow blob -- the panel's "FX" checkbox toggles it,
+ * the one existing visual effect there was to wire a checkbox labeled
+ * that to. Without it, the backdrop is flat near-black. */
+static uint32_t backdrop_color(int x, int y, int w, int h, int fx_enabled) {
     int gx = w * 3 / 10;
     int gy = h / 8;
     int dx = x - gx;
@@ -82,7 +85,7 @@ static uint32_t backdrop_color(int x, int y, int w, int h) {
     int g = BACKDROP_G;
     int b = BACKDROP_B;
 
-    if (dist2 < radius2) {
+    if (fx_enabled && dist2 < radius2) {
         int intensity = GLOW_PEAK - (dist2 * GLOW_PEAK) / radius2;
         g += intensity;
         b += intensity / 3;
@@ -330,7 +333,7 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
 
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
-            gfx_put_pixel(x, y, backdrop_color(x, y, w, h));
+            gfx_put_pixel(x, y, backdrop_color(x, y, w, h, cb->checked));
         }
     }
 
@@ -380,7 +383,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
                                const struct button *exit_btn, int click_count, const struct textfield *tf,
                                const struct checkbox *cb, const int *z_order, const int *old_z, int old_mx,
                                int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
-                               const int *touched) {
+                               const int *touched, int fx_changed) {
     int dx0, dy0, dx1, dy1;
     int rx0[MAX_WINDOWS + 1], ry0[MAX_WINDOWS + 1], rx1[MAX_WINDOWS + 1], ry1[MAX_WINDOWS + 1];
     int redraw[MAX_WINDOWS + 1];
@@ -394,10 +397,23 @@ static void update_and_present(int w, int h, const struct window *windows, const
         }
     }
 
-    dx0 = old_mx < mx ? old_mx : mx;
-    dy0 = old_my < my ? old_my : my;
-    dx1 = (old_mx > mx ? old_mx : mx) + CURSOR_SIZE;
-    dy1 = (old_my > my ? old_my : my) + CURSOR_SIZE;
+    /* fx_enabled changes what backdrop_color() returns everywhere on
+     * screen, not just near the panel -- toggling FX has to repaint the
+     * whole backdrop, so the damage rect starts at the full screen
+     * instead of just the cursor's motion. Every open window's rect then
+     * overlaps that damage automatically, so the usual fixed-point loop
+     * below redraws them correctly without needing a special case. */
+    if (fx_changed) {
+        dx0 = 0;
+        dy0 = 0;
+        dx1 = w;
+        dy1 = h;
+    } else {
+        dx0 = old_mx < mx ? old_mx : mx;
+        dy0 = old_my < my ? old_my : my;
+        dx1 = (old_mx > mx ? old_mx : mx) + CURSOR_SIZE;
+        dy1 = (old_my > my ? old_my : my) + CURSOR_SIZE;
+    }
 
     for (i = 0; i < MAX_WINDOWS; i++) {
         window_outer_rect(&windows[i], &rx0[i], &ry0[i], &rx1[i], &ry1[i]);
@@ -447,7 +463,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
 
     for (y = dy0; y < dy1; y++) {
         for (x = dx0; x < dx1; x++) {
-            gfx_put_pixel(x, y, backdrop_color(x, y, w, h));
+            gfx_put_pixel(x, y, backdrop_color(x, y, w, h, cb->checked));
         }
     }
 
@@ -571,6 +587,7 @@ void kmain(void) {
         int old_mx = mx;
         int old_my = my;
         int old_x[MAX_WINDOWS], old_y[MAX_WINDOWS], old_z[MAX_WINDOWS];
+        int old_state[MAX_WINDOWS], old_min_hov[MAX_WINDOWS], old_close_hov[MAX_WINDOWS];
         int old_btn_hovered = btn.hovered;
         int old_btn_pressed = btn.pressed;
         int old_exit_hovered = exit_btn.hovered;
@@ -586,6 +603,9 @@ void kmain(void) {
             old_x[i] = windows[i].x;
             old_y[i] = windows[i].y;
             old_z[i] = z_order[i];
+            old_state[i] = windows[i].state;
+            old_min_hov[i] = windows[i].minimize_hovered;
+            old_close_hov[i] = windows[i].close_hovered;
         }
 
         /* Drain every mouse packet already queued before redrawing, rather
@@ -651,10 +671,36 @@ void kmain(void) {
                 int target = topmost_window_at(windows, z_order, cx, cy);
 
                 if (target >= 0) {
-                    raise_window(z_order, target);
-                    if (window_titlebar_hit_test(&windows[target], cx, cy)) {
-                        dragging_window = target;
+                    /* Controls take priority over raising/dragging -- a
+                     * click on close or minimize acts immediately rather
+                     * than raising the window to front first, same as any
+                     * real desktop. */
+                    if (window_close_hit_test(&windows[target], cx, cy)) {
+                        windows[target].state = WINDOW_CLOSED;
+                    } else if (window_minimize_hit_test(&windows[target], cx, cy)) {
+                        windows[target].state = WINDOW_MINIMIZED;
+                    } else {
+                        raise_window(z_order, target);
+                        if (window_titlebar_hit_test(&windows[target], cx, cy)) {
+                            dragging_window = target;
+                        }
                     }
+                }
+            }
+
+            /* Hover-highlight whichever window's controls are actually
+             * under the cursor -- only the topmost window at that point,
+             * so an occluded window's controls never light up. Runs every
+             * packet (not just click edges), same as button/checkbox
+             * hover elsewhere. */
+            {
+                int hover_target = topmost_window_at(windows, z_order, cx, cy);
+                int wi;
+
+                for (wi = 0; wi < MAX_WINDOWS; wi++) {
+                    int is_target = (wi == hover_target);
+                    windows[wi].minimize_hovered = is_target && window_minimize_hit_test(&windows[wi], cx, cy);
+                    windows[wi].close_hovered = is_target && window_close_hit_test(&windows[wi], cx, cy);
                 }
             }
 
@@ -707,18 +753,24 @@ void kmain(void) {
         if (had_event) {
             int touched[MAX_WINDOWS];
 
-            touched[WIN_KIND_PANEL] = (windows[WIN_KIND_PANEL].x != old_x[WIN_KIND_PANEL]) ||
-                                      (windows[WIN_KIND_PANEL].y != old_y[WIN_KIND_PANEL]) ||
-                                      (btn.hovered != old_btn_hovered) || (btn.pressed != old_btn_pressed) ||
-                                      (exit_btn.hovered != old_exit_hovered) ||
+            /* Position, open/minimized/closed state, and control hover are
+             * generic to every window regardless of content; click_count,
+             * the widgets' hover/pressed/focus/text state are specific to
+             * the panel's content, folded in on top. */
+            for (i = 0; i < MAX_WINDOWS; i++) {
+                touched[i] = (windows[i].x != old_x[i]) || (windows[i].y != old_y[i]) ||
+                             (windows[i].state != old_state[i]) ||
+                             (windows[i].minimize_hovered != old_min_hov[i]) ||
+                             (windows[i].close_hovered != old_close_hov[i]);
+            }
+            touched[WIN_KIND_PANEL] = touched[WIN_KIND_PANEL] || (btn.hovered != old_btn_hovered) ||
+                                      (btn.pressed != old_btn_pressed) || (exit_btn.hovered != old_exit_hovered) ||
                                       (exit_btn.pressed != old_exit_pressed) || (click_count != old_click_count) ||
                                       (tf.len != old_tf_len) || (tf.focused != old_tf_focused) ||
                                       (cb.checked != old_cb_checked) || (cb.hovered != old_cb_hovered);
-            touched[WIN_KIND_INFO] = (windows[WIN_KIND_INFO].x != old_x[WIN_KIND_INFO]) ||
-                                     (windows[WIN_KIND_INFO].y != old_y[WIN_KIND_INFO]);
 
             update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, old_z, old_mx, old_my,
-                               mx, my, cursor_color, old_x, old_y, touched);
+                               mx, my, cursor_color, old_x, old_y, touched, cb.checked != old_cb_checked);
         } else {
             __asm__ volatile("hlt");
         }
