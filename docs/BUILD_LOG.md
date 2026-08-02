@@ -303,3 +303,33 @@ The EXIT button worked in headless verification, but booting Rave-OS with a real
 Files: `kernel/kernel.c` (drain-all-queued-packets-before-redraw); `kernel/mouse.c` (overflow-bit clamping).
 
 Next up: unchanged from before this pass, plus damage-rect `gfx_present()` has graduated from "deferred, no evidence needed" to "worth doing soon" now that a real performance ceiling has been observed to cause an actual correctness bug, not just dropped frames.
+
+## 2026-08-02 — Window dragging
+
+The panel window can now be moved by pressing on its title bar and dragging, the natural next step flagged repeatedly since the first-GUI-primitives stage.
+
+**`window_titlebar_hit_test()`** (`window.c`/`.h`) is a point-in-rect test against just the title bar strip, sibling to `button_hit_test()` -- what the event loop checks before starting a drag, so clicking the window body doesn't also grab it.
+
+**Dragging itself needs no grab-offset bookkeeping**, which simplified the implementation: since PS/2 packets are relative deltas rather than absolute positions, applying a packet's raw `dx`/`dy` to the window (and, since they're independent absolute-positioned structs, its child widgets -- `btn`, `exit_btn`) the same way it's already applied to the cursor keeps the cursor's position over the title bar constant for the whole drag, with no separate offset to track. `kmain` tracks one new flag, `dragging_titlebar`: the press that starts a drag (edge-detected the same way button clicks already are) only sets the flag, deferring actual movement to the next packet -- so the initiating click doesn't also apply that same packet's incidental motion. A nice side effect of moving the cursor and the window by the same delta every packet: the cursor's position *relative to* the window never changes during a drag, so it can never drift onto `CLICK ME`/`EXIT` mid-drag and cause a spurious hover or click.
+
+**Verified two ways**, per the lesson from the previous stage: headlessly first (QEMU monitor commands with small sleeps between them, since a burst sent with no delay outran the guest's ability to process and redraw between screendumps -- an artifact of the *test script's* timing, not a kernel bug, caught by comparing a screendump taken too early against one taken after adding delays), confirming press-then-idle didn't move the window but press-then-move did, and the child buttons moved with it, staying clickable at their new position. Then confirmed with a real physical mouse, per [[feedback_qemu_input_testing]] -- dragging felt correct interactively, not just in synthetic replay.
+
+Files: `kernel/window.c`/`.h` (`window_titlebar_hit_test()`); `kernel/kernel.c` (`dragging_titlebar` state, drag-apply logic in the event loop).
+
+Next up: more widget variety (checkboxes, text input fields), multiple windows with z-ordering (dragging one window over another doesn't yet mean anything, since there's only one), and the deferred damage-rect `gfx_present()`.
+
+## 2026-08-02 — Re-theme: black-and-acid-green, borrowed from androidacid.com
+
+The original full-screen XOR-rainbow plasma backdrop was flagged directly as too harsh to look at for long. Replaced the whole visual palette with the "black and acid green" language from androidacid.com (its actual GitHub Pages source, `AndroidAcid/AndroidAcid.github.io`, was available to read directly -- its `assets/style.css` gave exact CSS custom properties to work from rather than guessing at a screenshot).
+
+**Translating a CSS palette (with alpha-blended `rgba()` panels and text) to a kernel that only does opaque pixel fills** meant hand-computing each color's flat-RGB equivalent: `fg*alpha + bg*(1-alpha)` per channel, composited onto the site's own `--bg` (`#050607`). Most translated directly (`--hard: #00ff66` used as-is for accent/borders/pressed-state fills, `--text`/`--muted` composited down to `0xD4E6DB`/`0x9DAAA3`). One didn't: `--panel`'s literal composite came out to roughly `0x070C09` -- correct by the math, but on a flat kernel renderer with no backdrop-blur or content showing through, it read as almost indistinguishable from the background it's meant to visually separate from. Brightened by hand to `0x0B1712` (window body) / `0x0A1A12`-`0x123322` (button idle/hover) instead of the literal composite -- a case where matching the *intent* (a panel that reads as a panel) mattered more than matching the arithmetic exactly.
+
+**The backdrop** (`kernel.c`): `plasma_color()` -- an XOR-based full-spectrum formula -- became `backdrop_color()`, a mostly-flat near-black fill with one soft radial green glow (integer-only linear falloff from a fixed point, no floats, matching the rest of the kernel) standing in for the site's CSS `radial-gradient` glow blobs. Same per-pixel cost class as the plasma it replaced, so no redraw-performance regression on top of the previous stage's fix.
+
+**Buttons** (`button.c`) needed one behavioral change alongside the recolor: the pressed state now inverts to a solid `--hard` green fill (echoing how the site uses that color as a hard highlight), which meant the label also needed to switch to a dark color on top of it for contrast -- previously a single label color worked for every state because no fill was ever that bright.
+
+**Verified visually**: headless screendump compared against the intended palette before handing it to a live QEMU window; user confirmed it read better in person ("thats better") after the harshness complaint that started this.
+
+Files: `kernel/kernel.c` (`backdrop_color()` replacing `plasma_color()`, text/cursor color constants); `kernel/window.c` (color constants); `kernel/button.c` (color constants, pressed-state label contrast).
+
+Next up: unchanged -- more widgets, multi-window z-ordering, damage-rect `gfx_present()`. True rounded corners (androidacid.com leans on large CSS `border-radius` throughout) were deliberately left out of this pass -- the color language was the headline signal from the reference, corner rounding would need a real rounded-rect fill primitive, and nothing about the current square corners is broken.
