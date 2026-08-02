@@ -3,31 +3,34 @@
  * mode with paging still off, so every pointer here is just a physical
  * address. */
 
-#include "vga.h"
-#include "keyboard.h"
+#include "graphics.h"
+
+/* Note: stage2 now switches the display into a VBE graphics mode before
+ * the kernel even starts, so the vga.c text driver and 0xB8000 no longer
+ * apply here -- text output in graphics mode needs a bitmap font renderer,
+ * which doesn't exist yet. vga.c/keyboard.c are left in the tree; keyboard
+ * input still works identically, it just has nowhere to echo to visibly
+ * until that renderer exists. */
 
 void kmain(void) {
-    int i;
+    int x, y;
+    int w = gfx_width();
+    int h = gfx_height();
 
-    vga_set_color(0x0A, 0x00); /* green on black */
-    vga_clear();
-    vga_puts("Rave-OS kernel: VGA driver online.\n");
-
-    vga_set_color(0x0F, 0x00); /* white on black */
-    vga_puts("Cursor tracking, newlines, and scrolling all work.\n\n");
-
-    /* Print more lines than fit on a 25-row screen to prove vga_scroll()
-     * actually shifts old lines up instead of overwriting/wrapping. */
-    for (i = 0; i < 30; i++) {
-        vga_puts("scroll test line\n");
+    /* Classic demoscene XOR pattern: cheap to compute, never the same
+     * color twice in a row, and unmistakably "acid" -- proof the
+     * framebuffer write path (boot_info -> gfx_put_pixel) actually works. */
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            uint8_t r = (uint8_t)(x * 255 / w);
+            uint8_t g = (uint8_t)(y * 255 / h);
+            uint8_t b = (uint8_t)((x ^ y) & 0xFF);
+            uint32_t color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+            gfx_put_pixel(x, y, color);
+        }
     }
 
-    vga_set_color(0x0E, 0x00); /* yellow */
-    vga_puts("\nKeyboard driver online -- type something:\n");
-    vga_set_color(0x07, 0x00); /* back to light grey */
-
     for (;;) {
-        char c = keyboard_read_char();
-        vga_putc(c);
+        __asm__ volatile("hlt");
     }
 }

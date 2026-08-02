@@ -1,6 +1,7 @@
 ; Rave-OS stage-2 loader.
 ; Loaded by stage1 at 0x0000:0x8000, still in 16-bit real mode.
-; Job: load the C kernel off disk, enable the A20 line, build a flat GDT,
+; Job: load the C kernel off disk, switch the display into a VESA (VBE)
+; linear-framebuffer graphics mode, enable the A20 line, build a flat GDT,
 ; switch to 32-bit protected mode, and hand off control to the kernel.
 BITS 16
 ORG 0x8000
@@ -14,6 +15,19 @@ KERNEL_START_SECTOR equ 4
 KERNEL_SECTORS       equ 8
 KERNEL_SEGMENT       equ 0x1000   ; 0x1000:0x0000 = physical 0x10000
 KERNEL_LOAD_ADDR     equ 0x10000
+
+; VBE mode 0x112 = 640x480, 32 bits/pixel, linear framebuffer. Bit 14
+; (0x4000) of the mode number tells VBE function 4F02h to use the linear
+; framebuffer addressing model instead of legacy bank-switched addressing.
+VBE_MODE       equ 0x112
+VBE_MODE_LFB   equ VBE_MODE | 0x4000
+
+; Scratch buffer VBE fills in with a 256-byte ModeInfoBlock, and the small
+; struct we distill out of it for the kernel -- both addresses are free
+; real-mode memory below the kernel's 0x10000 load point and above stage2
+; itself (which ends at 0x8000+1024=0x8400).
+VBE_INFO_ADDR  equ 0x9000
+BOOT_INFO_ADDR equ 0x9500   ; must match BOOT_INFO_ADDR in ../kernel/boot_info.h
 
 start:
     mov [boot_drive], dl   ; stage1 leaves the BIOS boot-drive number in dl; save it again here
@@ -32,6 +46,13 @@ start:
     xor bx, bx                 ; ES:BX destination, ES = KERNEL_SEGMENT
     int 0x13
     jc disk_error
+
+    xor ax, ax
+    mov es, ax                 ; restore ES=0 now that the disk read is done
+
+    mov si, msg_video
+    call print_string
+    call setup_video
 
     call enable_a20
 
@@ -75,6 +96,44 @@ enable_a20:
     or al, 2
     out 0x92, al
     ret
+
+; Query the VBE ModeInfoBlock for VBE_MODE, pull out the fields the kernel
+; needs (framebuffer physical address, scanline pitch, resolution, bit
+; depth) into a compact boot_info struct, then actually switch the display
+; into that mode.
+setup_video:
+    mov ax, 0x4F01          ; VBE function 01h: get mode info
+    mov cx, VBE_MODE
+    mov di, VBE_INFO_ADDR
+    int 0x10
+    cmp ax, 0x004F           ; AL=4Fh means "function supported", AH=0 means "success"
+    jne vbe_error
+
+    mov eax, [VBE_INFO_ADDR + 0x28]   ; PhysBasePtr: linear framebuffer physical address
+    mov [BOOT_INFO_ADDR + 0], eax
+    mov ax, [VBE_INFO_ADDR + 0x10]     ; BytesPerScanLine
+    mov [BOOT_INFO_ADDR + 4], ax
+    mov ax, [VBE_INFO_ADDR + 0x12]     ; XResolution
+    mov [BOOT_INFO_ADDR + 6], ax
+    mov ax, [VBE_INFO_ADDR + 0x14]     ; YResolution
+    mov [BOOT_INFO_ADDR + 8], ax
+    mov al, [VBE_INFO_ADDR + 0x19]     ; BitsPerPixel
+    mov [BOOT_INFO_ADDR + 10], al
+
+    mov ax, 0x4F02           ; VBE function 02h: set mode
+    mov bx, VBE_MODE_LFB
+    int 0x10
+    cmp ax, 0x004F
+    jne vbe_error
+    ret
+
+vbe_error:
+    mov si, msg_vbe_error
+    call print_string
+.hang16:
+    cli
+    hlt
+    jmp .hang16
 
 boot_drive db 0
 
@@ -123,6 +182,8 @@ protected_mode_entry:
     jmp KERNEL_LOAD_ADDR    ; hand off to the C kernel's _start
 
 msg_stage2     db 'Rave-OS: stage2 loaded, loading kernel...', 13, 10, 0
+msg_video      db 'Rave-OS: setting 640x480x32 video mode...', 13, 10, 0
 msg_disk_error db 'Disk read error!', 0
+msg_vbe_error  db 'VBE video mode not supported!', 0
 
 times 1024 - ($ - $$) db 0   ; pad to exactly STAGE2_SECTORS * 512 bytes
