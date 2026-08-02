@@ -101,34 +101,67 @@ static void str_append(char *dst, int *pos, const char *src) {
     dst[*pos] = 0;
 }
 
-/* Redraws the whole scene into the backbuffer every call: background,
- * chrome, and the cursor. The scene is cheap enough (a formula-driven
- * backdrop plus a handful of small fixed-size draws) that full redraw is
- * simpler and just as correct as incremental save/restore compositing --
- * it doesn't need to know or guess what's under the cursor, because
- * everything gets redrawn in the right order (background, then window,
- * then button, then text, then cursor on top) every time. gfx_present()
- * still blits the entire backbuffer regardless (a known, deferred
- * performance tradeoff -- see docs/BUILD_LOG.md). */
-static void draw_scene(int w, int h, const struct window *panel, const struct button *btn,
-                       const struct button *exit_btn, int click_count,
-                       const char *typed, int mx, int my, uint32_t cursor_color) {
-    int x, y;
-    const char *title = "RAVE-OS";
-    const char *subtitle = "KERNEL: GUI PRIMITIVES ONLINE";
-    int title_scale = 4;
-    int subtitle_scale = 2;
+#define GLYPH_HEIGHT 7 /* font.c's glyphs are 7 rows tall at scale 1 */
+#define TITLE_TEXT "RAVE-OS"
+#define TITLE_Y 40
+#define TITLE_SCALE 4
+#define SUBTITLE_TEXT "KERNEL: GUI PRIMITIVES ONLINE"
+#define SUBTITLE_Y 90
+#define SUBTITLE_SCALE 2
+
+static void draw_title_subtitle(int w) {
+    text_puts((w - text_width(TITLE_TEXT, TITLE_SCALE)) / 2, TITLE_Y, TITLE_TEXT, TEXT_ACCENT_COLOR, TITLE_SCALE);
+    text_puts((w - text_width(SUBTITLE_TEXT, SUBTITLE_SCALE)) / 2, SUBTITLE_Y, SUBTITLE_TEXT, TEXT_MUTED_COLOR,
+              SUBTITLE_SCALE);
+}
+
+/* Bounding box of both the title and subtitle, treated as one unit --
+ * they're small and always redrawn together, so there's no need to track
+ * them as two separately-damaged regions. */
+static void title_block_rect(int w, int *x0, int *y0, int *x1, int *y1) {
+    int title_w = text_width(TITLE_TEXT, TITLE_SCALE);
+    int subtitle_w = text_width(SUBTITLE_TEXT, SUBTITLE_SCALE);
+    int title_x = (w - title_w) / 2;
+    int subtitle_x = (w - subtitle_w) / 2;
+
+    *x0 = title_x < subtitle_x ? title_x : subtitle_x;
+    *y0 = TITLE_Y;
+    *x1 = (title_x + title_w) > (subtitle_x + subtitle_w) ? (title_x + title_w) : (subtitle_x + subtitle_w);
+    *y1 = SUBTITLE_Y + GLYPH_HEIGHT * SUBTITLE_SCALE;
+}
+
+/* The window's full painted extent, border included -- matches the
+ * rects window_draw() actually fills (see window.c). */
+static void window_outer_rect(const struct window *panel, int *x0, int *y0, int *x1, int *y1) {
+    *x0 = panel->x - 2;
+    *y0 = panel->y - WINDOW_TITLEBAR_HEIGHT - 2;
+    *x1 = panel->x + panel->w + 2;
+    *y1 = panel->y + panel->h + 2;
+}
+
+static int rects_overlap(int ax0, int ay0, int ax1, int ay1, int bx0, int by0, int bx1, int by1) {
+    return ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1;
+}
+
+static void rect_union(int *x0, int *y0, int *x1, int *y1, int bx0, int by0, int bx1, int by1) {
+    if (bx0 < *x0) {
+        *x0 = bx0;
+    }
+    if (by0 < *y0) {
+        *y0 = by0;
+    }
+    if (bx1 > *x1) {
+        *x1 = bx1;
+    }
+    if (by1 > *y1) {
+        *y1 = by1;
+    }
+}
+
+static void draw_window_group(const struct window *panel, const struct button *btn,
+                              const struct button *exit_btn, int click_count, const char *typed) {
     char line[40];
     int pos;
-
-    for (y = 0; y < h; y++) {
-        for (x = 0; x < w; x++) {
-            gfx_put_pixel(x, y, backdrop_color(x, y, w, h));
-        }
-    }
-
-    text_puts((w - text_width(title, title_scale)) / 2, 40, title, TEXT_ACCENT_COLOR, title_scale);
-    text_puts((w - text_width(subtitle, subtitle_scale)) / 2, 90, subtitle, TEXT_MUTED_COLOR, subtitle_scale);
 
     window_draw(panel);
     button_draw(btn);
@@ -147,8 +180,110 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
     str_append(line, &pos, "TYPE: ");
     str_append(line, &pos, typed);
     text_puts(btn->x, btn->y + btn->h + 36, line, TEXT_PRIMARY_COLOR, 1);
+}
 
+/* Full redraw of everything into the backbuffer: background, chrome, and
+ * the cursor. Only used for the very first frame, where there's no prior
+ * state to diff against -- correct by full reconstruction, same
+ * reasoning the whole scene used to be redrawn this way every frame
+ * before damage tracking (see update_and_present() below). */
+static void draw_scene(int w, int h, const struct window *panel, const struct button *btn,
+                       const struct button *exit_btn, int click_count,
+                       const char *typed, int mx, int my, uint32_t cursor_color) {
+    int x, y;
+
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            gfx_put_pixel(x, y, backdrop_color(x, y, w, h));
+        }
+    }
+
+    draw_title_subtitle(w);
+    draw_window_group(panel, btn, exit_btn, click_count, typed);
     gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
+}
+
+/* Per-event redraw: repaints only a damage rectangle instead of the whole
+ * screen, then presents just that rectangle. This is the fix for the
+ * performance ceiling flagged in the previous two stages -- redrawing
+ * the whole screen (a ~307,200-pixel backdrop fill, and gfx_present()
+ * blitting all of it through a volatile MMIO pointer) per redraw is what
+ * let a real mouse's packet rate outrun the redraw loop and overflow the
+ * ring buffer in the first place. The damage rect starts as the union of
+ * the cursor's old and new position (it moves on essentially every
+ * event), then grows to cover the window group and/or the title block
+ * whenever the window moved, its contents changed, or the cursor's own
+ * damage happens to sweep across either of them -- otherwise repainting
+ * the backdrop under the cursor would erase them without restoring
+ * anything. Each region that ends up damaged is still redrawn as a whole
+ * unit rather than diffed pixel-by-pixel, same "correct by
+ * reconstruction" approach the old whole-screen redraw used, just scoped
+ * down to whatever actually needs it instead of everything. */
+static void update_and_present(int w, int h, const struct window *panel, const struct button *btn,
+                               const struct button *exit_btn, int click_count, const char *typed,
+                               int old_mx, int old_my, int mx, int my, uint32_t cursor_color,
+                               int old_panel_x, int old_panel_y, int window_touched) {
+    int dx0, dy0, dx1, dy1;
+    int wx0, wy0, wx1, wy1;
+    int rx0, ry0, rx1, ry1;
+    int redraw_window, redraw_titles;
+    int x, y;
+
+    dx0 = old_mx < mx ? old_mx : mx;
+    dy0 = old_my < my ? old_my : my;
+    dx1 = (old_mx > mx ? old_mx : mx) + CURSOR_SIZE;
+    dy1 = (old_my > my ? old_my : my) + CURSOR_SIZE;
+
+    window_outer_rect(panel, &wx0, &wy0, &wx1, &wy1);
+    redraw_window = window_touched;
+    if (window_touched) {
+        struct window old_panel = *panel;
+        int owx0, owy0, owx1, owy1;
+
+        old_panel.x = old_panel_x;
+        old_panel.y = old_panel_y;
+        window_outer_rect(&old_panel, &owx0, &owy0, &owx1, &owy1);
+        rect_union(&dx0, &dy0, &dx1, &dy1, wx0, wy0, wx1, wy1);
+        rect_union(&dx0, &dy0, &dx1, &dy1, owx0, owy0, owx1, owy1);
+    } else if (rects_overlap(dx0, dy0, dx1, dy1, wx0, wy0, wx1, wy1)) {
+        redraw_window = 1;
+        rect_union(&dx0, &dy0, &dx1, &dy1, wx0, wy0, wx1, wy1);
+    }
+
+    title_block_rect(w, &rx0, &ry0, &rx1, &ry1);
+    redraw_titles = rects_overlap(dx0, dy0, dx1, dy1, rx0, ry0, rx1, ry1);
+    if (redraw_titles) {
+        rect_union(&dx0, &dy0, &dx1, &dy1, rx0, ry0, rx1, ry1);
+    }
+
+    if (dx0 < 0) {
+        dx0 = 0;
+    }
+    if (dy0 < 0) {
+        dy0 = 0;
+    }
+    if (dx1 > w) {
+        dx1 = w;
+    }
+    if (dy1 > h) {
+        dy1 = h;
+    }
+
+    for (y = dy0; y < dy1; y++) {
+        for (x = dx0; x < dx1; x++) {
+            gfx_put_pixel(x, y, backdrop_color(x, y, w, h));
+        }
+    }
+
+    if (redraw_titles) {
+        draw_title_subtitle(w);
+    }
+    if (redraw_window) {
+        draw_window_group(panel, btn, exit_btn, click_count, typed);
+    }
+    gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
+
+    gfx_present_rect(dx0, dy0, dx1 - dx0, dy1 - dy0);
 }
 
 void kmain(void) {
@@ -210,6 +345,16 @@ void kmain(void) {
         int had_event = 0;
         int dx, dy, buttons;
         char c;
+        int old_mx = mx;
+        int old_my = my;
+        int old_panel_x = panel.x;
+        int old_panel_y = panel.y;
+        int old_btn_hovered = btn.hovered;
+        int old_btn_pressed = btn.pressed;
+        int old_exit_hovered = exit_btn.hovered;
+        int old_exit_pressed = exit_btn.pressed;
+        int old_click_count = click_count;
+        int old_typed_len = typed_len;
 
         /* Drain every mouse packet already queued before redrawing, rather
          * than redrawing once per packet: a real mouse streams packets far
@@ -249,15 +394,44 @@ void kmain(void) {
              * whole drag without needing to track a separate grab offset.
              * The press that starts a drag only sets the flag; movement
              * begins on the next packet, so the initial click doesn't also
-             * nudge the window by that same packet's motion. */
+             * nudge the window by that same packet's motion. Clamped to
+             * keep the window's full outer bounds on-screen -- nothing
+             * enforced that before, and an off-screen window would have
+             * made gfx_fill_rect() write outside the backbuffer. Buttons
+             * move by the *clamped* delta, not the raw one, so they stay
+             * correctly positioned relative to the window even when the
+             * window itself got clamped this packet. */
             if (dragging_titlebar) {
                 if (left_held) {
+                    int old_panel_x = panel.x;
+                    int old_panel_y = panel.y;
+                    int min_x = 2;
+                    int max_x = w - panel.w - 2;
+                    int min_y = WINDOW_TITLEBAR_HEIGHT + 2;
+                    int max_y = h - panel.h - 2;
+                    int applied_dx, applied_dy;
+
                     panel.x += dx;
                     panel.y += dy;
-                    btn.x += dx;
-                    btn.y += dy;
-                    exit_btn.x += dx;
-                    exit_btn.y += dy;
+                    if (panel.x < min_x) {
+                        panel.x = min_x;
+                    }
+                    if (panel.x > max_x) {
+                        panel.x = max_x;
+                    }
+                    if (panel.y < min_y) {
+                        panel.y = min_y;
+                    }
+                    if (panel.y > max_y) {
+                        panel.y = max_y;
+                    }
+
+                    applied_dx = panel.x - old_panel_x;
+                    applied_dy = panel.y - old_panel_y;
+                    btn.x += applied_dx;
+                    btn.y += applied_dy;
+                    exit_btn.x += applied_dx;
+                    exit_btn.y += applied_dy;
                 } else {
                     dragging_titlebar = 0;
                 }
@@ -299,8 +473,13 @@ void kmain(void) {
         }
 
         if (had_event) {
-            draw_scene(w, h, &panel, &btn, &exit_btn, click_count, typed, mx, my, cursor_color);
-            gfx_present();
+            int window_touched = (panel.x != old_panel_x) || (panel.y != old_panel_y) ||
+                                  (btn.hovered != old_btn_hovered) || (btn.pressed != old_btn_pressed) ||
+                                  (exit_btn.hovered != old_exit_hovered) || (exit_btn.pressed != old_exit_pressed) ||
+                                  (click_count != old_click_count) || (typed_len != old_typed_len);
+
+            update_and_present(w, h, &panel, &btn, &exit_btn, click_count, typed, old_mx, old_my, mx, my,
+                               cursor_color, old_panel_x, old_panel_y, window_touched);
         } else {
             __asm__ volatile("hlt");
         }

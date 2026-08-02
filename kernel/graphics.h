@@ -23,4 +23,11 @@ void gfx_clear(uint32_t rgb);
  * only place that needs to know about hardware pixel format at all. */
 void gfx_present(void);
 
+/* Same as gfx_present(), but only for the given rectangle -- callers that
+ * know only part of the screen actually changed (see kernel.c's damage
+ * tracking) can present just that instead of paying for the whole
+ * screen every frame. Clips to the screen bounds itself, so callers
+ * don't need to. */
+void gfx_present_rect(int x, int y, int w, int h);
+
 #endif

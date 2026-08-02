@@ -69,6 +69,10 @@ void gfx_clear(uint32_t rgb) {
     gfx_fill_rect(0, 0, gfx_width(), gfx_height(), rgb);
 }
 
+void gfx_present(void) {
+    gfx_present_rect(0, 0, gfx_width(), gfx_height());
+}
+
 /* Writes bytes_per_pixel bytes per pixel rather than always writing a
  * fixed 32-bit word: VBE mode 0x112 was assumed to be 32bpp (matching its
  * standard VESA definition) but this BIOS/QEMU's ModeInfoBlock actually
@@ -76,19 +80,29 @@ void gfx_clear(uint32_t rgb) {
  * 640*4) -- a fixed 4-byte write at a 3-bytes/pixel stride corrupted
  * every pixel, each write bleeding into the next one's bytes. Reading
  * boot_info->bpp instead of hardcoding 4 makes this correct for whatever
- * the BIOS actually handed back. */
-void gfx_present(void) {
-    int x, y;
-    int w = gfx_width();
-    int h = gfx_height();
+ * the BIOS actually handed back.
+ *
+ * Clips (x,y,w,h) to the screen before blitting, rather than trusting the
+ * caller -- kernel.c's damage rect is built from cursor/window positions
+ * that are clamped on-screen by their own callers, but a present function
+ * that only behaves correctly for in-range input is a landmine for
+ * whatever uses it next. */
+void gfx_present_rect(int x, int y, int w, int h) {
+    int px, py;
+    int fb_w = gfx_width();
+    int fb_h = gfx_height();
     int bytes_per_pixel = boot_info->bpp / 8;
     volatile uint8_t *fb = (volatile uint8_t *)(uintptr_t)boot_info->framebuffer_addr;
+    int x0 = x < 0 ? 0 : x;
+    int y0 = y < 0 ? 0 : y;
+    int x1 = x + w > fb_w ? fb_w : x + w;
+    int y1 = y + h > fb_h ? fb_h : y + h;
 
-    for (y = 0; y < h; y++) {
-        volatile uint8_t *row = fb + (uint32_t)y * boot_info->pitch;
-        for (x = 0; x < w; x++) {
-            uint32_t color = backbuffer[y * w + x];
-            volatile uint8_t *pixel = row + x * bytes_per_pixel;
+    for (py = y0; py < y1; py++) {
+        volatile uint8_t *row = fb + (uint32_t)py * boot_info->pitch;
+        for (px = x0; px < x1; px++) {
+            uint32_t color = backbuffer[py * fb_w + px];
+            volatile uint8_t *pixel = row + px * bytes_per_pixel;
 
             pixel[0] = (uint8_t)(color & 0xFF);
             pixel[1] = (uint8_t)((color >> 8) & 0xFF);
