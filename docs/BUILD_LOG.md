@@ -99,3 +99,21 @@ Build: `boot/Makefile`'s `disk.img` target now depends on `kernel/kernel.bin` an
 Verified end-to-end in QEMU: SeaBIOS → stage1 ("loading stage2...") → stage2 ("loading kernel...") → kernel prints its message in green and halts.
 
 Next up: the kernel can currently only write directly to fixed VGA memory offsets. Reasonable next steps: a proper VGA text-mode driver (cursor tracking, scrolling, clear-screen) as a small first abstraction layer, and/or basic keyboard input (reading scancodes off the PS/2 controller) — both are groundwork before anything resembling the roadmap's GUI stage (see the Vision section at the top of this log).
+
+## 2026-08-02 — VGA text-mode driver
+
+Replaced the kernel's one-shot "poke bytes directly at 0xB8000" code with a real driver, `kernel/vga.c` / `kernel/vga.h`, giving `vga_clear()`, `vga_putc()`, `vga_puts()`, and `vga_set_color()`.
+
+What it adds over the raw approach:
+- **Cursor tracking** — a `cursor_row`/`cursor_col` pair advances as characters are written, instead of every caller having to compute its own screen offset.
+- **Newline handling** — `\n` moves to column 0 of the next row (and `\r` alone just resets the column), rather than every string needing manual positioning.
+- **Scrolling** — once `cursor_row` runs past the last row (25 rows in standard VGA text mode), `vga_scroll()` copies every row up by one (row *n* ← row *n+1*, for all rows) and blanks the new bottom row, so output behaves like a normal terminal instead of wrapping/overwriting row 0.
+- **Hardware cursor** — VGA has an actual blinking cursor built into the card, controlled by writing a 16-bit position to two of its CRTC (CRT Controller) registers via I/O ports, not memory: index port `0x3D4` selects register `0x0E`/`0x0F` (cursor position high/low byte), then the value is written to data port `0x3D5`. This is the first code needing `outb`, so introduced `kernel/io.h` with `inb`/`outb` wrappers (`inline asm` around the `in`/`out` instructions) — this header will get reused by every future driver that talks to hardware over I/O ports (e.g. the keyboard, next).
+
+`kernel/kernel.c` now just calls into this driver and proves scrolling works by printing 30 lines into a 25-row screen — verified in QEMU that only the most recent ~24-25 lines remain visible, with the earlier header messages correctly scrolled off the top, and the hardware cursor sitting on the new blank bottom row exactly where the next character would land.
+
+Build note: linking now produces a `ld` warning ("LOAD segment with RWX permissions") — expected and harmless at this stage, since paging/segment permissions aren't set up yet, so there's no enforcement to conflict with anyway.
+
+Files: `kernel/vga.c`, `kernel/vga.h`, `kernel/io.h`; `kernel/Makefile` updated to compile and link `vga.o` alongside `kernel.o`.
+
+Next up: keyboard input — reading scancodes off the PS/2 controller (port `0x60`, using the new `inb`) — is the natural next driver, since `io.h` already exists for it and it's the next piece needed before anything interactive.

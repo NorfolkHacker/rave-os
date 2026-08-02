@@ -3,21 +3,23 @@
  * mode with paging still off, so every pointer here is just a physical
  * address. */
 
-#define VGA_MEMORY ((volatile unsigned char *)0xB8000)
-#define VGA_COLS 80
-
-static void kputs(int row, int col, const char *s, unsigned char attr) {
-    int offset = (row * VGA_COLS + col) * 2;
-    while (*s) {
-        VGA_MEMORY[offset] = (unsigned char)*s;
-        VGA_MEMORY[offset + 1] = attr;
-        offset += 2;
-        s++;
-    }
-}
+#include "vga.h"
 
 void kmain(void) {
-    kputs(1, 0, "Rave-OS kernel: hello from C!", 0x0A); /* green on black */
+    int i;
+
+    vga_set_color(0x0A, 0x00); /* green on black */
+    vga_clear();
+    vga_puts("Rave-OS kernel: VGA driver online.\n");
+
+    vga_set_color(0x0F, 0x00); /* white on black */
+    vga_puts("Cursor tracking, newlines, and scrolling all work.\n\n");
+
+    /* Print more lines than fit on a 25-row screen to prove vga_scroll()
+     * actually shifts old lines up instead of overwriting/wrapping. */
+    for (i = 0; i < 30; i++) {
+        vga_puts("scroll test line\n");
+    }
 
     for (;;) {
         __asm__ volatile("hlt");
