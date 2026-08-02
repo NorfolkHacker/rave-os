@@ -24,17 +24,28 @@ static uint32_t plasma_color(int x, int y, int w, int h) {
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }
 
-/* There's no backbuffer/compositor yet, so "erasing" the cursor just
- * recomputes what the plasma backdrop would be at those pixels -- correct
- * as long as the cursor stays over plasma. If it sweeps over the title
- * text, those pixels get overwritten with plasma instead of restored,
- * since nothing remembers "there used to be a letter here". A real
- * compositor (offscreen backbuffer, damage tracking) is future work. */
-static void erase_cursor(int x, int y, int w, int h) {
+/* Real save-under cursor compositing: before drawing the cursor
+ * somewhere, remember exactly what was already in the backbuffer there;
+ * before moving it, put those exact pixels back. Unlike the old
+ * "recompute the plasma formula" approach, this is correct regardless of
+ * what's underneath -- plasma, text, or (eventually) a window -- because
+ * it never has to know or guess; it just remembers. */
+static uint32_t cursor_under[CURSOR_SIZE][CURSOR_SIZE];
+
+static void save_under_cursor(int x, int y) {
     int row, col;
     for (row = 0; row < CURSOR_SIZE; row++) {
         for (col = 0; col < CURSOR_SIZE; col++) {
-            gfx_put_pixel(x + col, y + row, plasma_color(x + col, y + row, w, h));
+            cursor_under[row][col] = gfx_get_pixel(x + col, y + row);
+        }
+    }
+}
+
+static void restore_under_cursor(int x, int y) {
+    int row, col;
+    for (row = 0; row < CURSOR_SIZE; row++) {
+        for (col = 0; col < CURSOR_SIZE; col++) {
+            gfx_put_pixel(x + col, y + row, cursor_under[row][col]);
         }
     }
 }
@@ -45,13 +56,16 @@ static void draw_cursor(int x, int y, uint32_t color) {
 
 void kmain(void) {
     int x, y;
-    int w = gfx_width();
-    int h = gfx_height();
+    int w, h;
     const char *title = "RAVE-OS";
-    const char *subtitle = "KERNEL: INTERRUPTS ONLINE";
+    const char *subtitle = "KERNEL: COMPOSITOR ONLINE";
     int title_scale = 4;
     int subtitle_scale = 2;
     int mx, my;
+
+    gfx_init();
+    w = gfx_width();
+    h = gfx_height();
 
     /* Classic demoscene XOR pattern as backdrop: cheap to compute, never
      * the same color twice in a row, unmistakably "acid". */
@@ -74,7 +88,9 @@ void kmain(void) {
 
     mx = w / 2;
     my = h - 100; /* start clear of the title text above */
+    save_under_cursor(mx, my);
     draw_cursor(mx, my, 0xFFFFFF);
+    gfx_present();
 
     for (;;) {
         int dx, dy, buttons;
@@ -82,7 +98,7 @@ void kmain(void) {
 
         mouse_read_packet(&dx, &dy, &buttons);
 
-        erase_cursor(mx, my, w, h);
+        restore_under_cursor(mx, my);
 
         mx += dx;
         my += dy;
@@ -99,7 +115,10 @@ void kmain(void) {
             my = h - CURSOR_SIZE;
         }
 
+        save_under_cursor(mx, my);
         color = (buttons & 0x01) ? 0xFF0000 : 0xFFFFFF; /* red while left button held */
         draw_cursor(mx, my, color);
+
+        gfx_present();
     }
 }
