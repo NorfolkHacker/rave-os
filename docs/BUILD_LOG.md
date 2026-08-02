@@ -369,3 +369,21 @@ A second window (`RAVE-OS INFO`, a small static panel with no buttons) joins the
 Files: `kernel/kernel.c` (`info_panel`, `panel_on_top`, `topmost_window_at()`, `window_outer_contains()`, `clamp_window_to_screen()` factored out of the old inline drag-clamp code, `draw_info_group()`, generalized `draw_scene()`/`update_and_present()`).
 
 Next up: more widgets (checkboxes, text input fields), rounded corners. A third window would be the point to stop hardcoding two named identities and introduce a real window list/array with per-window damage tracked in a loop instead of by hand.
+
+## 2026-08-02 — Text input field with real focus
+
+The panel's old "TYPE:" line accepted every keystroke unconditionally, with nowhere for that to stop making sense once more than one thing on screen could want the keyboard. Replaced it with a real text field widget (`textfield.c`/`.h`, sibling to `button.c`/`.h`): a bounded box that only consumes keystrokes while focused, focused by clicking it.
+
+**No blinking caret.** A blink needs a time source, and there's no PIT timer driver yet -- the whole kernel's only clock right now is however fast interrupts happen to arrive. Rather than fake timing off event counts (which would blink at an arbitrary, hardware-dependent rate, not a real one), the caret is just solid while focused and absent otherwise. Worth revisiting once a real PIT tick exists.
+
+**Focus is one flag on the widget (`focused`), set by the same click-edge logic that already drives button clicks:** in `kmain`'s per-packet button block, `click_edge` (a name introduced here, factored out of the `left_held && !prev_left_held` expression duplicated at each button check before this) now also decides the field's focus every click: hitting the field (and the panel being topmost, same gating buttons already used) focuses it, anything else -- a button, empty panel space, the other window, the backdrop -- defocuses it. This is single-focus-owner behavior for free, without a separate "what currently owns the keyboard" variable: there's only one field, so its own `focused` bit *is* that state.
+
+**`textfield_feed_char()` takes every polled character unconditionally and no-ops if unfocused**, rather than `kmain` checking `tf.focused` itself before feeding -- keeps the focus check in one place (the widget) instead of duplicated at every call site a future second field would add. Backspace and character-append behavior carried over unchanged from the old inline logic in `kmain`; Enter still clears the field (there's nowhere for a field to submit *to* yet, so "clear" is what "\n" meant before this pass too, kept as-is rather than inventing submission semantics nothing asked for).
+
+**Damage-rect tracking** (`update_and_present()`) needed `tf.len` and `tf.focused` added to `panel_touched`'s condition, alongside the existing hover/pressed/click_count checks -- both change what's inside the always-redrawn-as-one-unit panel group without moving the panel itself.
+
+**Verified headlessly**: booted, confirmed the field renders as a dim unfocused box; clicked it (monitor `mouse_move`/`mouse_button`) and confirmed the border brightens to the focused accent color and a caret appears; typed `RAVE` via `sendkey` and confirmed each character appended with the caret tracking after it; clicked `CLICK ME` and confirmed three things in one screendump -- `CLICKS` incremented, the field's border returned to dim (defocused), and a keystroke sent right after was correctly dropped (text stayed `RAVE`, didn't become `RAVEx`). Real-hardware mouse+keyboard pass, per [[feedback_qemu_input_testing]], still pending as of this entry.
+
+Files: `kernel/textfield.c`/`.h` (new); `kernel/kernel.c` (`tf` replacing the old inline `typed`/`typed_len`, `click_edge`, focus logic in the button block); `kernel/Makefile` (new object).
+
+Next up: unchanged -- checkboxes, rounded corners, and a third window as the trigger to generalize past two named window identities. A real PIT timer would unblock caret blinking and is probably worth doing before many more widgets need real timing.

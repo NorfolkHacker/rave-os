@@ -11,14 +11,14 @@ OBJCOPY := objcopy
 # switching at all yet.
 CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra
 
-C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o
+C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o
 
 all: kernel.bin
 
 kernel_entry.o: kernel_entry.asm
 	$(AS) -f elf32 kernel_entry.asm -o kernel_entry.o
 
-kernel.o: kernel.c graphics.h text.h mouse.h keyboard.h interrupts.h window.h button.h
+kernel.o: kernel.c graphics.h text.h mouse.h keyboard.h interrupts.h window.h button.h textfield.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 keyboard.o: keyboard.c keyboard.h
@@ -50,6 +50,9 @@ window.o: window.c window.h graphics.h text.h
 
 button.o: button.c button.h graphics.h text.h
 	$(CC) $(CFLAGS) -c button.c -o button.o
+
+textfield.o: textfield.c textfield.h graphics.h text.h
+	$(CC) $(CFLAGS) -c textfield.c -o textfield.o
 
 kernel.elf: kernel_entry.o $(C_OBJS) linker.ld
 	$(LD) -m elf_i386 -T linker.ld -nostdlib -o kernel.elf kernel_entry.o $(C_OBJS)

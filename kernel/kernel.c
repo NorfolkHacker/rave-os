@@ -10,6 +10,7 @@
 #include "interrupts.h"
 #include "window.h"
 #include "button.h"
+#include "textfield.h"
 #include "io.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
@@ -18,7 +19,6 @@
  * text output path now. */
 
 #define CURSOR_SIZE 8
-#define TYPED_MAX 24
 
 /* Exactly two windows exist right now (the interactive panel and a small
  * static info window), so a fixed pair of named identities is simpler
@@ -225,7 +225,7 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
 }
 
 static void draw_window_group(const struct window *panel, const struct button *btn,
-                              const struct button *exit_btn, int click_count, const char *typed) {
+                              const struct button *exit_btn, int click_count, const struct textfield *tf) {
     char line[40];
     int pos;
 
@@ -242,10 +242,8 @@ static void draw_window_group(const struct window *panel, const struct button *b
     }
     text_puts(btn->x, btn->y + btn->h + 16, line, TEXT_PRIMARY_COLOR, 1);
 
-    pos = 0;
-    str_append(line, &pos, "TYPE: ");
-    str_append(line, &pos, typed);
-    text_puts(btn->x, btn->y + btn->h + 36, line, TEXT_PRIMARY_COLOR, 1);
+    text_puts(btn->x, btn->y + btn->h + 36, "TYPE:", TEXT_PRIMARY_COLOR, 1);
+    textfield_draw(tf);
 }
 
 /* The second window: no buttons, just enough content to prove it's a
@@ -262,7 +260,7 @@ static void draw_info_group(const struct window *info) {
  * be redrawn this way every frame before damage tracking (see
  * update_and_present() below). */
 static void draw_scene(int w, int h, const struct window *panel, const struct button *btn,
-                       const struct button *exit_btn, int click_count, const char *typed,
+                       const struct button *exit_btn, int click_count, const struct textfield *tf,
                        const struct window *info, int panel_on_top, int mx, int my, uint32_t cursor_color) {
     int x, y;
 
@@ -276,9 +274,9 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
 
     if (panel_on_top) {
         draw_info_group(info);
-        draw_window_group(panel, btn, exit_btn, click_count, typed);
+        draw_window_group(panel, btn, exit_btn, click_count, tf);
     } else {
-        draw_window_group(panel, btn, exit_btn, click_count, typed);
+        draw_window_group(panel, btn, exit_btn, click_count, tf);
         draw_info_group(info);
     }
 
@@ -316,7 +314,7 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
  * painted back-to-front in the current stacking order so the topmost
  * window correctly wins wherever the two overlap. */
 static void update_and_present(int w, int h, const struct window *panel, const struct button *btn,
-                               const struct button *exit_btn, int click_count, const char *typed,
+                               const struct button *exit_btn, int click_count, const struct textfield *tf,
                                const struct window *info, int panel_on_top, int old_mx, int old_my, int mx, int my,
                                uint32_t cursor_color, int old_panel_x, int old_panel_y, int old_info_x,
                                int old_info_y, int panel_touched, int info_touched, int z_reordered) {
@@ -413,11 +411,11 @@ static void update_and_present(int w, int h, const struct window *panel, const s
             draw_info_group(info);
         }
         if (redraw_panel) {
-            draw_window_group(panel, btn, exit_btn, click_count, typed);
+            draw_window_group(panel, btn, exit_btn, click_count, tf);
         }
     } else {
         if (redraw_panel) {
-            draw_window_group(panel, btn, exit_btn, click_count, typed);
+            draw_window_group(panel, btn, exit_btn, click_count, tf);
         }
         if (redraw_info) {
             draw_info_group(info);
@@ -437,8 +435,7 @@ void kmain(void) {
     int dragging_window = -1;
     int panel_on_top = 1;
     uint32_t cursor_color = CURSOR_IDLE_COLOR;
-    char typed[TYPED_MAX + 1];
-    int typed_len = 0;
+    struct textfield tf;
     struct window panel;
     struct window info_panel;
     struct button btn;
@@ -480,7 +477,20 @@ void kmain(void) {
     info_panel.h = 90;
     info_panel.title = "RAVE-OS INFO";
 
-    typed[0] = 0;
+    /* Sits to the right of the "TYPE:" label drawn by draw_window_group(),
+     * on the same baseline (see textfield_draw()'s vertical-centering math
+     * for why tf.y is offset by -3), extending to the same right margin
+     * exit_btn already uses. */
+    {
+        int type_line_y = btn.y + btn.h + 36;
+        tf.x = btn.x + text_width("TYPE:", 1) + 6;
+        tf.y = type_line_y - 3;
+        tf.w = panel.x + panel.w - 20 - tf.x;
+        tf.h = 14;
+    }
+    tf.text[0] = 0;
+    tf.len = 0;
+    tf.focused = 0;
 
     mx = w / 2;
     my = h - 100; /* start clear of the panels above */
@@ -493,7 +503,7 @@ void kmain(void) {
     mouse_init();
     interrupts_enable();
 
-    draw_scene(w, h, &panel, &btn, &exit_btn, click_count, typed, &info_panel, panel_on_top, mx, my, cursor_color);
+    draw_scene(w, h, &panel, &btn, &exit_btn, click_count, &tf, &info_panel, panel_on_top, mx, my, cursor_color);
     gfx_present();
 
     for (;;) {
@@ -511,7 +521,8 @@ void kmain(void) {
         int old_exit_hovered = exit_btn.hovered;
         int old_exit_pressed = exit_btn.pressed;
         int old_click_count = click_count;
-        int old_typed_len = typed_len;
+        int old_tf_len = tf.len;
+        int old_tf_focused = tf.focused;
         int old_panel_on_top = panel_on_top;
 
         /* Drain every mouse packet already queued before redrawing, rather
@@ -573,6 +584,8 @@ void kmain(void) {
                     btn.y += applied_dy;
                     exit_btn.x += applied_dx;
                     exit_btn.y += applied_dy;
+                    tf.x += applied_dx;
+                    tf.y += applied_dy;
                 } else {
                     dragging_window = -1;
                 }
@@ -606,18 +619,28 @@ void kmain(void) {
              * straight through to a button the user can't even see. */
             {
                 int panel_is_topmost = topmost_window_at(cx, cy, panel_on_top, &panel, &info_panel) == WIN_PANEL;
+                int click_edge = left_held && !prev_left_held;
 
                 btn.hovered = panel_is_topmost && button_hit_test(&btn, cx, cy);
-                if (btn.hovered && left_held && !prev_left_held) {
+                if (btn.hovered && click_edge) {
                     click_count++;
                 }
                 btn.pressed = btn.hovered && left_held;
 
                 exit_btn.hovered = panel_is_topmost && button_hit_test(&exit_btn, cx, cy);
-                if (exit_btn.hovered && left_held && !prev_left_held) {
+                if (exit_btn.hovered && click_edge) {
                     power_shutdown();
                 }
                 exit_btn.pressed = exit_btn.hovered && left_held;
+
+                /* Any click edge sets focus: hitting the field itself
+                 * focuses it, anything else (a button, empty panel space,
+                 * another window, the backdrop) defocuses it -- same
+                 * single-focus-owner behavior as clicking around a normal
+                 * desktop text field. */
+                if (click_edge) {
+                    tf.focused = panel_is_topmost && textfield_hit_test(&tf, cx, cy);
+                }
             }
 
             prev_left_held = left_held;
@@ -627,17 +650,7 @@ void kmain(void) {
         }
 
         if (keyboard_poll_char(&c)) {
-            if (c == '\b') {
-                if (typed_len > 0) {
-                    typed[--typed_len] = 0;
-                }
-            } else if (c == '\n') {
-                typed_len = 0;
-                typed[0] = 0;
-            } else if (typed_len < TYPED_MAX) {
-                typed[typed_len++] = c;
-                typed[typed_len] = 0;
-            }
+            textfield_feed_char(&tf, c);
             had_event = 1;
         }
 
@@ -645,11 +658,12 @@ void kmain(void) {
             int panel_touched = (panel.x != old_panel_x) || (panel.y != old_panel_y) ||
                                  (btn.hovered != old_btn_hovered) || (btn.pressed != old_btn_pressed) ||
                                  (exit_btn.hovered != old_exit_hovered) || (exit_btn.pressed != old_exit_pressed) ||
-                                 (click_count != old_click_count) || (typed_len != old_typed_len);
+                                 (click_count != old_click_count) || (tf.len != old_tf_len) ||
+                                 (tf.focused != old_tf_focused);
             int info_touched = (info_panel.x != old_info_x) || (info_panel.y != old_info_y);
             int z_reordered = (panel_on_top != old_panel_on_top);
 
-            update_and_present(w, h, &panel, &btn, &exit_btn, click_count, typed, &info_panel, panel_on_top, old_mx,
+            update_and_present(w, h, &panel, &btn, &exit_btn, click_count, &tf, &info_panel, panel_on_top, old_mx,
                                old_my, mx, my, cursor_color, old_panel_x, old_panel_y, old_info_x, old_info_y,
                                panel_touched, info_touched, z_reordered);
         } else {
