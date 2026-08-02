@@ -99,8 +99,9 @@ static int mouse_buffer_pop(unsigned char *out) {
 }
 
 /* Blocks by halting the CPU (hlt) until the next interrupt, rather than
- * busy-spinning on a port. */
-static unsigned char read_mouse_byte(void) {
+ * busy-spinning on a port. Only used once a packet start byte has
+ * already been found -- see mouse_poll_packet(). */
+static unsigned char wait_mouse_byte(void) {
     unsigned char b;
     while (!mouse_buffer_pop(&b)) {
         __asm__ volatile("hlt");
@@ -108,16 +109,21 @@ static unsigned char read_mouse_byte(void) {
     return b;
 }
 
-void mouse_read_packet(int *dx, int *dy, int *buttons) {
+int mouse_poll_packet(int *dx, int *dy, int *buttons) {
     unsigned char b0, b1, b2;
     int raw_dx, raw_dy;
 
-    do {
-        b0 = read_mouse_byte();
-    } while (!(b0 & 0x08)); /* bit 3 is always 1 in byte 0 of a real packet; resync on anything else */
+    if (!mouse_buffer_pop(&b0)) {
+        return 0;
+    }
+    while (!(b0 & 0x08)) { /* bit 3 is always 1 in byte 0 of a real packet; resync on anything else */
+        if (!mouse_buffer_pop(&b0)) {
+            return 0; /* ran out of bytes mid-resync; caller tries again later */
+        }
+    }
 
-    b1 = read_mouse_byte();
-    b2 = read_mouse_byte();
+    b1 = wait_mouse_byte();
+    b2 = wait_mouse_byte();
 
     raw_dx = b1;
     raw_dy = b2;
@@ -131,4 +137,11 @@ void mouse_read_packet(int *dx, int *dy, int *buttons) {
     *dx = raw_dx;
     *dy = -raw_dy; /* PS/2 reports +Y as "up"; screen coordinates want +Y as "down" */
     *buttons = b0 & 0x07;
+    return 1;
+}
+
+void mouse_read_packet(int *dx, int *dy, int *buttons) {
+    while (!mouse_poll_packet(dx, dy, buttons)) {
+        __asm__ volatile("hlt");
+    }
 }

@@ -6,16 +6,18 @@
 #include "graphics.h"
 #include "text.h"
 #include "mouse.h"
+#include "keyboard.h"
 #include "interrupts.h"
+#include "window.h"
+#include "button.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
  * kernel even starts, so the vga.c text driver and 0xB8000 no longer
  * apply here -- text.c (built on font.c, ported from ACIDSTORM) is the
- * real text output path now. vga.c/keyboard.c are left in the tree;
- * keyboard input still works identically, it just has nowhere to echo to
- * with vga_putc anymore. */
+ * real text output path now. vga.c is left in the tree unused. */
 
 #define CURSOR_SIZE 8
+#define TYPED_MAX 24
 
 static uint32_t plasma_color(int x, int y, int w, int h) {
     uint8_t r = (uint8_t)(x * 255 / w);
@@ -24,51 +26,50 @@ static uint32_t plasma_color(int x, int y, int w, int h) {
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }
 
-/* Real save-under cursor compositing: before drawing the cursor
- * somewhere, remember exactly what was already in the backbuffer there;
- * before moving it, put those exact pixels back. Unlike the old
- * "recompute the plasma formula" approach, this is correct regardless of
- * what's underneath -- plasma, text, or (eventually) a window -- because
- * it never has to know or guess; it just remembers. */
-static uint32_t cursor_under[CURSOR_SIZE][CURSOR_SIZE];
-
-static void save_under_cursor(int x, int y) {
-    int row, col;
-    for (row = 0; row < CURSOR_SIZE; row++) {
-        for (col = 0; col < CURSOR_SIZE; col++) {
-            cursor_under[row][col] = gfx_get_pixel(x + col, y + row);
-        }
+static void format_uint(unsigned int v, char *out) {
+    char tmp[12];
+    int i = 0, j = 0;
+    if (v == 0) {
+        out[0] = '0';
+        out[1] = 0;
+        return;
     }
-}
-
-static void restore_under_cursor(int x, int y) {
-    int row, col;
-    for (row = 0; row < CURSOR_SIZE; row++) {
-        for (col = 0; col < CURSOR_SIZE; col++) {
-            gfx_put_pixel(x + col, y + row, cursor_under[row][col]);
-        }
+    while (v > 0) {
+        tmp[i++] = (char)('0' + v % 10);
+        v /= 10;
     }
+    while (i > 0) {
+        out[j++] = tmp[--i];
+    }
+    out[j] = 0;
 }
 
-static void draw_cursor(int x, int y, uint32_t color) {
-    gfx_fill_rect(x, y, CURSOR_SIZE, CURSOR_SIZE, color);
+static void str_append(char *dst, int *pos, const char *src) {
+    while (*src) {
+        dst[(*pos)++] = *src++;
+    }
+    dst[*pos] = 0;
 }
 
-void kmain(void) {
+/* Redraws the whole scene into the backbuffer every call: background,
+ * chrome, and the cursor. The scene is cheap enough (a formula-driven
+ * backdrop plus a handful of small fixed-size draws) that full redraw is
+ * simpler and just as correct as incremental save/restore compositing --
+ * it doesn't need to know or guess what's under the cursor, because
+ * everything gets redrawn in the right order (background, then window,
+ * then button, then text, then cursor on top) every time. gfx_present()
+ * still blits the entire backbuffer regardless (a known, deferred
+ * performance tradeoff -- see docs/BUILD_LOG.md). */
+static void draw_scene(int w, int h, const struct window *panel, const struct button *btn, int click_count,
+                       const char *typed, int mx, int my, uint32_t cursor_color) {
     int x, y;
-    int w, h;
     const char *title = "RAVE-OS";
-    const char *subtitle = "KERNEL: COMPOSITOR ONLINE";
+    const char *subtitle = "KERNEL: GUI PRIMITIVES ONLINE";
     int title_scale = 4;
     int subtitle_scale = 2;
-    int mx, my;
+    char line[40];
+    int pos;
 
-    gfx_init();
-    w = gfx_width();
-    h = gfx_height();
-
-    /* Classic demoscene XOR pattern as backdrop: cheap to compute, never
-     * the same color twice in a row, unmistakably "acid". */
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
             gfx_put_pixel(x, y, plasma_color(x, y, w, h));
@@ -78,6 +79,60 @@ void kmain(void) {
     text_puts((w - text_width(title, title_scale)) / 2, 40, title, 0xFFFFFF, title_scale);
     text_puts((w - text_width(subtitle, subtitle_scale)) / 2, 90, subtitle, 0x000000, subtitle_scale);
 
+    window_draw(panel);
+    button_draw(btn);
+
+    pos = 0;
+    str_append(line, &pos, "CLICKS: ");
+    {
+        char num[12];
+        format_uint((unsigned int)click_count, num);
+        str_append(line, &pos, num);
+    }
+    text_puts(btn->x, btn->y + btn->h + 16, line, 0xFFFFFF, 1);
+
+    pos = 0;
+    str_append(line, &pos, "TYPE: ");
+    str_append(line, &pos, typed);
+    text_puts(btn->x, btn->y + btn->h + 36, line, 0xFFFFFF, 1);
+
+    gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
+}
+
+void kmain(void) {
+    int w, h;
+    int mx, my;
+    int click_count = 0;
+    int prev_left_held = 0;
+    uint32_t cursor_color = 0xFFFFFF;
+    char typed[TYPED_MAX + 1];
+    int typed_len = 0;
+    struct window panel;
+    struct button btn;
+
+    gfx_init();
+    w = gfx_width();
+    h = gfx_height();
+
+    panel.x = 140;
+    panel.y = 160;
+    panel.w = 360;
+    panel.h = 200;
+    panel.title = "RAVE-OS PANEL";
+
+    btn.x = panel.x + 20;
+    btn.y = panel.y + 20;
+    btn.w = 140;
+    btn.h = 30;
+    btn.label = "CLICK ME";
+    btn.hovered = 0;
+    btn.pressed = 0;
+
+    typed[0] = 0;
+
+    mx = w / 2;
+    my = h - 100; /* start clear of the panel above */
+
     /* IDT/PIC set up first (masked, no sti yet), then the mouse's polling
      * handshake runs with IRQ12 still masked so it can't race the new
      * interrupt handler for the same bytes, then interrupts are actually
@@ -86,39 +141,66 @@ void kmain(void) {
     mouse_init();
     interrupts_enable();
 
-    mx = w / 2;
-    my = h - 100; /* start clear of the title text above */
-    save_under_cursor(mx, my);
-    draw_cursor(mx, my, 0xFFFFFF);
+    draw_scene(w, h, &panel, &btn, click_count, typed, mx, my, cursor_color);
     gfx_present();
 
     for (;;) {
+        int had_event = 0;
         int dx, dy, buttons;
-        uint32_t color;
+        char c;
 
-        mouse_read_packet(&dx, &dy, &buttons);
+        if (mouse_poll_packet(&dx, &dy, &buttons)) {
+            int left_held, cx, cy;
 
-        restore_under_cursor(mx, my);
+            mx += dx;
+            my += dy;
+            if (mx < 0) {
+                mx = 0;
+            }
+            if (my < 0) {
+                my = 0;
+            }
+            if (mx > w - CURSOR_SIZE) {
+                mx = w - CURSOR_SIZE;
+            }
+            if (my > h - CURSOR_SIZE) {
+                my = h - CURSOR_SIZE;
+            }
 
-        mx += dx;
-        my += dy;
-        if (mx < 0) {
-            mx = 0;
+            left_held = buttons & 0x01;
+            cx = mx + CURSOR_SIZE / 2;
+            cy = my + CURSOR_SIZE / 2;
+            btn.hovered = button_hit_test(&btn, cx, cy);
+            if (btn.hovered && left_held && !prev_left_held) {
+                click_count++;
+            }
+            btn.pressed = btn.hovered && left_held;
+            prev_left_held = left_held;
+            cursor_color = left_held ? 0xFF0000 : 0xFFFFFF;
+
+            had_event = 1;
         }
-        if (my < 0) {
-            my = 0;
-        }
-        if (mx > w - CURSOR_SIZE) {
-            mx = w - CURSOR_SIZE;
-        }
-        if (my > h - CURSOR_SIZE) {
-            my = h - CURSOR_SIZE;
+
+        if (keyboard_poll_char(&c)) {
+            if (c == '\b') {
+                if (typed_len > 0) {
+                    typed[--typed_len] = 0;
+                }
+            } else if (c == '\n') {
+                typed_len = 0;
+                typed[0] = 0;
+            } else if (typed_len < TYPED_MAX) {
+                typed[typed_len++] = c;
+                typed[typed_len] = 0;
+            }
+            had_event = 1;
         }
 
-        save_under_cursor(mx, my);
-        color = (buttons & 0x01) ? 0xFF0000 : 0xFFFFFF; /* red while left button held */
-        draw_cursor(mx, my, color);
-
-        gfx_present();
+        if (had_event) {
+            draw_scene(w, h, &panel, &btn, click_count, typed, mx, my, cursor_color);
+            gfx_present();
+        } else {
+            __asm__ volatile("hlt");
+        }
     }
 }

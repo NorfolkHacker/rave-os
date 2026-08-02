@@ -1,9 +1,16 @@
 #ifndef RAVEOS_KEYBOARD_H
 #define RAVEOS_KEYBOARD_H
 
+/* Non-blocking: if a translated character is available right now, writes
+ * it to *out and returns 1; otherwise returns 0 immediately. Drains and
+ * discards scancodes for non-printable keys (ctrl, alt, function keys,
+ * capslock, ...) and shift presses internally without blocking, so a
+ * single call may consume several scancodes before returning either 1
+ * (found a char) or 0 (buffer's empty for now). */
+int keyboard_poll_char(char *out);
+
 /* Blocks until a key is pressed, returns its ASCII value (shift-aware).
- * Non-printable keys (ctrl, alt, function keys, capslock, ...) are
- * silently skipped -- this only ever returns printable characters,
+ * Built on keyboard_poll_char(); only ever returns printable characters,
  * backspace ('\b'), or newline ('\n'). */
 char keyboard_read_char(void);
 

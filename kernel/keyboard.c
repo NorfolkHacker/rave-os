@@ -57,20 +57,10 @@ static int kbd_buffer_pop(unsigned char *out) {
     return 1;
 }
 
-/* Blocks by halting the CPU (hlt) until the next interrupt, rather than
- * busy-spinning on a port -- the actual point of moving this driver to
- * IRQ1: the CPU is free (idle, not burning cycles) between keystrokes. */
-static unsigned char keyboard_read_scancode(void) {
+int keyboard_poll_char(char *out) {
     unsigned char sc;
-    while (!kbd_buffer_pop(&sc)) {
-        __asm__ volatile("hlt");
-    }
-    return sc;
-}
 
-char keyboard_read_char(void) {
-    for (;;) {
-        unsigned char sc = keyboard_read_scancode();
+    while (kbd_buffer_pop(&sc)) {
         int released = sc & SC_RELEASE_BIT;
         unsigned char code = sc & (unsigned char)~SC_RELEASE_BIT;
 
@@ -85,8 +75,21 @@ char keyboard_read_char(void) {
 
         char c = shift_held ? scancode_to_ascii_shift[code] : scancode_to_ascii[code];
         if (c != 0) {
-            return c;
+            *out = c;
+            return 1;
         }
-        /* unmapped key -- keep waiting for the next one */
+        /* unmapped key -- keep draining this call rather than returning "nothing" early */
     }
+    return 0;
+}
+
+/* Blocks by halting the CPU (hlt) until the next interrupt, rather than
+ * busy-spinning on a port -- the actual point of moving this driver to
+ * IRQ1: the CPU is free (idle, not burning cycles) between keystrokes. */
+char keyboard_read_char(void) {
+    char c;
+    while (!keyboard_poll_char(&c)) {
+        __asm__ volatile("hlt");
+    }
+    return c;
 }
