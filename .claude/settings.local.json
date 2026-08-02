@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(spectacle --help)",
+      "Bash(DISPLAY=:0 xdotool getdisplaygeometry *)",
+      "Bash(distrobox enter *)"
+    ]
+  }
+}
