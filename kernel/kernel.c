@@ -21,13 +21,19 @@
 
 #define CURSOR_SIZE 8
 
-/* Exactly two windows exist right now (the interactive panel and a small
- * static info window), so a fixed pair of named identities is simpler
- * than a generic N-window array/list -- same reasoning already used for
- * having named `btn`/`exit_btn` structs instead of an array of buttons.
- * If a third window is ever added, that's the point to generalize. */
-#define WIN_PANEL 0
-#define WIN_INFO 1
+/* Two windows exist right now (the interactive panel and a small static
+ * info window), tracked as a real array/z-order list rather than named
+ * locals -- the desktop is growing minimize/close controls, a taskbar,
+ * and desktop icons next, all of which need to treat "every window"
+ * uniformly regardless of what's inside it. Content still differs per
+ * window (the panel has widgets, info doesn't), so each window's content
+ * is drawn via a kind-indexed dispatch (draw_window_by_index()) rather
+ * than a generic widget framework -- there are exactly two content kinds,
+ * not an open-ended number, so a small switch is simpler than a real
+ * polymorphic app system. */
+#define MAX_WINDOWS 2
+#define WIN_KIND_PANEL 0
+#define WIN_KIND_INFO 1
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -174,29 +180,46 @@ static void rect_union(int *x0, int *y0, int *x1, int *y1, int bx0, int by0, int
     }
 }
 
-/* Which window (if either) is visually on top at a screen point, given
- * the current stacking order -- what hit-testing (drag-start, button
- * clicks, raise-on-click) needs to check before acting, so a click on a
- * point where windows overlap only ever affects whichever one is
- * actually visible there. Returns WIN_PANEL, WIN_INFO, or -1. */
-static int topmost_window_at(int px, int py, int panel_on_top, const struct window *panel,
-                             const struct window *info) {
-    if (panel_on_top) {
-        if (window_outer_contains(panel, px, py)) {
-            return WIN_PANEL;
+/* Which window (if any) is visually on top at a screen point, given the
+ * current z-order -- what hit-testing (drag-start, button clicks,
+ * raise-on-click) needs to check before acting, so a click on a point
+ * where windows overlap only ever affects whichever one is actually
+ * visible there. z_order[0] is checked first, since it's the frontmost.
+ * A minimized or closed window is never hit -- it isn't on the desktop.
+ * Returns a window index, or -1. */
+static int topmost_window_at(const struct window *windows, const int *z_order, int px, int py) {
+    int i;
+    for (i = 0; i < MAX_WINDOWS; i++) {
+        int idx = z_order[i];
+        if (windows[idx].state != WINDOW_OPEN) {
+            continue;
         }
-        if (window_outer_contains(info, px, py)) {
-            return WIN_INFO;
-        }
-    } else {
-        if (window_outer_contains(info, px, py)) {
-            return WIN_INFO;
-        }
-        if (window_outer_contains(panel, px, py)) {
-            return WIN_PANEL;
+        if (window_outer_contains(&windows[idx], px, py)) {
+            return idx;
         }
     }
     return -1;
+}
+
+/* Moves a window index to the front of the z-order, shifting the rest
+ * back a slot -- the generic version of what used to be a single
+ * panel_on_top flag flip. A no-op if it's already frontmost. */
+static void raise_window(int *z_order, int idx) {
+    int i, pos = -1;
+
+    for (i = 0; i < MAX_WINDOWS; i++) {
+        if (z_order[i] == idx) {
+            pos = i;
+            break;
+        }
+    }
+    if (pos <= 0) {
+        return;
+    }
+    for (i = pos; i > 0; i--) {
+        z_order[i] = z_order[i - 1];
+    }
+    z_order[0] = idx;
 }
 
 /* Clamps a window's position so its full outer bounds (border included)
@@ -223,6 +246,30 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
     if (win->y > max_y) {
         win->y = max_y;
     }
+}
+
+/* Moves a window's content widgets by the same delta already applied to
+ * the window itself during a drag. This is the single place that
+ * happens now, replacing what used to be a hand-written list of
+ * `widget.x += dx` lines duplicated at each drag site -- exactly the
+ * spot that twice forgot a widget earlier this session (the text field's
+ * position, then almost the checkbox's) when a new one was added.
+ * Centralizing it here means a future panel widget only needs to be
+ * added in one place to drag correctly, not remembered at every call
+ * site that moves the panel. */
+static void move_window_content(int kind, struct button *btn, struct button *exit_btn, struct textfield *tf,
+                                struct checkbox *cb, int applied_dx, int applied_dy) {
+    if (kind != WIN_KIND_PANEL) {
+        return; /* WIN_KIND_INFO has no content widgets to move */
+    }
+    btn->x += applied_dx;
+    btn->y += applied_dy;
+    exit_btn->x += applied_dx;
+    exit_btn->y += applied_dy;
+    tf->x += applied_dx;
+    tf->y += applied_dy;
+    cb->x += applied_dx;
+    cb->y += applied_dy;
 }
 
 static void draw_window_group(const struct window *panel, const struct button *btn,
@@ -257,17 +304,29 @@ static void draw_info_group(const struct window *info) {
     text_puts(info->x + 8, info->y + 12, "DRAG ME TOO", TEXT_MUTED_COLOR, 1);
 }
 
-/* Full redraw of everything into the backbuffer: background, both
- * windows in the given stacking order, and the cursor. Only used for the
+/* The one place that dispatches "draw whatever's inside window index
+ * idx" -- both draw_scene() and update_and_present() go through this
+ * instead of each hand-rolling their own kind check. */
+static void draw_window_by_index(int idx, const struct window *windows, const struct button *btn,
+                                 const struct button *exit_btn, int click_count, const struct textfield *tf,
+                                 const struct checkbox *cb) {
+    if (idx == WIN_KIND_PANEL) {
+        draw_window_group(&windows[idx], btn, exit_btn, click_count, tf, cb);
+    } else {
+        draw_info_group(&windows[idx]);
+    }
+}
+
+/* Full redraw of everything into the backbuffer: background, every open
+ * window back-to-front in z-order, and the cursor. Only used for the
  * very first frame, where there's no prior state to diff against --
  * correct by full reconstruction, same reasoning the whole scene used to
  * be redrawn this way every frame before damage tracking (see
  * update_and_present() below). */
-static void draw_scene(int w, int h, const struct window *panel, const struct button *btn,
+static void draw_scene(int w, int h, const struct window *windows, const struct button *btn,
                        const struct button *exit_btn, int click_count, const struct textfield *tf,
-                       const struct checkbox *cb, const struct window *info, int panel_on_top, int mx, int my,
-                       uint32_t cursor_color) {
-    int x, y;
+                       const struct checkbox *cb, const int *z_order, int mx, int my, uint32_t cursor_color) {
+    int x, y, i;
 
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
@@ -277,12 +336,11 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
 
     draw_title_subtitle(w);
 
-    if (panel_on_top) {
-        draw_info_group(info);
-        draw_window_group(panel, btn, exit_btn, click_count, tf, cb);
-    } else {
-        draw_window_group(panel, btn, exit_btn, click_count, tf, cb);
-        draw_info_group(info);
+    for (i = MAX_WINDOWS - 1; i >= 0; i--) {
+        int idx = z_order[i];
+        if (windows[idx].state == WINDOW_OPEN) {
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb);
+        }
     }
 
     gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
@@ -292,15 +350,15 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
  * screen, then presents just that rectangle (see the previous
  * damage-rect stage in docs/BUILD_LOG.md for why -- redrawing everything
  * per event is what let a real mouse's packet rate outrun the redraw
- * loop and overflow the ring buffer in an earlier stage). With two
- * windows now able to overlap and reorder, the damage rect has to track
- * three independent regions -- the panel, the info window, and the
- * title block -- rather than just one:
+ * loop and overflow the ring buffer in an earlier stage). The damage rect
+ * has to track MAX_WINDOWS + 1 independent regions -- each window, plus
+ * the title block -- rather than a fixed few named ones, now that windows
+ * are a real array:
  *
  * - It starts as the union of the cursor's old and new position, since
  *   the cursor moves on nearly every event.
  * - A region that moved, changed contents, or was involved in a z-order
- *   swap this event is unconditionally redrawn, with its old position
+ *   change this event is unconditionally redrawn, with its old position
  *   (if it moved) folded into the damage too, so what's left behind at
  *   the old spot gets properly repainted.
  * - After that seed, a fixed-point loop catches everything else: any
@@ -310,82 +368,67 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
  *   that nothing ever restores. This is what correctly handles the
  *   cursor sweeping across a window it didn't otherwise touch, and a
  *   window that moved away revealing whatever (window or backdrop) was
- *   underneath it. Three regions total, so this converges in at most
- *   three passes.
+ *   underneath it. MAX_WINDOWS + 1 regions total, so this converges in at
+ *   most that many passes.
  *
  * Whatever ends up dirty is still redrawn as a whole reconstructed unit,
  * not diffed pixel-by-pixel -- same approach the very first whole-screen
  * redraw used, just scoped down to whatever actually needs it, and
- * painted back-to-front in the current stacking order so the topmost
- * window correctly wins wherever the two overlap. */
-static void update_and_present(int w, int h, const struct window *panel, const struct button *btn,
+ * painted back-to-front in z-order so the topmost window correctly wins
+ * wherever two windows overlap. */
+static void update_and_present(int w, int h, const struct window *windows, const struct button *btn,
                                const struct button *exit_btn, int click_count, const struct textfield *tf,
-                               const struct checkbox *cb, const struct window *info, int panel_on_top, int old_mx,
-                               int old_my, int mx, int my, uint32_t cursor_color, int old_panel_x, int old_panel_y,
-                               int old_info_x, int old_info_y, int panel_touched, int info_touched,
-                               int z_reordered) {
+                               const struct checkbox *cb, const int *z_order, const int *old_z, int old_mx,
+                               int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
+                               const int *touched) {
     int dx0, dy0, dx1, dy1;
-    int px0, py0, px1, py1;
-    int ix0, iy0, ix1, iy1;
-    int tx0, ty0, tx1, ty1;
-    int redraw_panel, redraw_info, redraw_titles;
+    int rx0[MAX_WINDOWS + 1], ry0[MAX_WINDOWS + 1], rx1[MAX_WINDOWS + 1], ry1[MAX_WINDOWS + 1];
+    int redraw[MAX_WINDOWS + 1];
     int changed;
-    int x, y;
+    int i, x, y;
+    int z_reordered = 0;
+
+    for (i = 0; i < MAX_WINDOWS; i++) {
+        if (z_order[i] != old_z[i]) {
+            z_reordered = 1;
+        }
+    }
 
     dx0 = old_mx < mx ? old_mx : mx;
     dy0 = old_my < my ? old_my : my;
     dx1 = (old_mx > mx ? old_mx : mx) + CURSOR_SIZE;
     dy1 = (old_my > my ? old_my : my) + CURSOR_SIZE;
 
-    window_outer_rect(panel, &px0, &py0, &px1, &py1);
-    window_outer_rect(info, &ix0, &iy0, &ix1, &iy1);
-    title_block_rect(w, &tx0, &ty0, &tx1, &ty1);
-
-    redraw_panel = panel_touched || z_reordered;
-    redraw_info = info_touched || z_reordered;
-    redraw_titles = 0;
-
-    if (panel_touched) {
-        struct window old_win = *panel;
-        int ox0, oy0, ox1, oy1;
-
-        old_win.x = old_panel_x;
-        old_win.y = old_panel_y;
-        window_outer_rect(&old_win, &ox0, &oy0, &ox1, &oy1);
-        rect_union(&dx0, &dy0, &dx1, &dy1, ox0, oy0, ox1, oy1);
+    for (i = 0; i < MAX_WINDOWS; i++) {
+        window_outer_rect(&windows[i], &rx0[i], &ry0[i], &rx1[i], &ry1[i]);
+        redraw[i] = touched[i] || z_reordered;
     }
-    if (info_touched) {
-        struct window old_win = *info;
-        int ox0, oy0, ox1, oy1;
+    title_block_rect(w, &rx0[MAX_WINDOWS], &ry0[MAX_WINDOWS], &rx1[MAX_WINDOWS], &ry1[MAX_WINDOWS]);
+    redraw[MAX_WINDOWS] = 0;
 
-        old_win.x = old_info_x;
-        old_win.y = old_info_y;
-        window_outer_rect(&old_win, &ox0, &oy0, &ox1, &oy1);
-        rect_union(&dx0, &dy0, &dx1, &dy1, ox0, oy0, ox1, oy1);
-    }
-    if (redraw_panel) {
-        rect_union(&dx0, &dy0, &dx1, &dy1, px0, py0, px1, py1);
-    }
-    if (redraw_info) {
-        rect_union(&dx0, &dy0, &dx1, &dy1, ix0, iy0, ix1, iy1);
+    for (i = 0; i < MAX_WINDOWS; i++) {
+        if (touched[i]) {
+            struct window old_win = windows[i];
+            int ox0, oy0, ox1, oy1;
+
+            old_win.x = old_x[i];
+            old_win.y = old_y[i];
+            window_outer_rect(&old_win, &ox0, &oy0, &ox1, &oy1);
+            rect_union(&dx0, &dy0, &dx1, &dy1, ox0, oy0, ox1, oy1);
+        }
+        if (redraw[i]) {
+            rect_union(&dx0, &dy0, &dx1, &dy1, rx0[i], ry0[i], rx1[i], ry1[i]);
+        }
     }
 
     do {
         changed = 0;
-        if (!redraw_panel && rects_overlap(dx0, dy0, dx1, dy1, px0, py0, px1, py1)) {
-            redraw_panel = 1;
-            rect_union(&dx0, &dy0, &dx1, &dy1, px0, py0, px1, py1);
-            changed = 1;
-        }
-        if (!redraw_info && rects_overlap(dx0, dy0, dx1, dy1, ix0, iy0, ix1, iy1)) {
-            redraw_info = 1;
-            rect_union(&dx0, &dy0, &dx1, &dy1, ix0, iy0, ix1, iy1);
-            changed = 1;
-        }
-        if (!redraw_titles && rects_overlap(dx0, dy0, dx1, dy1, tx0, ty0, tx1, ty1)) {
-            redraw_titles = 1;
-            rect_union(&dx0, &dy0, &dx1, &dy1, tx0, ty0, tx1, ty1);
-            changed = 1;
+        for (i = 0; i <= MAX_WINDOWS; i++) {
+            if (!redraw[i] && rects_overlap(dx0, dy0, dx1, dy1, rx0[i], ry0[i], rx1[i], ry1[i])) {
+                redraw[i] = 1;
+                rect_union(&dx0, &dy0, &dx1, &dy1, rx0[i], ry0[i], rx1[i], ry1[i]);
+                changed = 1;
+            }
         }
     } while (changed);
 
@@ -408,23 +451,14 @@ static void update_and_present(int w, int h, const struct window *panel, const s
         }
     }
 
-    if (redraw_titles) {
+    if (redraw[MAX_WINDOWS]) {
         draw_title_subtitle(w);
     }
 
-    if (panel_on_top) {
-        if (redraw_info) {
-            draw_info_group(info);
-        }
-        if (redraw_panel) {
-            draw_window_group(panel, btn, exit_btn, click_count, tf, cb);
-        }
-    } else {
-        if (redraw_panel) {
-            draw_window_group(panel, btn, exit_btn, click_count, tf, cb);
-        }
-        if (redraw_info) {
-            draw_info_group(info);
+    for (i = MAX_WINDOWS - 1; i >= 0; i--) {
+        int idx = z_order[i];
+        if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb);
         }
     }
 
@@ -439,12 +473,11 @@ void kmain(void) {
     int click_count = 0;
     int prev_left_held = 0;
     int dragging_window = -1;
-    int panel_on_top = 1;
     uint32_t cursor_color = CURSOR_IDLE_COLOR;
     struct textfield tf;
     struct checkbox cb;
-    struct window panel;
-    struct window info_panel;
+    struct window windows[MAX_WINDOWS];
+    int z_order[MAX_WINDOWS];
     struct button btn;
     struct button exit_btn;
 
@@ -452,14 +485,17 @@ void kmain(void) {
     w = gfx_width();
     h = gfx_height();
 
-    panel.x = 140;
-    panel.y = 160;
-    panel.w = 360;
-    panel.h = 200;
-    panel.title = "RAVE-OS PANEL";
+    windows[WIN_KIND_PANEL].x = 140;
+    windows[WIN_KIND_PANEL].y = 160;
+    windows[WIN_KIND_PANEL].w = 360;
+    windows[WIN_KIND_PANEL].h = 200;
+    windows[WIN_KIND_PANEL].title = "RAVE-OS PANEL";
+    windows[WIN_KIND_PANEL].state = WINDOW_OPEN;
+    windows[WIN_KIND_PANEL].minimize_hovered = 0;
+    windows[WIN_KIND_PANEL].close_hovered = 0;
 
-    btn.x = panel.x + 20;
-    btn.y = panel.y + 20;
+    btn.x = windows[WIN_KIND_PANEL].x + 20;
+    btn.y = windows[WIN_KIND_PANEL].y + 20;
     btn.w = 140;
     btn.h = 30;
     btn.label = "CLICK ME";
@@ -468,7 +504,7 @@ void kmain(void) {
 
     exit_btn.x = btn.x + btn.w + 20;
     exit_btn.y = btn.y;
-    exit_btn.w = panel.x + panel.w - 20 - exit_btn.x;
+    exit_btn.w = windows[WIN_KIND_PANEL].x + windows[WIN_KIND_PANEL].w - 20 - exit_btn.x;
     exit_btn.h = 30;
     exit_btn.label = "EXIT";
     exit_btn.hovered = 0;
@@ -478,11 +514,18 @@ void kmain(void) {
      * start, so the two windows' stacking order is visibly meaningful
      * the moment this boots, not just after someone drags one on top of
      * the other. */
-    info_panel.x = 380;
-    info_panel.y = 300;
-    info_panel.w = 200;
-    info_panel.h = 90;
-    info_panel.title = "RAVE-OS INFO";
+    windows[WIN_KIND_INFO].x = 380;
+    windows[WIN_KIND_INFO].y = 300;
+    windows[WIN_KIND_INFO].w = 200;
+    windows[WIN_KIND_INFO].h = 90;
+    windows[WIN_KIND_INFO].title = "RAVE-OS INFO";
+    windows[WIN_KIND_INFO].state = WINDOW_OPEN;
+    windows[WIN_KIND_INFO].minimize_hovered = 0;
+    windows[WIN_KIND_INFO].close_hovered = 0;
+
+    /* Panel starts frontmost, matching the old panel_on_top = 1 default. */
+    z_order[0] = WIN_KIND_PANEL;
+    z_order[1] = WIN_KIND_INFO;
 
     /* Sits to the right of the "TYPE:" label drawn by draw_window_group(),
      * on the same baseline (see textfield_draw()'s vertical-centering math
@@ -492,7 +535,7 @@ void kmain(void) {
         int type_line_y = btn.y + btn.h + 36;
         tf.x = btn.x + text_width("TYPE:", 1) + 6;
         tf.y = type_line_y - 3;
-        tf.w = panel.x + panel.w - 20 - tf.x;
+        tf.w = windows[WIN_KIND_PANEL].x + windows[WIN_KIND_PANEL].w - 20 - tf.x;
         tf.h = 14;
     }
     tf.text[0] = 0;
@@ -518,7 +561,7 @@ void kmain(void) {
     mouse_init();
     interrupts_enable();
 
-    draw_scene(w, h, &panel, &btn, &exit_btn, click_count, &tf, &cb, &info_panel, panel_on_top, mx, my, cursor_color);
+    draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, mx, my, cursor_color);
     gfx_present();
 
     for (;;) {
@@ -527,10 +570,7 @@ void kmain(void) {
         char c;
         int old_mx = mx;
         int old_my = my;
-        int old_panel_x = panel.x;
-        int old_panel_y = panel.y;
-        int old_info_x = info_panel.x;
-        int old_info_y = info_panel.y;
+        int old_x[MAX_WINDOWS], old_y[MAX_WINDOWS], old_z[MAX_WINDOWS];
         int old_btn_hovered = btn.hovered;
         int old_btn_pressed = btn.pressed;
         int old_exit_hovered = exit_btn.hovered;
@@ -540,7 +580,13 @@ void kmain(void) {
         int old_tf_focused = tf.focused;
         int old_cb_checked = cb.checked;
         int old_cb_hovered = cb.hovered;
-        int old_panel_on_top = panel_on_top;
+        int i;
+
+        for (i = 0; i < MAX_WINDOWS; i++) {
+            old_x[i] = windows[i].x;
+            old_y[i] = windows[i].y;
+            old_z[i] = z_order[i];
+        }
 
         /* Drain every mouse packet already queued before redrawing, rather
          * than redrawing once per packet: a real mouse streams packets far
@@ -574,60 +620,40 @@ void kmain(void) {
             cy = my + CURSOR_SIZE / 2;
 
             /* Dragging applies each packet's raw dx/dy to whichever window
-             * is being dragged (and, for the panel, its buttons) the same
-             * way it's already applied to the cursor above -- since PS/2
-             * deltas are relative, this keeps the cursor's position over
-             * the title bar constant for the whole drag with no separate
-             * grab offset to track. A press that isn't already dragging
-             * something looks up which window (if either) is topmost
-             * under the cursor: that window is raised to front, and if
-             * the press specifically landed on its title bar, a drag
-             * starts too -- so grabbing a background window's title bar
-             * both raises and starts moving it in one motion, the same
-             * as any desktop. */
-            if (dragging_window == WIN_PANEL) {
+             * is being dragged (and its content widgets, via
+             * move_window_content()) the same way it's already applied to
+             * the cursor above -- since PS/2 deltas are relative, this
+             * keeps the cursor's position over the title bar constant for
+             * the whole drag with no separate grab offset to track. A
+             * press that isn't already dragging something looks up which
+             * window (if any) is topmost under the cursor: that window is
+             * raised to front, and if the press specifically landed on its
+             * title bar, a drag starts too -- so grabbing a background
+             * window's title bar both raises and starts moving it in one
+             * motion, the same as any desktop. */
+            if (dragging_window >= 0) {
                 if (left_held) {
-                    int drag_start_x = panel.x;
-                    int drag_start_y = panel.y;
+                    int drag_start_x = windows[dragging_window].x;
+                    int drag_start_y = windows[dragging_window].y;
                     int applied_dx, applied_dy;
 
-                    panel.x += dx;
-                    panel.y += dy;
-                    clamp_window_to_screen(&panel, w, h);
+                    windows[dragging_window].x += dx;
+                    windows[dragging_window].y += dy;
+                    clamp_window_to_screen(&windows[dragging_window], w, h);
 
-                    applied_dx = panel.x - drag_start_x;
-                    applied_dy = panel.y - drag_start_y;
-                    btn.x += applied_dx;
-                    btn.y += applied_dy;
-                    exit_btn.x += applied_dx;
-                    exit_btn.y += applied_dy;
-                    tf.x += applied_dx;
-                    tf.y += applied_dy;
-                    cb.x += applied_dx;
-                    cb.y += applied_dy;
-                } else {
-                    dragging_window = -1;
-                }
-            } else if (dragging_window == WIN_INFO) {
-                if (left_held) {
-                    info_panel.x += dx;
-                    info_panel.y += dy;
-                    clamp_window_to_screen(&info_panel, w, h);
+                    applied_dx = windows[dragging_window].x - drag_start_x;
+                    applied_dy = windows[dragging_window].y - drag_start_y;
+                    move_window_content(dragging_window, &btn, &exit_btn, &tf, &cb, applied_dx, applied_dy);
                 } else {
                     dragging_window = -1;
                 }
             } else if (left_held && !prev_left_held) {
-                int target = topmost_window_at(cx, cy, panel_on_top, &panel, &info_panel);
+                int target = topmost_window_at(windows, z_order, cx, cy);
 
-                if (target == WIN_PANEL) {
-                    panel_on_top = 1;
-                    if (window_titlebar_hit_test(&panel, cx, cy)) {
-                        dragging_window = WIN_PANEL;
-                    }
-                } else if (target == WIN_INFO) {
-                    panel_on_top = 0;
-                    if (window_titlebar_hit_test(&info_panel, cx, cy)) {
-                        dragging_window = WIN_INFO;
+                if (target >= 0) {
+                    raise_window(z_order, target);
+                    if (window_titlebar_hit_test(&windows[target], cx, cy)) {
+                        dragging_window = target;
                     }
                 }
             }
@@ -637,7 +663,7 @@ void kmain(void) {
              * a point where the info window covers the panel would click
              * straight through to a button the user can't even see. */
             {
-                int panel_is_topmost = topmost_window_at(cx, cy, panel_on_top, &panel, &info_panel) == WIN_PANEL;
+                int panel_is_topmost = topmost_window_at(windows, z_order, cx, cy) == WIN_KIND_PANEL;
                 int click_edge = left_held && !prev_left_held;
 
                 btn.hovered = panel_is_topmost && button_hit_test(&btn, cx, cy);
@@ -679,18 +705,20 @@ void kmain(void) {
         }
 
         if (had_event) {
-            int panel_touched = (panel.x != old_panel_x) || (panel.y != old_panel_y) ||
-                                 (btn.hovered != old_btn_hovered) || (btn.pressed != old_btn_pressed) ||
-                                 (exit_btn.hovered != old_exit_hovered) || (exit_btn.pressed != old_exit_pressed) ||
-                                 (click_count != old_click_count) || (tf.len != old_tf_len) ||
-                                 (tf.focused != old_tf_focused) || (cb.checked != old_cb_checked) ||
-                                 (cb.hovered != old_cb_hovered);
-            int info_touched = (info_panel.x != old_info_x) || (info_panel.y != old_info_y);
-            int z_reordered = (panel_on_top != old_panel_on_top);
+            int touched[MAX_WINDOWS];
 
-            update_and_present(w, h, &panel, &btn, &exit_btn, click_count, &tf, &cb, &info_panel, panel_on_top,
-                               old_mx, old_my, mx, my, cursor_color, old_panel_x, old_panel_y, old_info_x,
-                               old_info_y, panel_touched, info_touched, z_reordered);
+            touched[WIN_KIND_PANEL] = (windows[WIN_KIND_PANEL].x != old_x[WIN_KIND_PANEL]) ||
+                                      (windows[WIN_KIND_PANEL].y != old_y[WIN_KIND_PANEL]) ||
+                                      (btn.hovered != old_btn_hovered) || (btn.pressed != old_btn_pressed) ||
+                                      (exit_btn.hovered != old_exit_hovered) ||
+                                      (exit_btn.pressed != old_exit_pressed) || (click_count != old_click_count) ||
+                                      (tf.len != old_tf_len) || (tf.focused != old_tf_focused) ||
+                                      (cb.checked != old_cb_checked) || (cb.hovered != old_cb_hovered);
+            touched[WIN_KIND_INFO] = (windows[WIN_KIND_INFO].x != old_x[WIN_KIND_INFO]) ||
+                                     (windows[WIN_KIND_INFO].y != old_y[WIN_KIND_INFO]);
+
+            update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, old_z, old_mx, old_my,
+                               mx, my, cursor_color, old_x, old_y, touched);
         } else {
             __asm__ volatile("hlt");
         }
