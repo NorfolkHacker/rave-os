@@ -6,6 +6,7 @@
 int gfx_width(void);
 int gfx_height(void);
 void gfx_put_pixel(int x, int y, uint32_t rgb);
+void gfx_fill_rect(int x, int y, int w, int h, uint32_t rgb);
 void gfx_clear(uint32_t rgb);
 
 #endif

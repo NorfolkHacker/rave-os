@@ -15,16 +15,17 @@ void gfx_put_pixel(int x, int y, uint32_t rgb) {
     *(volatile uint32_t *)(fb + offset) = rgb;
 }
 
-void gfx_clear(uint32_t rgb) {
-    int x, y;
-    int w = gfx_width();
-    int h = gfx_height();
-
-    for (y = 0; y < h; y++) {
-        for (x = 0; x < w; x++) {
-            gfx_put_pixel(x, y, rgb);
+void gfx_fill_rect(int x, int y, int w, int h, uint32_t rgb) {
+    int row, col;
+    for (row = 0; row < h; row++) {
+        for (col = 0; col < w; col++) {
+            gfx_put_pixel(x + col, y + row, rgb);
         }
     }
+}
+
+void gfx_clear(uint32_t rgb) {
+    gfx_fill_rect(0, 0, gfx_width(), gfx_height(), rgb);
 }
 
 int gfx_width(void) {

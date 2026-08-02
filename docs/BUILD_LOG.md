@@ -158,3 +158,20 @@ Verified in QEMU via screendump: the full screen renders as a colorful magenta/g
 Files: `kernel/boot_info.h`, `kernel/graphics.c`, `kernel/graphics.h`; `boot/stage2.asm` (`setup_video`); `kernel/kernel.c` rewritten around the graphics driver; `kernel/Makefile` (adds `graphics.o`, size-check guard).
 
 Next up: real text output in graphics mode needs a bitmap font renderer (interestingly, `demos/acidstorm/src/font.c` already has one that could potentially be ported/reused here) -- worth doing before going much further, since debugging future kernel work without any text output at all will get painful fast. After that: mouse input (PS/2 mouse, same controller family as the keyboard), then actual GUI primitives (windows, widgets).
+
+## 2026-08-02 — Graphics-mode font renderer, ported from ACIDSTORM
+
+Restored text output (lost when VGA text mode got replaced by the VBE framebuffer) by porting ACIDSTORM's font system into the kernel, rather than inventing a second, different font for Rave-OS -- the demo game and the OS now share one glyph set.
+
+**What got ported vs. rewritten:**
+- `kernel/font.c`/`font.h` is `demos/acidstorm/src/font.c`'s 5x7 dot-matrix glyph data and `font_glyph()` lookup, copied essentially verbatim -- same `G_A`..`G_Z`, `G_0`..`G_9`, punctuation tables. The **only** change: the original calls libc's `toupper()` (via `<ctype.h>`) to normalize case; the kernel has no libc (`-nostdlib`), so that one call would fail at link time. Replaced with a 3-line manual `raveos_toupper()`. This is the whole reason a straight `#include` of the original file wouldn't have worked -- everything else about the glyph format is identical.
+- `kernel/text.c`/`text.h` (`text_puts()`, `text_width()`) is new, but deliberately mirrors ACIDSTORM's `gfx_text()`/`gfx_text_width()` (`demos/acidstorm/src/gfx.c`) formula-for-formula: each lit glyph dot becomes a `scale x scale` block, characters advance `6*scale` pixels (5 wide + 1 spacing), width is `n*6*scale - scale`. Kept identical on purpose so a size like "scale 2" means the same thing in both places.
+- `kernel/graphics.c` gained `gfx_fill_rect()` (used by `text_puts` per glyph-dot, and now also by `gfx_clear`, which is just `gfx_fill_rect` over the whole screen -- a small simplification alongside the addition).
+
+**Build-safety note:** adding `font.o`/`text.o` pushed the compiled kernel to 4749 bytes, over the previous `KERNEL_SECTORS=8` (4096-byte) budget -- and the size-check guard added last stage (rather than a stale build silently truncating real code) caught it immediately with a clear error. Bumped `KERNEL_SECTORS` to 12 (6144 bytes, headroom for near-term growth) in both `kernel/Makefile` and `boot/stage2.asm` (still the same manually-synced-constants rough edge noted twice already).
+
+`kernel/kernel.c` now draws the XOR-plasma background as before, then overlays a centered white "RAVE-OS" title (scale 4) and a black "KERNEL: FONT RENDERER ONLINE" subtitle (scale 2) using `text_puts`. Verified in QEMU via screendump: both lines render correctly, legible over the plasma backdrop, confirming the font data, `text.c`'s layout math, and `gfx_fill_rect` all work together.
+
+Files: `kernel/font.c`, `kernel/font.h` (ported), `kernel/text.c`, `kernel/text.h` (new); `kernel/graphics.c`/`.h` (`gfx_fill_rect` added); `kernel/kernel.c` (title/subtitle overlay); `kernel/Makefile` (`font.o`, `text.o`, bumped `KERNEL_SECTORS`); `boot/stage2.asm` (bumped `KERNEL_SECTORS` to match).
+
+Next up: mouse input (PS/2 mouse, same controller/IRQ family as the keyboard) is the other GUI-stage essential still missing. After that, actual GUI primitives -- windows, widgets, an event loop -- start becoming meaningful, though an IDT for real interrupts (rather than polling) is worth revisiting before things get much more interactive.

@@ -6,17 +6,17 @@ OBJCOPY := objcopy
 CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -nostdlib -Wall -Wextra
 
 # Must match KERNEL_SECTORS in ../boot/stage2.asm.
-KERNEL_SECTORS := 8
+KERNEL_SECTORS := 12
 KERNEL_BYTES := $(shell echo $$(($(KERNEL_SECTORS) * 512)))
 
-C_OBJS := kernel.o vga.o keyboard.o graphics.o
+C_OBJS := kernel.o vga.o keyboard.o graphics.o font.o text.o
 
 all: kernel.bin
 
 kernel_entry.o: kernel_entry.asm
 	$(AS) -f elf32 kernel_entry.asm -o kernel_entry.o
 
-kernel.o: kernel.c graphics.h
+kernel.o: kernel.c graphics.h text.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 vga.o: vga.c vga.h io.h
@@ -27,6 +27,12 @@ keyboard.o: keyboard.c keyboard.h io.h
 
 graphics.o: graphics.c graphics.h boot_info.h
 	$(CC) $(CFLAGS) -c graphics.c -o graphics.o
+
+font.o: font.c font.h
+	$(CC) $(CFLAGS) -c font.c -o font.o
+
+text.o: text.c text.h font.h graphics.h
+	$(CC) $(CFLAGS) -c text.c -o text.o
 
 kernel.elf: kernel_entry.o $(C_OBJS) linker.ld
 	$(LD) -m elf_i386 -T linker.ld -nostdlib -o kernel.elf kernel_entry.o $(C_OBJS)
