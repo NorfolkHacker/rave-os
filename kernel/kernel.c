@@ -12,9 +12,9 @@
 #include "button.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
- * kernel even starts, so the vga.c text driver and 0xB8000 no longer
- * apply here -- text.c (built on font.c, ported from ACIDSTORM) is the
- * real text output path now. vga.c is left in the tree unused. */
+ * kernel even starts, so raw VGA text-mode writes at 0xB8000 don't apply
+ * here -- text.c (built on font.c, ported from ACIDSTORM) is the real
+ * text output path now. */
 
 #define CURSOR_SIZE 8
 #define TYPED_MAX 24

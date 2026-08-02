@@ -11,11 +11,7 @@ OBJCOPY := objcopy
 # switching at all yet.
 CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra
 
-# Must match KERNEL_SECTORS in ../boot/stage2.asm.
-KERNEL_SECTORS := 20
-KERNEL_BYTES := $(shell echo $$(($(KERNEL_SECTORS) * 512)))
-
-C_OBJS := kernel.o vga.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o
+C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o
 
 all: kernel.bin
 
@@ -24,9 +20,6 @@ kernel_entry.o: kernel_entry.asm
 
 kernel.o: kernel.c graphics.h text.h mouse.h keyboard.h interrupts.h window.h button.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
-
-vga.o: vga.c vga.h io.h
-	$(CC) $(CFLAGS) -c vga.c -o vga.o
 
 keyboard.o: keyboard.c keyboard.h
 	$(CC) $(CFLAGS) -c keyboard.c -o keyboard.o
@@ -40,7 +33,7 @@ idt.o: idt.c idt.h
 pic.o: pic.c pic.h io.h
 	$(CC) $(CFLAGS) -c pic.c -o pic.o
 
-isr.o: isr.c idt.h pic.h io.h interrupts.h keyboard.h mouse.h
+isr.o: isr.c idt.h pic.h io.h interrupts.h keyboard.h mouse.h graphics.h text.h
 	$(CC) $(CFLAGS) -c isr.c -o isr.o
 
 graphics.o: graphics.c graphics.h boot_info.h
@@ -61,14 +54,14 @@ button.o: button.c button.h graphics.h text.h
 kernel.elf: kernel_entry.o $(C_OBJS) linker.ld
 	$(LD) -m elf_i386 -T linker.ld -nostdlib -o kernel.elf kernel_entry.o $(C_OBJS)
 
+# No sector-boundary padding or size budget here anymore -- just the raw
+# compiled bytes. boot/Makefile is the sole place that now computes how
+# many disk sectors this needs and pads it accordingly, since it's also
+# the place that has to know where on disk the kernel starts (previously
+# these were manually-synced constants duplicated across three files;
+# see docs/BUILD_LOG.md's consolidation entry).
 kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary kernel.elf kernel.bin
-	@actual=$$(stat -c%s kernel.bin); \
-	if [ $$actual -gt $(KERNEL_BYTES) ]; then \
-		echo "error: kernel.bin is $$actual bytes, exceeds KERNEL_SECTORS budget of $(KERNEL_BYTES) bytes -- bump KERNEL_SECTORS here and in ../boot/stage2.asm"; \
-		exit 1; \
-	fi
-	truncate -s $(KERNEL_BYTES) kernel.bin
 
 clean:
 	rm -f kernel_entry.o $(C_OBJS) kernel.elf kernel.bin

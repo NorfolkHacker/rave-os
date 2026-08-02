@@ -6,15 +6,23 @@
 BITS 16
 ORG 0x8000
 
-; Disk layout (CHS sector numbers, 1-indexed): sector 1 = stage1,
-; sectors 2-3 = stage2 (STAGE2_SECTORS=2 in stage1.asm), so the kernel
-; starts at sector 4. KERNEL_SECTORS must match KERNEL_SECTORS in
-; ../kernel/Makefile. Both of these are manually-synced constants for now --
-; a rough edge to revisit once kernel size stops being an afterthought.
+; Disk layout (CHS sector numbers, 1-indexed): sector 1 = stage1, then
+; STAGE2_SECTORS sectors of stage2, then the kernel starting at
+; KERNEL_START_SECTOR for KERNEL_SECTORS sectors. All three are normally
+; passed in by boot/Makefile via `nasm -D`, computed from the actual
+; measured sizes of stage2.bin and kernel.bin -- this used to be
+; hand-copied constants kept in sync across this file, stage1.asm, and
+; kernel/Makefile by hand (a real, repeatedly-hit source of bugs; see
+; docs/BUILD_LOG.md's consolidation entry). The fallbacks below only
+; matter if this file is ever assembled directly, outside the Makefile.
+%ifndef KERNEL_START_SECTOR
 KERNEL_START_SECTOR equ 4
-KERNEL_SECTORS       equ 20
-KERNEL_SEGMENT       equ 0x1000   ; 0x1000:0x0000 = physical 0x10000
-KERNEL_LOAD_ADDR     equ 0x10000
+%endif
+%ifndef KERNEL_SECTORS
+KERNEL_SECTORS equ 20
+%endif
+KERNEL_SEGMENT   equ 0x1000   ; 0x1000:0x0000 = physical 0x10000
+KERNEL_LOAD_ADDR equ 0x10000
 
 ; VBE mode 0x112 = 640x480, 32 bits/pixel, linear framebuffer. Bit 14
 ; (0x4000) of the mode number tells VBE function 4F02h to use the linear

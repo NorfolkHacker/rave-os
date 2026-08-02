@@ -8,10 +8,12 @@
  * that push one). The one thing this can't do is tell a handler which
  * vector invoked it -- the CPU doesn't pass that in, only the address of
  * whichever function the IDT entry points to runs. That's why the
- * generic exception/IRQ handlers below can catch-and-halt or catch-and-
- * EOI, but can't report which specific exception or IRQ fired; a real
- * per-vector stub (in asm) that pushes its own vector number would be
- * needed for that. Noted as a rough edge, not fixed here. */
+ * generic catch-all below can't report which of the many exceptions
+ * sharing it actually fired; a real per-vector stub (in asm) that pushes
+ * its own vector number would be needed for that. Four of the most likely
+ * exceptions to actually hit during development get named, distinct
+ * handlers instead (see panic() below) so at least those show up as more
+ * than a silent freeze. */
 
 #include "idt.h"
 #include "pic.h"
@@ -19,22 +21,56 @@
 #include "interrupts.h"
 #include "keyboard.h"
 #include "mouse.h"
+#include "graphics.h"
+#include "text.h"
 
 struct interrupt_frame;
 
-__attribute__((interrupt)) static void isr_exception_no_err(struct interrupt_frame *frame) {
-    (void)frame;
+/* Last resort for anything the kernel can't recover from: paint a red
+ * banner with the given message and halt for good. Safe to call from an
+ * interrupt handler even though it never returns -- the special part of
+ * __attribute__((interrupt)) is only the return path (iret), which a
+ * panic never takes. */
+static void panic(const char *msg) {
+    gfx_fill_rect(0, 0, gfx_width(), 30, 0xCC0000);
+    text_puts(10, 8, msg, 0xFFFFFF, 2);
+    gfx_present();
     for (;;) {
         __asm__ volatile("cli\n\thlt");
     }
 }
 
+__attribute__((interrupt)) static void isr_exception_no_err(struct interrupt_frame *frame) {
+    (void)frame;
+    panic("PANIC: UNHANDLED CPU EXCEPTION");
+}
+
 __attribute__((interrupt)) static void isr_exception_err(struct interrupt_frame *frame, unsigned int error_code) {
     (void)frame;
     (void)error_code;
-    for (;;) {
-        __asm__ volatile("cli\n\thlt");
-    }
+    panic("PANIC: UNHANDLED CPU EXCEPTION");
+}
+
+__attribute__((interrupt)) static void isr_divide_error(struct interrupt_frame *frame) {
+    (void)frame;
+    panic("PANIC: DIVIDE ERROR");
+}
+
+__attribute__((interrupt)) static void isr_invalid_opcode(struct interrupt_frame *frame) {
+    (void)frame;
+    panic("PANIC: INVALID OPCODE");
+}
+
+__attribute__((interrupt)) static void isr_general_protection(struct interrupt_frame *frame, unsigned int error_code) {
+    (void)frame;
+    (void)error_code;
+    panic("PANIC: GENERAL PROTECTION FAULT");
+}
+
+__attribute__((interrupt)) static void isr_page_fault(struct interrupt_frame *frame, unsigned int error_code) {
+    (void)frame;
+    (void)error_code;
+    panic("PANIC: PAGE FAULT");
 }
 
 __attribute__((interrupt)) static void irq_master_default(struct interrupt_frame *frame) {
@@ -107,6 +143,13 @@ void interrupts_init(void) {
         void *handler = exception_has_error_code(vector) ? (void *)isr_exception_err : (void *)isr_exception_no_err;
         idt_set_gate(vector, handler, IDT_TYPE_INTERRUPT_GATE_32);
     }
+    /* Named handlers for the exceptions most likely to actually fire
+     * during kernel development, overriding the generic catch-all above
+     * for just these four vectors. */
+    idt_set_gate(0, (void *)isr_divide_error, IDT_TYPE_INTERRUPT_GATE_32);
+    idt_set_gate(6, (void *)isr_invalid_opcode, IDT_TYPE_INTERRUPT_GATE_32);
+    idt_set_gate(13, (void *)isr_general_protection, IDT_TYPE_INTERRUPT_GATE_32);
+    idt_set_gate(14, (void *)isr_page_fault, IDT_TYPE_INTERRUPT_GATE_32);
 
     for (vector = 0; vector < 16; vector++) {
         void *handler;

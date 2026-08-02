@@ -6,7 +6,16 @@ ORG 0x7C00
 
 STAGE2_SEGMENT equ 0x0000
 STAGE2_OFFSET  equ 0x8000
-STAGE2_SECTORS equ 2           ; must match the padded size of stage2.bin (2 * 512 = 1024 bytes)
+
+; STAGE2_SECTORS is normally passed in by boot/Makefile via `nasm -D`,
+; computed from stage2.bin's actual measured size -- this used to be a
+; constant hand-copied here and kept in sync with stage2.asm/kernel/
+; Makefile by hand (a real, repeatedly-hit source of bugs; see
+; docs/BUILD_LOG.md's consolidation entry). The fallback below only
+; matters if this file is ever assembled directly, outside the Makefile.
+%ifndef STAGE2_SECTORS
+STAGE2_SECTORS equ 2
+%endif
 
 start:
     cli
