@@ -3,30 +3,45 @@ AS := nasm
 LD := ld
 OBJCOPY := objcopy
 
-CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -nostdlib -Wall -Wextra
+# -mgeneral-regs-only: GCC's __attribute__((interrupt)) handlers (isr.c)
+# must never touch FPU/MMX/SSE registers -- there's no FPU state
+# save/restore around interrupt entry/exit, so any incidental use (even
+# compiler-generated) would corrupt whatever the interrupted code was
+# doing with it. This also just suits a kernel with no FPU context
+# switching at all yet.
+CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra
 
 # Must match KERNEL_SECTORS in ../boot/stage2.asm.
-KERNEL_SECTORS := 12
+KERNEL_SECTORS := 20
 KERNEL_BYTES := $(shell echo $$(($(KERNEL_SECTORS) * 512)))
 
-C_OBJS := kernel.o vga.o keyboard.o mouse.o graphics.o font.o text.o
+C_OBJS := kernel.o vga.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o
 
 all: kernel.bin
 
 kernel_entry.o: kernel_entry.asm
 	$(AS) -f elf32 kernel_entry.asm -o kernel_entry.o
 
-kernel.o: kernel.c graphics.h text.h mouse.h
+kernel.o: kernel.c graphics.h text.h mouse.h interrupts.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 vga.o: vga.c vga.h io.h
 	$(CC) $(CFLAGS) -c vga.c -o vga.o
 
-keyboard.o: keyboard.c keyboard.h io.h
+keyboard.o: keyboard.c keyboard.h
 	$(CC) $(CFLAGS) -c keyboard.c -o keyboard.o
 
 mouse.o: mouse.c mouse.h io.h
 	$(CC) $(CFLAGS) -c mouse.c -o mouse.o
+
+idt.o: idt.c idt.h
+	$(CC) $(CFLAGS) -c idt.c -o idt.o
+
+pic.o: pic.c pic.h io.h
+	$(CC) $(CFLAGS) -c pic.c -o pic.o
+
+isr.o: isr.c idt.h pic.h io.h interrupts.h keyboard.h mouse.h
+	$(CC) $(CFLAGS) -c isr.c -o isr.o
 
 graphics.o: graphics.c graphics.h boot_info.h
 	$(CC) $(CFLAGS) -c graphics.c -o graphics.o

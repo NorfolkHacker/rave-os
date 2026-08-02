@@ -1,15 +1,10 @@
-/* PS/2 keyboard driver, polling-based (no interrupts/IDT yet -- that's a
- * later stage). Reads "scancode set 1", the default set the PS/2
- * controller emulated by QEMU (and real PC hardware, for compatibility)
- * produces: pressing a key sends its "make code"; releasing it sends the
- * same code with the top bit set (make code | 0x80), the "break code". */
+/* PS/2 keyboard driver, interrupt-driven via IRQ1 (see isr.c). Reads
+ * "scancode set 1", the default set the PS/2 controller emulated by QEMU
+ * (and real PC hardware, for compatibility) produces: pressing a key
+ * sends its "make code"; releasing it sends the same code with the top
+ * bit set (make code | 0x80), the "break code". */
 
 #include "keyboard.h"
-#include "io.h"
-
-#define KBD_DATA_PORT 0x60
-#define KBD_STATUS_PORT 0x64
-#define KBD_STATUS_OUTPUT_FULL 0x01
 
 #define SC_LSHIFT 0x2A
 #define SC_RSHIFT 0x36
@@ -36,11 +31,41 @@ static const char scancode_to_ascii_shift[] = {
 
 #define SCANCODE_TABLE_LEN (sizeof(scancode_to_ascii) / sizeof(scancode_to_ascii[0]))
 
-static unsigned char keyboard_read_scancode(void) {
-    while (!(inb(KBD_STATUS_PORT) & KBD_STATUS_OUTPUT_FULL)) {
-        /* spin until the controller says a byte is waiting in its output buffer */
+/* Ring buffer of raw scancodes, filled by keyboard_irq_push_scancode()
+ * (called from IRQ1's handler in isr.c) and drained by
+ * keyboard_read_char(). volatile because it's written from an interrupt
+ * handler that can preempt keyboard_read_char() at any point. */
+#define KBD_BUFFER_SIZE 32
+static volatile unsigned char kbd_buffer[KBD_BUFFER_SIZE];
+static volatile int kbd_head = 0;
+static volatile int kbd_tail = 0;
+
+void keyboard_irq_push_scancode(unsigned char scancode) {
+    int next = (kbd_head + 1) % KBD_BUFFER_SIZE;
+    if (next != kbd_tail) { /* drop the byte if the buffer is full */
+        kbd_buffer[kbd_head] = scancode;
+        kbd_head = next;
     }
-    return inb(KBD_DATA_PORT);
+}
+
+static int kbd_buffer_pop(unsigned char *out) {
+    if (kbd_tail == kbd_head) {
+        return 0;
+    }
+    *out = kbd_buffer[kbd_tail];
+    kbd_tail = (kbd_tail + 1) % KBD_BUFFER_SIZE;
+    return 1;
+}
+
+/* Blocks by halting the CPU (hlt) until the next interrupt, rather than
+ * busy-spinning on a port -- the actual point of moving this driver to
+ * IRQ1: the CPU is free (idle, not burning cycles) between keystrokes. */
+static unsigned char keyboard_read_scancode(void) {
+    unsigned char sc;
+    while (!kbd_buffer_pop(&sc)) {
+        __asm__ volatile("hlt");
+    }
+    return sc;
 }
 
 char keyboard_read_char(void) {
@@ -62,6 +87,6 @@ char keyboard_read_char(void) {
         if (c != 0) {
             return c;
         }
-        /* unmapped key -- keep polling for the next one */
+        /* unmapped key -- keep waiting for the next one */
     }
 }

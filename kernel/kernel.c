@@ -6,6 +6,7 @@
 #include "graphics.h"
 #include "text.h"
 #include "mouse.h"
+#include "interrupts.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
  * kernel even starts, so the vga.c text driver and 0xB8000 no longer
@@ -47,7 +48,7 @@ void kmain(void) {
     int w = gfx_width();
     int h = gfx_height();
     const char *title = "RAVE-OS";
-    const char *subtitle = "KERNEL: MOUSE INPUT ONLINE";
+    const char *subtitle = "KERNEL: INTERRUPTS ONLINE";
     int title_scale = 4;
     int subtitle_scale = 2;
     int mx, my;
@@ -63,7 +64,13 @@ void kmain(void) {
     text_puts((w - text_width(title, title_scale)) / 2, 40, title, 0xFFFFFF, title_scale);
     text_puts((w - text_width(subtitle, subtitle_scale)) / 2, 90, subtitle, 0x000000, subtitle_scale);
 
+    /* IDT/PIC set up first (masked, no sti yet), then the mouse's polling
+     * handshake runs with IRQ12 still masked so it can't race the new
+     * interrupt handler for the same bytes, then interrupts are actually
+     * enabled once both are ready. */
+    interrupts_init();
     mouse_init();
+    interrupts_enable();
 
     mx = w / 2;
     my = h - 100; /* start clear of the title text above */

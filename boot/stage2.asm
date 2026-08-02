@@ -12,7 +12,7 @@ ORG 0x8000
 ; ../kernel/Makefile. Both of these are manually-synced constants for now --
 ; a rough edge to revisit once kernel size stops being an afterthought.
 KERNEL_START_SECTOR equ 4
-KERNEL_SECTORS       equ 12
+KERNEL_SECTORS       equ 20
 KERNEL_SEGMENT       equ 0x1000   ; 0x1000:0x0000 = physical 0x10000
 KERNEL_LOAD_ADDR     equ 0x10000
 

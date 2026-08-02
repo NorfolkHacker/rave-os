@@ -1,11 +1,17 @@
-/* PS/2 mouse driver, polling-based like keyboard.c (no IDT/IRQ12 yet).
+/* PS/2 mouse driver. Device-level init (mouse_init()) still polls the
+ * controller directly -- that's a request/ACK protocol exchange, not the
+ * ongoing data stream, so it runs before interrupts_enable() unmasks
+ * IRQ12 (see kernel.c) and there's no handler yet to race against. Once
+ * streaming starts, incoming bytes arrive via IRQ12 (isr.c) instead.
  *
  * The PS/2 mouse isn't a separate chip from the keyboard's point of view --
- * both sit behind the same 8042 "keyboard controller", which multiplexes
- * a keyboard port and an auxiliary ("aux") port onto the same two I/O
- * ports (0x60 data, 0x64 status/command). Status bit 5 tells you which
- * device a waiting byte came from, which is how the two streams are told
- * apart without needing separate hardware. */
+ * both sit behind the same 8042 "keyboard controller", multiplexing a
+ * keyboard port and an auxiliary ("aux") port onto the same two I/O ports
+ * (0x60 data, 0x64 status/command). With real interrupts, IRQ1 and IRQ12
+ * are separate vectors, so the hardware itself keeps the two streams
+ * apart -- unlike the earlier polling version of this driver, which had
+ * to check status port bit 5 in software to tell a mouse byte from a
+ * stray keyboard byte. */
 
 #include "mouse.h"
 #include "io.h"
@@ -14,9 +20,8 @@
 #define PS2_STATUS_PORT 0x64
 #define PS2_CMD_PORT 0x64
 
-#define PS2_STATUS_OUTPUT_FULL 0x01   /* controller has a byte ready at 0x60 */
-#define PS2_STATUS_INPUT_FULL 0x02    /* controller hasn't consumed our last write yet */
-#define PS2_STATUS_AUX_DATA 0x20      /* the waiting byte is from the mouse, not the keyboard */
+#define PS2_STATUS_OUTPUT_FULL 0x01 /* controller has a byte ready at 0x60 */
+#define PS2_STATUS_INPUT_FULL 0x02  /* controller hasn't consumed our last write yet */
 
 static void ps2_wait_input_clear(void) {
     while (inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) {
@@ -50,38 +55,57 @@ static void mouse_command(unsigned char data) {
 void mouse_init(void) {
     unsigned char config;
 
-    ps2_write_command(0xA8);   /* enable the auxiliary (mouse) port */
+    ps2_write_command(0xA8); /* enable the auxiliary (mouse) port */
 
-    ps2_write_command(0x20);   /* "read controller configuration byte" */
+    ps2_write_command(0x20); /* "read controller configuration byte" */
     config = ps2_read_data();
-    config |= 0x02;             /* enable IRQ12 (mouse interrupt line) -- unused while polling, but part of standard init */
-    config &= (unsigned char)~0x20;   /* clear "disable mouse clock" */
-    ps2_write_command(0x60);   /* "write controller configuration byte" */
+    config |= 0x02;                  /* enable IRQ12 (mouse interrupt line) */
+    config &= (unsigned char)~0x20; /* clear "disable mouse clock" */
+    ps2_write_command(0x60);        /* "write controller configuration byte" */
     ps2_write_data(config);
 
-    mouse_command(0xF6);        /* "set defaults" */
-    ps2_read_data();             /* discard ACK (0xFA) */
+    mouse_command(0xF6); /* "set defaults" */
+    ps2_read_data();       /* discard ACK (0xFA) */
 
-    mouse_command(0xF4);        /* "enable data reporting" -- mouse starts streaming packets */
-    ps2_read_data();             /* discard ACK (0xFA) */
+    mouse_command(0xF4); /* "enable data reporting" -- mouse starts streaming packets */
+    ps2_read_data();       /* discard ACK (0xFA) */
 }
 
-/* Waits specifically for a byte tagged as coming from the aux port,
- * silently discarding any keyboard byte that shows up in the meantime --
- * without an IDT demuxing IRQ1 vs IRQ12 properly, this polling loop is
- * the only thing standing between "mouse data" and "keyboard data
- * misread as mouse data". */
-static unsigned char read_mouse_byte(void) {
-    unsigned char status;
-    for (;;) {
-        status = inb(PS2_STATUS_PORT);
-        if ((status & PS2_STATUS_OUTPUT_FULL) && (status & PS2_STATUS_AUX_DATA)) {
-            return inb(PS2_DATA_PORT);
-        }
-        if (status & PS2_STATUS_OUTPUT_FULL) {
-            inb(PS2_DATA_PORT); /* stray keyboard byte -- discard */
-        }
+/* Ring buffer of raw mouse protocol bytes, filled by mouse_irq_push_byte()
+ * (called from IRQ12's handler in isr.c) and drained by
+ * mouse_read_packet(). volatile for the same reason as keyboard.c's
+ * buffer: written from an interrupt handler that can preempt the reader
+ * at any point. */
+#define MOUSE_BUFFER_SIZE 32
+static volatile unsigned char mouse_buffer[MOUSE_BUFFER_SIZE];
+static volatile int mouse_head = 0;
+static volatile int mouse_tail = 0;
+
+void mouse_irq_push_byte(unsigned char b) {
+    int next = (mouse_head + 1) % MOUSE_BUFFER_SIZE;
+    if (next != mouse_tail) { /* drop the byte if the buffer is full */
+        mouse_buffer[mouse_head] = b;
+        mouse_head = next;
     }
+}
+
+static int mouse_buffer_pop(unsigned char *out) {
+    if (mouse_tail == mouse_head) {
+        return 0;
+    }
+    *out = mouse_buffer[mouse_tail];
+    mouse_tail = (mouse_tail + 1) % MOUSE_BUFFER_SIZE;
+    return 1;
+}
+
+/* Blocks by halting the CPU (hlt) until the next interrupt, rather than
+ * busy-spinning on a port. */
+static unsigned char read_mouse_byte(void) {
+    unsigned char b;
+    while (!mouse_buffer_pop(&b)) {
+        __asm__ volatile("hlt");
+    }
+    return b;
 }
 
 void mouse_read_packet(int *dx, int *dy, int *buttons) {

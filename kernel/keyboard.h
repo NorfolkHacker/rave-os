@@ -7,4 +7,9 @@
  * backspace ('\b'), or newline ('\n'). */
 char keyboard_read_char(void);
 
+/* Called only from the IRQ1 handler (isr.c) -- pushes a raw scancode
+ * byte into the ring buffer keyboard_read_char() drains. Not for
+ * general use. */
+void keyboard_irq_push_scancode(unsigned char scancode);
+
 #endif

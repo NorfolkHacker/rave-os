@@ -11,4 +11,9 @@ void mouse_init(void);
  * buttons is a bitmask: bit0=left, bit1=right, bit2=middle. */
 void mouse_read_packet(int *dx, int *dy, int *buttons);
 
+/* Called only from the IRQ12 handler (isr.c) -- pushes a raw mouse
+ * protocol byte into the ring buffer mouse_read_packet() drains. Not for
+ * general use. */
+void mouse_irq_push_byte(unsigned char b);
+
 #endif
