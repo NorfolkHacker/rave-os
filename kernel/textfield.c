@@ -19,6 +19,7 @@
 #define GLYPH_HEIGHT 7 /* font.c's glyphs are 7 rows tall at scale 1 */
 #define CARET_WIDTH 2
 #define TEXT_PAD_X 4
+#define TEXTFIELD_CORNER_RADIUS 4
 
 int textfield_hit_test(const struct textfield *tf, int px, int py) {
     return px >= tf->x && px < tf->x + tf->w && py >= tf->y && py < tf->y + tf->h;
@@ -46,8 +47,8 @@ void textfield_draw(const struct textfield *tf) {
     int text_x = tf->x + TEXT_PAD_X;
     int text_y = tf->y + (tf->h - GLYPH_HEIGHT * TEXTFIELD_LABEL_SCALE) / 2;
 
-    gfx_fill_rect(tf->x - 1, tf->y - 1, tf->w + 2, tf->h + 2, border);
-    gfx_fill_rect(tf->x, tf->y, tf->w, tf->h, TEXTFIELD_FILL_COLOR);
+    gfx_fill_rounded_rect(tf->x - 1, tf->y - 1, tf->w + 2, tf->h + 2, TEXTFIELD_CORNER_RADIUS, border);
+    gfx_fill_rounded_rect(tf->x, tf->y, tf->w, tf->h, TEXTFIELD_CORNER_RADIUS, TEXTFIELD_FILL_COLOR);
     text_puts(text_x, text_y, tf->text, TEXTFIELD_TEXT_COLOR, TEXTFIELD_LABEL_SCALE);
 
     if (tf->focused) {

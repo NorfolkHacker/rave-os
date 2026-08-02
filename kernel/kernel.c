@@ -11,6 +11,7 @@
 #include "window.h"
 #include "button.h"
 #include "textfield.h"
+#include "checkbox.h"
 #include "io.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
@@ -225,7 +226,8 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
 }
 
 static void draw_window_group(const struct window *panel, const struct button *btn,
-                              const struct button *exit_btn, int click_count, const struct textfield *tf) {
+                              const struct button *exit_btn, int click_count, const struct textfield *tf,
+                              const struct checkbox *cb) {
     char line[40];
     int pos;
 
@@ -244,6 +246,8 @@ static void draw_window_group(const struct window *panel, const struct button *b
 
     text_puts(btn->x, btn->y + btn->h + 36, "TYPE:", TEXT_PRIMARY_COLOR, 1);
     textfield_draw(tf);
+
+    checkbox_draw(cb);
 }
 
 /* The second window: no buttons, just enough content to prove it's a
@@ -261,7 +265,8 @@ static void draw_info_group(const struct window *info) {
  * update_and_present() below). */
 static void draw_scene(int w, int h, const struct window *panel, const struct button *btn,
                        const struct button *exit_btn, int click_count, const struct textfield *tf,
-                       const struct window *info, int panel_on_top, int mx, int my, uint32_t cursor_color) {
+                       const struct checkbox *cb, const struct window *info, int panel_on_top, int mx, int my,
+                       uint32_t cursor_color) {
     int x, y;
 
     for (y = 0; y < h; y++) {
@@ -274,9 +279,9 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
 
     if (panel_on_top) {
         draw_info_group(info);
-        draw_window_group(panel, btn, exit_btn, click_count, tf);
+        draw_window_group(panel, btn, exit_btn, click_count, tf, cb);
     } else {
-        draw_window_group(panel, btn, exit_btn, click_count, tf);
+        draw_window_group(panel, btn, exit_btn, click_count, tf, cb);
         draw_info_group(info);
     }
 
@@ -315,9 +320,10 @@ static void draw_scene(int w, int h, const struct window *panel, const struct bu
  * window correctly wins wherever the two overlap. */
 static void update_and_present(int w, int h, const struct window *panel, const struct button *btn,
                                const struct button *exit_btn, int click_count, const struct textfield *tf,
-                               const struct window *info, int panel_on_top, int old_mx, int old_my, int mx, int my,
-                               uint32_t cursor_color, int old_panel_x, int old_panel_y, int old_info_x,
-                               int old_info_y, int panel_touched, int info_touched, int z_reordered) {
+                               const struct checkbox *cb, const struct window *info, int panel_on_top, int old_mx,
+                               int old_my, int mx, int my, uint32_t cursor_color, int old_panel_x, int old_panel_y,
+                               int old_info_x, int old_info_y, int panel_touched, int info_touched,
+                               int z_reordered) {
     int dx0, dy0, dx1, dy1;
     int px0, py0, px1, py1;
     int ix0, iy0, ix1, iy1;
@@ -411,11 +417,11 @@ static void update_and_present(int w, int h, const struct window *panel, const s
             draw_info_group(info);
         }
         if (redraw_panel) {
-            draw_window_group(panel, btn, exit_btn, click_count, tf);
+            draw_window_group(panel, btn, exit_btn, click_count, tf, cb);
         }
     } else {
         if (redraw_panel) {
-            draw_window_group(panel, btn, exit_btn, click_count, tf);
+            draw_window_group(panel, btn, exit_btn, click_count, tf, cb);
         }
         if (redraw_info) {
             draw_info_group(info);
@@ -436,6 +442,7 @@ void kmain(void) {
     int panel_on_top = 1;
     uint32_t cursor_color = CURSOR_IDLE_COLOR;
     struct textfield tf;
+    struct checkbox cb;
     struct window panel;
     struct window info_panel;
     struct button btn;
@@ -492,6 +499,14 @@ void kmain(void) {
     tf.len = 0;
     tf.focused = 0;
 
+    /* Below the field, same left margin as the buttons above it. */
+    cb.x = btn.x;
+    cb.y = tf.y + tf.h + 14;
+    cb.size = 14;
+    cb.label = "FX";
+    cb.checked = 0;
+    cb.hovered = 0;
+
     mx = w / 2;
     my = h - 100; /* start clear of the panels above */
 
@@ -503,7 +518,7 @@ void kmain(void) {
     mouse_init();
     interrupts_enable();
 
-    draw_scene(w, h, &panel, &btn, &exit_btn, click_count, &tf, &info_panel, panel_on_top, mx, my, cursor_color);
+    draw_scene(w, h, &panel, &btn, &exit_btn, click_count, &tf, &cb, &info_panel, panel_on_top, mx, my, cursor_color);
     gfx_present();
 
     for (;;) {
@@ -523,6 +538,8 @@ void kmain(void) {
         int old_click_count = click_count;
         int old_tf_len = tf.len;
         int old_tf_focused = tf.focused;
+        int old_cb_checked = cb.checked;
+        int old_cb_hovered = cb.hovered;
         int old_panel_on_top = panel_on_top;
 
         /* Drain every mouse packet already queued before redrawing, rather
@@ -586,6 +603,8 @@ void kmain(void) {
                     exit_btn.y += applied_dy;
                     tf.x += applied_dx;
                     tf.y += applied_dy;
+                    cb.x += applied_dx;
+                    cb.y += applied_dy;
                 } else {
                     dragging_window = -1;
                 }
@@ -641,6 +660,11 @@ void kmain(void) {
                 if (click_edge) {
                     tf.focused = panel_is_topmost && textfield_hit_test(&tf, cx, cy);
                 }
+
+                cb.hovered = panel_is_topmost && checkbox_hit_test(&cb, cx, cy);
+                if (cb.hovered && click_edge) {
+                    cb.checked = !cb.checked;
+                }
             }
 
             prev_left_held = left_held;
@@ -659,13 +683,14 @@ void kmain(void) {
                                  (btn.hovered != old_btn_hovered) || (btn.pressed != old_btn_pressed) ||
                                  (exit_btn.hovered != old_exit_hovered) || (exit_btn.pressed != old_exit_pressed) ||
                                  (click_count != old_click_count) || (tf.len != old_tf_len) ||
-                                 (tf.focused != old_tf_focused);
+                                 (tf.focused != old_tf_focused) || (cb.checked != old_cb_checked) ||
+                                 (cb.hovered != old_cb_hovered);
             int info_touched = (info_panel.x != old_info_x) || (info_panel.y != old_info_y);
             int z_reordered = (panel_on_top != old_panel_on_top);
 
-            update_and_present(w, h, &panel, &btn, &exit_btn, click_count, &tf, &info_panel, panel_on_top, old_mx,
-                               old_my, mx, my, cursor_color, old_panel_x, old_panel_y, old_info_x, old_info_y,
-                               panel_touched, info_touched, z_reordered);
+            update_and_present(w, h, &panel, &btn, &exit_btn, click_count, &tf, &cb, &info_panel, panel_on_top,
+                               old_mx, old_my, mx, my, cursor_color, old_panel_x, old_panel_y, old_info_x,
+                               old_info_y, panel_touched, info_touched, z_reordered);
         } else {
             __asm__ volatile("hlt");
         }

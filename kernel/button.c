@@ -21,6 +21,7 @@
 #define BUTTON_LABEL_COLOR_PRESSED 0x050607 /* --bg -- dark label against the solid-green pressed fill */
 #define BUTTON_LABEL_SCALE 1
 #define GLYPH_HEIGHT 7 /* font.c's glyphs are 7 rows tall at scale 1 */
+#define BUTTON_CORNER_RADIUS 6
 
 int button_hit_test(const struct button *btn, int px, int py) {
     return px >= btn->x && px < btn->x + btn->w && py >= btn->y && py < btn->y + btn->h;
@@ -32,7 +33,7 @@ void button_draw(const struct button *btn) {
     int text_x = btn->x + (btn->w - text_width(btn->label, BUTTON_LABEL_SCALE)) / 2;
     int text_y = btn->y + (btn->h - GLYPH_HEIGHT * BUTTON_LABEL_SCALE) / 2;
 
-    gfx_fill_rect(btn->x - 1, btn->y - 1, btn->w + 2, btn->h + 2, BUTTON_BORDER_COLOR);
-    gfx_fill_rect(btn->x, btn->y, btn->w, btn->h, fill);
+    gfx_fill_rounded_rect(btn->x - 1, btn->y - 1, btn->w + 2, btn->h + 2, BUTTON_CORNER_RADIUS, BUTTON_BORDER_COLOR);
+    gfx_fill_rounded_rect(btn->x, btn->y, btn->w, btn->h, BUTTON_CORNER_RADIUS, fill);
     text_puts(text_x, text_y, btn->label, label_color, BUTTON_LABEL_SCALE);
 }

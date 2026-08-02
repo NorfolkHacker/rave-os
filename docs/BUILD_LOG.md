@@ -387,3 +387,21 @@ The panel's old "TYPE:" line accepted every keystroke unconditionally, with nowh
 Files: `kernel/textfield.c`/`.h` (new); `kernel/kernel.c` (`tf` replacing the old inline `typed`/`typed_len`, `click_edge`, focus logic in the button block); `kernel/Makefile` (new object).
 
 Next up: unchanged -- checkboxes, rounded corners, and a third window as the trigger to generalize past two named window identities. A real PIT timer would unblock caret blinking and is probably worth doing before many more widgets need real timing.
+
+## 2026-08-02 — Rounded corners, and a checkbox widget
+
+Two items off the standing "next up" list.
+
+**Rounded corners** needed a real primitive first: `gfx_fill_rounded_rect_ex()` (`graphics.c`/`.h`), a corner-masked rounded-rect fill with no floats or sqrt -- each of the four RxR corner blocks is tested pixel-by-pixel against the integer circle equation `dx*dx + dy*dy <= r*r`, and the straight edges/middle are still plain `gfx_fill_rect()` calls. A pixel outside the circle in a *rounded* corner is left untouched rather than painted over -- correct because in this damage-rect-based renderer, whatever's underneath (usually a border color laid down first) is always already there, so leaving it alone *is* the rounding. `gfx_fill_rounded_rect()` is the common case (all four corners) built on top.
+
+**The corner mask earns its keep in `window.c`**: a window's outer border rounds all four corners, but the titlebar only rounds its top two and the body only rounds its bottom two. The seam between titlebar and body is an internal line, not part of the window's silhouette -- rounding it too would carve a notch into flat abutting rects for no reason. `button.c` and `textfield.c` just use the plain all-corners helper, since both are single rects with no internal seam.
+
+**Checkbox** (`checkbox.c`/`.h`, new, sibling to `button.c`/`textfield.c`): a toggle box with a label, added to the panel below the text field. Hit-testing covers the box *and* label together (clicking the word "FX" toggles it too, not just the box itself) -- computed as the union of the box's rect and the label's text-height band, same spirit as `button_hit_test()`'s single rect but two source rects unioned. Checked state fills a smaller inset rounded square in the accent color rather than drawing a checkmark glyph -- there's no glyph for one in `font.c`, and a solid inset square reads clearly enough at this size. Wired into the event loop the same way the field's focus click was: computed in the existing `panel_is_topmost`-gated block, toggled on `click_edge`.
+
+**One thing to watch for next time a widget is added to the panel**: both this and the text field's earlier drag bug came from the same root cause -- a new widget's `x`/`y` has to be added to *three* separate places (initial layout math, the panel's drag-apply delta, and `panel_touched`'s damage condition) with nothing enforcing that a new widget actually gets all three. Caught immediately this time by re-checking the drag-apply block specifically because of the text field's bug, but worth being deliberate about next time rather than relying on remembering.
+
+**Verified headlessly**: screendump after boot confirmed rounded corners on both windows (only titlebar-top/body-bottom, seam still flush) and both buttons; the checkbox rendered dim/unchecked with its label; a monitor click on it flipped it to a bright border with the inset accent-colored mark filled in. Real-hardware pass still pending as of this entry.
+
+Files: `kernel/graphics.c`/`.h` (`gfx_fill_rounded_rect_ex()`/`gfx_fill_rounded_rect()`, corner-mask constants); `kernel/window.c`, `kernel/button.c`, `kernel/textfield.c` (rounded fills); `kernel/checkbox.c`/`.h` (new); `kernel/kernel.c` (`cb`, wired through drag/hit-test/damage same as `tf`); `kernel/Makefile` (new object).
+
+Next up: a third window is now the only item left on the long-standing backlog list, which is also the trigger to generalize past two named window identities into a real window list. Beyond that, the plan turns toward reshaping the GUI to functionally resemble Symbian OS -- scope for that not yet nailed down.

@@ -69,6 +69,57 @@ void gfx_clear(uint32_t rgb) {
     gfx_fill_rect(0, 0, gfx_width(), gfx_height(), rgb);
 }
 
+void gfx_fill_rounded_rect_ex(int x, int y, int w, int h, int r, int corners, uint32_t rgb) {
+    int i, j;
+
+    if (r > w / 2) {
+        r = w / 2;
+    }
+    if (r > h / 2) {
+        r = h / 2;
+    }
+    if (r < 0) {
+        r = 0;
+    }
+
+    /* Everything except the four RxR corner blocks -- always a plain
+     * rectangle regardless of which corners end up rounded. */
+    if (h - 2 * r > 0) {
+        gfx_fill_rect(x, y + r, w, h - 2 * r, rgb);
+    }
+    if (r > 0) {
+        gfx_fill_rect(x + r, y, w - 2 * r, r, rgb);
+        gfx_fill_rect(x + r, y + h - r, w - 2 * r, r, rgb);
+    }
+
+    for (j = 0; j < r; j++) {
+        for (i = 0; i < r; i++) {
+            /* Distance from this pixel to the corner circle's center,
+             * which sits one pixel in from the outer edge on each axis. */
+            int dx = r - 1 - i;
+            int dy = r - 1 - j;
+            int inside = (dx * dx + dy * dy) <= r * r;
+
+            if (!(corners & GFX_CORNER_TL) || inside) {
+                gfx_put_pixel(x + i, y + j, rgb);
+            }
+            if (!(corners & GFX_CORNER_TR) || inside) {
+                gfx_put_pixel(x + w - 1 - i, y + j, rgb);
+            }
+            if (!(corners & GFX_CORNER_BL) || inside) {
+                gfx_put_pixel(x + i, y + h - 1 - j, rgb);
+            }
+            if (!(corners & GFX_CORNER_BR) || inside) {
+                gfx_put_pixel(x + w - 1 - i, y + h - 1 - j, rgb);
+            }
+        }
+    }
+}
+
+void gfx_fill_rounded_rect(int x, int y, int w, int h, int r, uint32_t rgb) {
+    gfx_fill_rounded_rect_ex(x, y, w, h, r, GFX_CORNER_ALL, rgb);
+}
+
 void gfx_present(void) {
     gfx_present_rect(0, 0, gfx_width(), gfx_height());
 }
