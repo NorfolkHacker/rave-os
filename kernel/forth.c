@@ -1,7 +1,6 @@
-/* Stage B's interpreter core: a tokenizer, a fixed-size data stack, and a
- * small table of built-in primitives. See forth.h for why this file has
- * no GUI dependencies at all -- it's meant to be understood entirely on
- * its own.
+/* The interpreter core. See forth.h for why this file has no GUI
+ * dependencies at all -- it's meant to be understood entirely on its
+ * own.
  *
  * Two things matter more here than in most of this kernel's code, because
  * this is the first place user-typed input reaches something that can
@@ -13,9 +12,10 @@
  *    kernel doesn't raise something Forth can catch, it halts the whole
  *    OS. A user's typo `5 0 /` must produce a Forth-level error, not a
  *    kernel panic.
- * 2. Every stack access is bounds-checked before touching dstack[] --
- *    this kernel has no paging and no memory protection at all, so an
- *    unchecked overflow would silently corrupt whatever static data the
+ * 2. Every stack access -- data stack, return stack, dictionary, code
+ *    space -- is bounds-checked before touching its array. This kernel
+ *    has no paging and no memory protection at all, so an unchecked
+ *    overflow anywhere would silently corrupt whatever static data the
  *    linker happened to place next in .bss. */
 
 #include "forth.h"
@@ -225,10 +225,9 @@ struct forth_word {
     void (*fn)(struct forth_vm *vm);
 };
 
-/* Referenced by index (not just by name) starting in Stage C, where a
- * compiled word body needs to call a primitive by a small integer stored
- * in its instruction stream rather than re-searching by string every
- * time -- the table shape here is chosen with that reuse in mind. */
+/* Referenced by index, not just by name -- a compiled word body calls a
+ * primitive via OP_CALL_PRIMITIVE's index into this table rather than
+ * re-searching by string every time. */
 static const struct forth_word primitives[] = {
     {"+", prim_add},   {"-", prim_sub},  {"*", prim_mul},   {"/", prim_div}, {"DUP", prim_dup},
     {"DROP", prim_drop}, {"SWAP", prim_swap}, {"OVER", prim_over}, {".", prim_dot}, {"CR", prim_cr},
@@ -237,9 +236,174 @@ static const struct forth_word primitives[] = {
 void forth_init(struct forth_vm *vm) {
     vm->dsp = 0;
     vm->error[0] = 0;
+    vm->code_len = 0;
+    vm->dict_len = 0;
+    vm->rsp = 0;
+    vm->compiling = 0;
+    vm->awaiting_name = 0;
+    vm->compile_name[0] = 0;
+    vm->compile_start = 0;
     vm->out = 0;
     vm->out_pos = 0;
     vm->out_max = 0;
+}
+
+/* Runs compiled code starting at code[start_ip], including any nested
+ * OP_CALL_WORD calls -- the one loop shared by both "execute a
+ * user-defined word typed at the prompt" and "execute a word called
+ * from inside another word's body". rstack/rsp is what makes a single
+ * loop correct for both: a top-level call starts with rsp wherever it
+ * already was (0, if nothing else is mid-execution) and returns to
+ * exactly that depth when its own OP_EXIT is reached. */
+static void forth_exec(struct forth_vm *vm, int start_ip) {
+    int ip = start_ip;
+    int base_rsp = vm->rsp;
+
+    for (;;) {
+        struct forth_instr *instr = &vm->code[ip];
+
+        switch (instr->op) {
+        case OP_LITERAL:
+            forth_push(vm, instr->arg);
+            ip++;
+            break;
+        case OP_CALL_PRIMITIVE:
+            primitives[instr->arg].fn(vm);
+            ip++;
+            break;
+        case OP_CALL_WORD:
+            if (vm->rsp >= FORTH_RSTACK_SIZE) {
+                forth_set_error(vm, "RSTACK FULL");
+                return;
+            }
+            vm->rstack[vm->rsp++] = ip + 1;
+            ip = vm->dict[instr->arg].code_start;
+            break;
+        case OP_EXIT:
+            if (vm->rsp == base_rsp) {
+                return; /* back to the depth this call started at -- done */
+            }
+            ip = vm->rstack[--vm->rsp];
+            break;
+        }
+
+        if (vm->error[0]) {
+            return; /* a primitive or push/pop set an error mid-execution */
+        }
+    }
+}
+
+/* Appends one instruction to the shared code array, bounds-checked --
+ * every compile-mode token handler goes through this rather than
+ * touching vm->code[] directly. */
+static void forth_emit(struct forth_vm *vm, int op, int32_t arg) {
+    if (vm->code_len >= FORTH_CODE_SIZE) {
+        forth_set_error(vm, "CODE FULL");
+        return;
+    }
+    vm->code[vm->code_len].op = op;
+    vm->code[vm->code_len].arg = arg;
+    vm->code_len++;
+}
+
+static void handle_compile_token(struct forth_vm *vm, const char *token) {
+    int32_t num;
+    int i;
+
+    if (vm->awaiting_name) {
+        int j = 0;
+        while (token[j] && j < FORTH_WORD_NAME_MAX) {
+            vm->compile_name[j] = token[j];
+            j++;
+        }
+        vm->compile_name[j] = 0;
+        vm->awaiting_name = 0;
+        return;
+    }
+
+    if (str_eq_ci(token, ";")) {
+        forth_emit(vm, OP_EXIT, 0);
+        if (vm->error[0]) {
+            return;
+        }
+        if (vm->dict_len >= FORTH_MAX_WORDS) {
+            forth_set_error(vm, "DICT FULL");
+            return;
+        }
+        {
+            int j = 0;
+            while (vm->compile_name[j] && j < FORTH_WORD_NAME_MAX) {
+                vm->dict[vm->dict_len].name[j] = vm->compile_name[j];
+                j++;
+            }
+            vm->dict[vm->dict_len].name[j] = 0;
+        }
+        vm->dict[vm->dict_len].code_start = vm->compile_start;
+        vm->dict_len++;
+        vm->compiling = 0;
+        return;
+    }
+
+    if (parse_int(token, &num)) {
+        forth_emit(vm, OP_LITERAL, num);
+        return;
+    }
+
+    for (i = 0; i < FORTH_NUM_PRIMITIVES; i++) {
+        if (str_eq_ci(token, primitives[i].name)) {
+            forth_emit(vm, OP_CALL_PRIMITIVE, i);
+            return;
+        }
+    }
+
+    /* Only words defined strictly before this one are visible -- a
+     * word can't call itself or anything defined later, since dict_len
+     * hasn't grown to include them yet. Not a limitation being worked
+     * around; real Forth dictionaries have always worked this way. */
+    for (i = 0; i < vm->dict_len; i++) {
+        if (str_eq_ci(token, vm->dict[i].name)) {
+            forth_emit(vm, OP_CALL_WORD, i);
+            return;
+        }
+    }
+
+    forth_set_error(vm, "UNKNOWN");
+}
+
+static void handle_immediate_token(struct forth_vm *vm, const char *token) {
+    int32_t num;
+    int i;
+
+    if (str_eq_ci(token, ":")) {
+        vm->compiling = 1;
+        vm->awaiting_name = 1;
+        vm->compile_start = vm->code_len;
+        return;
+    }
+
+    if (parse_int(token, &num)) {
+        forth_push(vm, num);
+        return;
+    }
+
+    for (i = 0; i < FORTH_NUM_PRIMITIVES; i++) {
+        if (str_eq_ci(token, primitives[i].name)) {
+            primitives[i].fn(vm);
+            return;
+        }
+    }
+
+    for (i = 0; i < vm->dict_len; i++) {
+        if (str_eq_ci(token, vm->dict[i].name)) {
+            forth_exec(vm, vm->dict[i].code_start);
+            return;
+        }
+    }
+
+    /* Not "?" -- font.c has no glyph for it (falls through to a blank
+     * space), confirmed while headlessly verifying Stage B. UNKNOWN uses
+     * only characters the font actually renders. */
+    forth_set_error(vm, "UNKNOWN");
 }
 
 void forth_eval_line(struct forth_vm *vm, const char *line, char *out, int out_max) {
@@ -256,7 +420,6 @@ void forth_eval_line(struct forth_vm *vm, const char *line, char *out, int out_m
     while (line[li] && !vm->error[0]) {
         char token[FORTH_TOKEN_MAX];
         int ti = 0;
-        int32_t num;
 
         while (line[li] == ' ' || line[li] == '\t') {
             li++;
@@ -275,30 +438,25 @@ void forth_eval_line(struct forth_vm *vm, const char *line, char *out, int out_m
         }
         token[ti] = 0;
 
-        if (parse_int(token, &num)) {
-            forth_push(vm, num);
+        if (vm->compiling) {
+            handle_compile_token(vm, token);
         } else {
-            int i, found = 0;
-
-            for (i = 0; i < FORTH_NUM_PRIMITIVES; i++) {
-                if (str_eq_ci(token, primitives[i].name)) {
-                    primitives[i].fn(vm);
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found) {
-                /* Not "?" -- font.c has no glyph for it (falls through to
-                 * a blank space), confirmed while headlessly verifying
-                 * this stage. UNKNOWN uses only characters the font
-                 * actually renders. */
-                forth_set_error(vm, "UNKNOWN");
-            }
+            handle_immediate_token(vm, token);
         }
     }
 
     if (vm->error[0]) {
-        vm->dsp = 0; /* ABORT: reset the stack rather than leave it half-consumed for the next line */
+        /* ABORT: reset the data stack, return stack, and any in-progress
+         * compilation rather than leave partial state for the next
+         * line. code_len is deliberately NOT rewound -- the half-
+         * compiled instructions are simply never pointed to by a
+         * dictionary entry (that's only added at a successful ';'), so
+         * they're just inert, unreachable, append-only waste, not a
+         * correctness problem. */
+        vm->dsp = 0;
+        vm->rsp = 0;
+        vm->compiling = 0;
+        vm->awaiting_name = 0;
         forth_write(vm, "\n");
         forth_write(vm, vm->error);
     }
