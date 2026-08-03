@@ -14,6 +14,8 @@
 #include "checkbox.h"
 #include "taskbar.h"
 #include "desktop_icon.h"
+#include "console_input.h"
+#include "console_output.h"
 #include "io.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
@@ -23,19 +25,19 @@
 
 #define CURSOR_SIZE 8
 
-/* Two windows exist right now (the interactive panel and a small static
- * info window), tracked as a real array/z-order list rather than named
- * locals -- the desktop is growing minimize/close controls, a taskbar,
- * and desktop icons next, all of which need to treat "every window"
+/* Three windows exist right now (the interactive panel, a small static
+ * info window, and the Forth console -- Stage A of Stage 3's four-stage
+ * plan, "dumb echo terminal" only, no interpreter yet), tracked as a real
+ * array/z-order list rather than named locals so every window is treated
  * uniformly regardless of what's inside it. Content still differs per
- * window (the panel has widgets, info doesn't), so each window's content
- * is drawn via a kind-indexed dispatch (draw_window_by_index()) rather
- * than a generic widget framework -- there are exactly two content kinds,
- * not an open-ended number, so a small switch is simpler than a real
- * polymorphic app system. */
-#define MAX_WINDOWS 2
+ * window, so each window's content is drawn via a kind-indexed dispatch
+ * (draw_window_by_index()) rather than a generic widget framework --
+ * there are exactly three content kinds, not an open-ended number, so a
+ * small switch is simpler than a real polymorphic app system. */
+#define MAX_WINDOWS 3
 #define WIN_KIND_PANEL 0
 #define WIN_KIND_INFO 1
+#define WIN_KIND_FORTH 2
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -263,18 +265,24 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
  * added in one place to drag correctly, not remembered at every call
  * site that moves the panel. */
 static void move_window_content(int kind, struct button *btn, struct button *exit_btn, struct textfield *tf,
-                                struct checkbox *cb, int applied_dx, int applied_dy) {
-    if (kind != WIN_KIND_PANEL) {
-        return; /* WIN_KIND_INFO has no content widgets to move */
+                                struct checkbox *cb, struct console_output *co, struct console_input *ci,
+                                int applied_dx, int applied_dy) {
+    if (kind == WIN_KIND_PANEL) {
+        btn->x += applied_dx;
+        btn->y += applied_dy;
+        exit_btn->x += applied_dx;
+        exit_btn->y += applied_dy;
+        tf->x += applied_dx;
+        tf->y += applied_dy;
+        cb->x += applied_dx;
+        cb->y += applied_dy;
+    } else if (kind == WIN_KIND_FORTH) {
+        co->x += applied_dx;
+        co->y += applied_dy;
+        ci->x += applied_dx;
+        ci->y += applied_dy;
     }
-    btn->x += applied_dx;
-    btn->y += applied_dy;
-    exit_btn->x += applied_dx;
-    exit_btn->y += applied_dy;
-    tf->x += applied_dx;
-    tf->y += applied_dy;
-    cb->x += applied_dx;
-    cb->y += applied_dy;
+    /* WIN_KIND_INFO has no content widgets to move. */
 }
 
 static void draw_window_group(const struct window *panel, const struct button *btn,
@@ -309,14 +317,26 @@ static void draw_info_group(const struct window *info) {
     text_puts(info->x + 8, info->y + 12, "DRAG ME TOO", TEXT_MUTED_COLOR, 1);
 }
 
+/* The third window: the Forth console. Stage A only -- an echo terminal,
+ * no interpreter behind it yet (that's Stage B). */
+static void draw_forth_group(const struct window *forth, const struct console_output *co,
+                             const struct console_input *ci) {
+    window_draw(forth);
+    console_output_draw(co);
+    console_input_draw(ci);
+}
+
 /* The one place that dispatches "draw whatever's inside window index
  * idx" -- both draw_scene() and update_and_present() go through this
  * instead of each hand-rolling their own kind check. */
 static void draw_window_by_index(int idx, const struct window *windows, const struct button *btn,
                                  const struct button *exit_btn, int click_count, const struct textfield *tf,
-                                 const struct checkbox *cb) {
+                                 const struct checkbox *cb, const struct console_output *co,
+                                 const struct console_input *ci) {
     if (idx == WIN_KIND_PANEL) {
         draw_window_group(&windows[idx], btn, exit_btn, click_count, tf, cb);
+    } else if (idx == WIN_KIND_FORTH) {
+        draw_forth_group(&windows[idx], co, ci);
     } else {
         draw_info_group(&windows[idx]);
     }
@@ -330,7 +350,8 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
  * update_and_present() below). */
 static void draw_scene(int w, int h, const struct window *windows, const struct button *btn,
                        const struct button *exit_btn, int click_count, const struct textfield *tf,
-                       const struct checkbox *cb, const int *z_order, const struct taskbar *bar, int hovered_entry,
+                       const struct checkbox *cb, const struct console_output *co, const struct console_input *ci,
+                       const int *z_order, const struct taskbar *bar, int hovered_entry,
                        const struct desktop_icons *icons, int icon_hovered, int mx, int my, uint32_t cursor_color) {
     int x, y, i;
 
@@ -350,7 +371,7 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb);
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci);
         }
     }
 
@@ -399,7 +420,8 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
  * wherever two windows overlap. */
 static void update_and_present(int w, int h, const struct window *windows, const struct button *btn,
                                const struct button *exit_btn, int click_count, const struct textfield *tf,
-                               const struct checkbox *cb, const int *z_order, const int *old_z, int old_mx,
+                               const struct checkbox *cb, const struct console_output *co,
+                               const struct console_input *ci, const int *z_order, const int *old_z, int old_mx,
                                int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
                                const int *touched, int fx_changed, const struct taskbar *bar, int hovered_entry,
                                int old_hovered_entry, const struct desktop_icons *icons, int icon_hovered,
@@ -535,7 +557,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb);
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci);
         }
     }
 
@@ -559,6 +581,8 @@ void kmain(void) {
     uint32_t cursor_color = CURSOR_IDLE_COLOR;
     struct textfield tf;
     struct checkbox cb;
+    struct console_output co;
+    struct console_input ci;
     struct window windows[MAX_WINDOWS];
     int z_order[MAX_WINDOWS];
     struct taskbar bar;
@@ -608,9 +632,22 @@ void kmain(void) {
     windows[WIN_KIND_INFO].minimize_hovered = 0;
     windows[WIN_KIND_INFO].close_hovered = 0;
 
+    /* Sized/positioned clear of the taskbar strip below it; overlapping
+     * the other two windows' corners is fine (expected, even -- INFO
+     * already overlaps PANEL by the same design choice). */
+    windows[WIN_KIND_FORTH].x = 170;
+    windows[WIN_KIND_FORTH].y = 230;
+    windows[WIN_KIND_FORTH].w = 400;
+    windows[WIN_KIND_FORTH].h = 180;
+    windows[WIN_KIND_FORTH].title = "RAVE-OS FORTH";
+    windows[WIN_KIND_FORTH].state = WINDOW_OPEN;
+    windows[WIN_KIND_FORTH].minimize_hovered = 0;
+    windows[WIN_KIND_FORTH].close_hovered = 0;
+
     /* Panel starts frontmost, matching the old panel_on_top = 1 default. */
     z_order[0] = WIN_KIND_PANEL;
     z_order[1] = WIN_KIND_INFO;
+    z_order[2] = WIN_KIND_FORTH;
 
     bar.x = 0;
     bar.y = h - TASKBAR_HEIGHT;
@@ -646,6 +683,29 @@ void kmain(void) {
     cb.checked = 0;
     cb.hovered = 0;
 
+    /* Console input line sits along the bottom of the Forth window's
+     * body; the output pane fills the rest above it, with a small gap
+     * separating the two. */
+    {
+        int body_x = windows[WIN_KIND_FORTH].x;
+        int body_y = windows[WIN_KIND_FORTH].y;
+        int body_w = windows[WIN_KIND_FORTH].w;
+        int body_h = windows[WIN_KIND_FORTH].h;
+        int input_h = 20;
+        int input_margin = 10;
+
+        ci.h = input_h;
+        ci.y = body_y + body_h - input_margin - input_h;
+        ci.x = body_x + 8;
+        ci.w = body_w - 16;
+        ci.text[0] = 0;
+        ci.len = 0;
+        ci.focused = 0;
+
+        console_output_init(&co, body_x + 4, body_y + 6, body_w - 8, ci.y - (body_y + 6) - 8);
+        console_output_append_line(&co, "RAVE-OS FORTH: ECHO MODE");
+    }
+
     mx = w / 2;
     my = h - 100; /* start clear of the panels above */
 
@@ -657,8 +717,8 @@ void kmain(void) {
     mouse_init();
     interrupts_enable();
 
-    draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, &bar, taskbar_hovered, &icons,
-              icon_hovered, mx, my, cursor_color);
+    draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, &bar, taskbar_hovered,
+              &icons, icon_hovered, mx, my, cursor_color);
     gfx_present();
 
     for (;;) {
@@ -680,6 +740,9 @@ void kmain(void) {
         int old_cb_hovered = cb.hovered;
         int old_taskbar_hovered = taskbar_hovered;
         int old_icon_hovered = icon_hovered;
+        int old_co_generation = co.generation;
+        int old_ci_len = ci.len;
+        int old_ci_focused = ci.focused;
         int i;
 
         for (i = 0; i < MAX_WINDOWS; i++) {
@@ -746,7 +809,7 @@ void kmain(void) {
 
                     applied_dx = windows[dragging_window].x - drag_start_x;
                     applied_dy = windows[dragging_window].y - drag_start_y;
-                    move_window_content(dragging_window, &btn, &exit_btn, &tf, &cb, applied_dx, applied_dy);
+                    move_window_content(dragging_window, &btn, &exit_btn, &tf, &cb, &co, &ci, applied_dx, applied_dy);
                 } else {
                     dragging_window = -1;
                 }
@@ -824,7 +887,9 @@ void kmain(void) {
              * a point where the info window covers the panel would click
              * straight through to a button the user can't even see. */
             {
-                int panel_is_topmost = topmost_window_at(windows, z_order, cx, cy) == WIN_KIND_PANEL;
+                int topmost = topmost_window_at(windows, z_order, cx, cy);
+                int panel_is_topmost = topmost == WIN_KIND_PANEL;
+                int forth_is_topmost = topmost == WIN_KIND_FORTH;
                 int click_edge = left_held && !prev_left_held;
 
                 btn.hovered = panel_is_topmost && button_hit_test(&btn, cx, cy);
@@ -846,6 +911,7 @@ void kmain(void) {
                  * desktop text field. */
                 if (click_edge) {
                     tf.focused = panel_is_topmost && textfield_hit_test(&tf, cx, cy);
+                    ci.focused = forth_is_topmost && console_input_hit_test(&ci, cx, cy);
                 }
 
                 cb.hovered = panel_is_topmost && checkbox_hit_test(&cb, cx, cy);
@@ -861,7 +927,22 @@ void kmain(void) {
         }
 
         if (keyboard_poll_char(&c)) {
-            textfield_feed_char(&tf, c);
+            if (tf.focused) {
+                textfield_feed_char(&tf, c);
+            } else if (ci.focused) {
+                if (console_input_feed_char(&ci, c)) {
+                    /* Stage A: echo only, proving focus routing and the
+                     * scrolling pane work. Stage B replaces just this
+                     * branch's body with a real forth_eval_line() call. */
+                    char echoed[CONSOLE_INPUT_MAX + 4];
+                    int pos = 0;
+
+                    str_append(echoed, &pos, "> ");
+                    str_append(echoed, &pos, ci.text);
+                    console_output_append_line(&co, echoed);
+                    console_input_clear(&ci);
+                }
+            }
             had_event = 1;
         }
 
@@ -883,10 +964,13 @@ void kmain(void) {
                                       (exit_btn.pressed != old_exit_pressed) || (click_count != old_click_count) ||
                                       (tf.len != old_tf_len) || (tf.focused != old_tf_focused) ||
                                       (cb.checked != old_cb_checked) || (cb.hovered != old_cb_hovered);
+            touched[WIN_KIND_FORTH] = touched[WIN_KIND_FORTH] || (co.generation != old_co_generation) ||
+                                      (ci.len != old_ci_len) || (ci.focused != old_ci_focused);
 
-            update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, old_z, old_mx, old_my,
-                               mx, my, cursor_color, old_x, old_y, touched, cb.checked != old_cb_checked, &bar,
-                               taskbar_hovered, old_taskbar_hovered, &icons, icon_hovered, old_icon_hovered);
+            update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, old_z,
+                               old_mx, old_my, mx, my, cursor_color, old_x, old_y, touched,
+                               cb.checked != old_cb_checked, &bar, taskbar_hovered, old_taskbar_hovered, &icons,
+                               icon_hovered, old_icon_hovered);
         } else {
             __asm__ volatile("hlt");
         }
