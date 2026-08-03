@@ -16,6 +16,7 @@
 #include "desktop_icon.h"
 #include "console_input.h"
 #include "console_output.h"
+#include "forth.h"
 #include "io.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
@@ -583,6 +584,7 @@ void kmain(void) {
     struct checkbox cb;
     struct console_output co;
     struct console_input ci;
+    struct forth_vm vm;
     struct window windows[MAX_WINDOWS];
     int z_order[MAX_WINDOWS];
     struct taskbar bar;
@@ -703,8 +705,9 @@ void kmain(void) {
         ci.focused = 0;
 
         console_output_init(&co, body_x + 4, body_y + 6, body_w - 8, ci.y - (body_y + 6) - 8);
-        console_output_append_line(&co, "RAVE-OS FORTH: ECHO MODE");
+        console_output_append_line(&co, "RAVE-OS FORTH");
     }
+    forth_init(&vm);
 
     mx = w / 2;
     my = h - 100; /* start clear of the panels above */
@@ -931,15 +934,32 @@ void kmain(void) {
                 textfield_feed_char(&tf, c);
             } else if (ci.focused) {
                 if (console_input_feed_char(&ci, c)) {
-                    /* Stage A: echo only, proving focus routing and the
-                     * scrolling pane work. Stage B replaces just this
-                     * branch's body with a real forth_eval_line() call. */
                     char echoed[CONSOLE_INPUT_MAX + 4];
-                    int pos = 0;
+                    char out[128];
+                    int pos = 0, oi = 0, line_start = 0;
 
                     str_append(echoed, &pos, "> ");
                     str_append(echoed, &pos, ci.text);
                     console_output_append_line(&co, echoed);
+
+                    /* forth_eval_line() never touches console_output.h
+                     * itself (see forth.h) -- it writes '\n'-separated
+                     * output into out[], and splitting that into
+                     * separate console lines is kernel.c's job, done
+                     * here rather than inside forth.c. */
+                    forth_eval_line(&vm, ci.text, out, sizeof(out));
+                    while (out[oi]) {
+                        if (out[oi] == '\n') {
+                            out[oi] = 0;
+                            console_output_append_line(&co, &out[line_start]);
+                            line_start = oi + 1;
+                        }
+                        oi++;
+                    }
+                    if (line_start < oi) {
+                        console_output_append_line(&co, &out[line_start]);
+                    }
+
                     console_input_clear(&ci);
                 }
             }
