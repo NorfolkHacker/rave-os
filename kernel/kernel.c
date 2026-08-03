@@ -13,6 +13,7 @@
 #include "textfield.h"
 #include "checkbox.h"
 #include "taskbar.h"
+#include "desktop_icon.h"
 #include "io.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
@@ -330,7 +331,7 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
 static void draw_scene(int w, int h, const struct window *windows, const struct button *btn,
                        const struct button *exit_btn, int click_count, const struct textfield *tf,
                        const struct checkbox *cb, const int *z_order, const struct taskbar *bar, int hovered_entry,
-                       int mx, int my, uint32_t cursor_color) {
+                       const struct desktop_icons *icons, int icon_hovered, int mx, int my, uint32_t cursor_color) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -340,6 +341,11 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
     }
 
     draw_title_subtitle(w);
+
+    /* Icons are part of the desktop, underneath every window -- drawn
+     * before the z-order loop so a window dragged over the icon column
+     * correctly paints over it, same as a real desktop. */
+    desktop_icons_draw(icons, windows, MAX_WINDOWS, icon_hovered);
 
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
@@ -354,10 +360,12 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
 }
 
 /* Region index constants for update_and_present()'s damage array: one
- * slot per window, plus the title block, plus the taskbar. */
+ * slot per window, plus the title block, the taskbar, and the desktop
+ * icon column. */
 #define TITLE_REGION (MAX_WINDOWS)
 #define TASKBAR_REGION (MAX_WINDOWS + 1)
-#define DAMAGE_REGIONS (MAX_WINDOWS + 2)
+#define ICON_REGION (MAX_WINDOWS + 2)
+#define DAMAGE_REGIONS (MAX_WINDOWS + 3)
 
 /* Per-event redraw: repaints only a damage rectangle instead of the whole
  * screen, then presents just that rectangle (see the previous
@@ -394,7 +402,8 @@ static void update_and_present(int w, int h, const struct window *windows, const
                                const struct checkbox *cb, const int *z_order, const int *old_z, int old_mx,
                                int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
                                const int *touched, int fx_changed, const struct taskbar *bar, int hovered_entry,
-                               int old_hovered_entry) {
+                               int old_hovered_entry, const struct desktop_icons *icons, int icon_hovered,
+                               int old_icon_hovered) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
     int redraw[DAMAGE_REGIONS];
@@ -402,6 +411,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
     int i, x, y;
     int z_reordered = 0;
     int taskbar_touched;
+    int icons_touched;
 
     for (i = 0; i < MAX_WINDOWS; i++) {
         if (z_order[i] != old_z[i]) {
@@ -432,9 +442,16 @@ static void update_and_present(int w, int h, const struct window *windows, const
      * any window's touched flag in too (position included) is a harmless
      * superset, not worth a separate finer-grained check for a 24px bar. */
     taskbar_touched = z_reordered || (hovered_entry != old_hovered_entry);
+    /* The icon column's appearance only depends on window state (closed
+     * or not) and hover, not position/z-order -- but folding every
+     * window's touched flag in too is the same harmless superset taskbar
+     * touched above already accepts, not worth a finer-grained check for
+     * a couple of small icons. */
+    icons_touched = (icon_hovered != old_icon_hovered);
     for (i = 0; i < MAX_WINDOWS; i++) {
         if (touched[i]) {
             taskbar_touched = 1;
+            icons_touched = 1;
         }
     }
 
@@ -449,6 +466,11 @@ static void update_and_present(int w, int h, const struct window *windows, const
     rx1[TASKBAR_REGION] = bar->x + bar->w;
     ry1[TASKBAR_REGION] = bar->y + bar->h;
     redraw[TASKBAR_REGION] = taskbar_touched;
+    rx0[ICON_REGION] = icons->x;
+    ry0[ICON_REGION] = icons->y;
+    rx1[ICON_REGION] = icons->x + icons->w;
+    ry1[ICON_REGION] = icons->y + icons->h;
+    redraw[ICON_REGION] = icons_touched;
 
     for (i = 0; i < MAX_WINDOWS; i++) {
         if (touched[i]) {
@@ -467,6 +489,9 @@ static void update_and_present(int w, int h, const struct window *windows, const
     if (redraw[TASKBAR_REGION]) {
         rect_union(&dx0, &dy0, &dx1, &dy1, rx0[TASKBAR_REGION], ry0[TASKBAR_REGION], rx1[TASKBAR_REGION],
                   ry1[TASKBAR_REGION]);
+    }
+    if (redraw[ICON_REGION]) {
+        rect_union(&dx0, &dy0, &dx1, &dy1, rx0[ICON_REGION], ry0[ICON_REGION], rx1[ICON_REGION], ry1[ICON_REGION]);
     }
 
     do {
@@ -503,6 +528,10 @@ static void update_and_present(int w, int h, const struct window *windows, const
         draw_title_subtitle(w);
     }
 
+    if (redraw[ICON_REGION]) {
+        desktop_icons_draw(icons, windows, MAX_WINDOWS, icon_hovered);
+    }
+
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
@@ -526,12 +555,14 @@ void kmain(void) {
     int prev_left_held = 0;
     int dragging_window = -1;
     int taskbar_hovered = -1;
+    int icon_hovered = -1;
     uint32_t cursor_color = CURSOR_IDLE_COLOR;
     struct textfield tf;
     struct checkbox cb;
     struct window windows[MAX_WINDOWS];
     int z_order[MAX_WINDOWS];
     struct taskbar bar;
+    struct desktop_icons icons;
     struct button btn;
     struct button exit_btn;
 
@@ -586,6 +617,12 @@ void kmain(void) {
     bar.w = w;
     bar.h = TASKBAR_HEIGHT;
 
+    /* Column sits entirely left of both windows' default x (140), clear
+     * of the centered title/subtitle text above it -- so on first boot
+     * nothing overlaps it at all; a window dragged over it later is
+     * expected to occlude it, same as any real desktop. */
+    desktop_icons_init(&icons, DESKTOP_ICON_MARGIN, SUBTITLE_Y + GLYPH_HEIGHT * SUBTITLE_SCALE + 16, MAX_WINDOWS);
+
     /* Sits to the right of the "TYPE:" label drawn by draw_window_group(),
      * on the same baseline (see textfield_draw()'s vertical-centering math
      * for why tf.y is offset by -3), extending to the same right margin
@@ -620,8 +657,8 @@ void kmain(void) {
     mouse_init();
     interrupts_enable();
 
-    draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, &bar, taskbar_hovered, mx, my,
-              cursor_color);
+    draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, &bar, taskbar_hovered, &icons,
+              icon_hovered, mx, my, cursor_color);
     gfx_present();
 
     for (;;) {
@@ -642,6 +679,7 @@ void kmain(void) {
         int old_cb_checked = cb.checked;
         int old_cb_hovered = cb.hovered;
         int old_taskbar_hovered = taskbar_hovered;
+        int old_icon_hovered = icon_hovered;
         int i;
 
         for (i = 0; i < MAX_WINDOWS; i++) {
@@ -730,6 +768,17 @@ void kmain(void) {
                     windows[entry].state = WINDOW_OPEN;
                     raise_window(z_order, entry);
                 }
+            } else if (left_held && !prev_left_held && desktop_icon_hit(&icons, windows, MAX_WINDOWS, cx, cy) >= 0) {
+                /* Same reasoning as the taskbar branch above -- icons
+                 * aren't part of the window stack, so they're checked
+                 * before generic window hit-testing. A closed window's
+                 * only icon click behavior is reopening it: there's no
+                 * "already active" case to toggle, unlike the taskbar,
+                 * since a closed window is never the active one. */
+                int icon = desktop_icon_hit(&icons, windows, MAX_WINDOWS, cx, cy);
+
+                windows[icon].state = WINDOW_OPEN;
+                raise_window(z_order, icon);
             } else if (left_held && !prev_left_held) {
                 int target = topmost_window_at(windows, z_order, cx, cy);
 
@@ -768,6 +817,7 @@ void kmain(void) {
             }
 
             taskbar_hovered = taskbar_hit_entry(&bar, windows, MAX_WINDOWS, cx, cy);
+            icon_hovered = desktop_icon_hit(&icons, windows, MAX_WINDOWS, cx, cy);
 
             /* The panel's buttons only respond if the panel is actually
              * the topmost thing under the cursor -- otherwise a click on
@@ -836,7 +886,7 @@ void kmain(void) {
 
             update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, z_order, old_z, old_mx, old_my,
                                mx, my, cursor_color, old_x, old_y, touched, cb.checked != old_cb_checked, &bar,
-                               taskbar_hovered, old_taskbar_hovered);
+                               taskbar_hovered, old_taskbar_hovered, &icons, icon_hovered, old_icon_hovered);
         } else {
             __asm__ volatile("hlt");
         }
