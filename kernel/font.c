@@ -47,6 +47,7 @@ static const char *const G_9[7] = {".XXX.","X...X","X...X",".XXXX","....X","...X
 
 static const char *const G_SPACE[7] = {".....",".....",".....",".....",".....",".....","....."};
 static const char *const G_COLON[7] = {".....","..X..",".....",".....","..X..",".....","....."};
+static const char *const G_SEMI[7]  = {".....","..X..",".....",".....",".....","..X..",".X..."};
 static const char *const G_DASH[7]  = {".....",".....",".....","XXXXX",".....",".....","....."};
 static const char *const G_BANG[7]  = {"..X..","..X..","..X..","..X..","..X..",".....","..X.."};
 static const char *const G_DOT[7]   = {".....",".....",".....",".....",".....",".X...",".X..."};
@@ -54,6 +55,11 @@ static const char *const G_COMMA[7] = {".....",".....",".....",".....",".....","
 static const char *const G_APOS[7]  = {".X...",".X...",".....",".....",".....",".....","....."};
 static const char *const G_GT[7]    = {"X....",".X...","..X..","...X.","..X..",".X...","X...."};
 static const char *const G_PCT[7]   = {"X...X","...X.","..X..",".X...","X...X","X...X","....."};
+static const char *const G_LT[7]    = {"....X","...X.","..X..",".X...","..X..","...X.","....X"};
+static const char *const G_EQ[7]    = {".....",".....","XXXXX",".....","XXXXX",".....","....."};
+static const char *const G_PLUS[7]  = {".....","..X..","..X..","XXXXX","..X..","..X..","....."};
+static const char *const G_STAR[7]  = {".....","..X..","X.X.X",".XXX.","X.X.X","..X..","....."};
+static const char *const G_SLASH[7] = {"....X","...X.","...X.","..X..",".X...",".X...","X...."};
 
 static char raveos_toupper(char c) {
     if (c >= 'a' && c <= 'z') {
@@ -79,6 +85,7 @@ const char *const *font_glyph(char c) {
         case '6': return G_6; case '7': return G_7; case '8': return G_8;
         case '9': return G_9;
         case ':': return G_COLON;
+        case ';': return G_SEMI;
         case '-': return G_DASH;
         case '!': return G_BANG;
         case '.': return G_DOT;
@@ -86,6 +93,11 @@ const char *const *font_glyph(char c) {
         case '\'': return G_APOS;
         case '>': return G_GT;
         case '%': return G_PCT;
+        case '<': return G_LT;
+        case '=': return G_EQ;
+        case '+': return G_PLUS;
+        case '*': return G_STAR;
+        case '/': return G_SLASH;
         case ' ': default: return G_SPACE;
     }
 }

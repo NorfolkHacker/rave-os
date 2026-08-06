@@ -28,7 +28,33 @@
 #define FORTH_WORD_NAME_MAX 16
 #define FORTH_RSTACK_SIZE 32
 
-enum forth_op { OP_LITERAL, OP_CALL_PRIMITIVE, OP_CALL_WORD, OP_EXIT };
+/* Stage D: control flow (IF/ELSE/THEN, BEGIN/UNTIL), compiled as two
+ * more instruction kinds -- an unconditional jump and a
+ * pop-and-jump-if-zero -- into the same code[] array Stage C's word
+ * bodies already use. No new opcode is needed for BEGIN/UNTIL beyond
+ * what IF already needed; a loop-back branch is just a
+ * branch-if-zero whose target happens to be earlier in code[] than
+ * where it's emitted. */
+enum forth_op { OP_LITERAL, OP_CALL_PRIMITIVE, OP_CALL_WORD, OP_EXIT, OP_BRANCH, OP_BRANCH_IF_ZERO };
+
+/* Compile-time-only bookkeeping for control-flow words: a small stack
+ * of not-yet-resolved branches (IF/ELSE, kind CTRL_KIND_IF -- code[]
+ * index of an instruction whose arg still needs patching once THEN/ELSE
+ * is seen) and loop-back targets (BEGIN, kind CTRL_KIND_BEGIN -- a
+ * code[] position used directly, no patching needed since the branch
+ * that jumps there doesn't exist until UNTIL). Tagged with `kind`
+ * rather than left as bare ints so a mismatched pair (e.g. a stray
+ * "BEGIN ... THEN") is caught as an error at compile time instead of
+ * silently branching to the wrong place -- the same reasoning behind
+ * every other bounds/consistency check in this file. */
+#define FORTH_CTRL_STACK_SIZE 8
+#define CTRL_KIND_IF 0
+#define CTRL_KIND_BEGIN 1
+
+struct forth_ctrl_entry {
+    int kind;
+    int value;
+};
 
 struct forth_instr {
     int op;
@@ -61,6 +87,12 @@ struct forth_vm {
     int awaiting_name; /* 1 for exactly the one token right after ':' */
     char compile_name[FORTH_WORD_NAME_MAX + 1];
     int compile_start; /* code_len at the moment ':' was seen */
+
+    /* Also compile-mode-only state, same persist-across-calls reasoning
+     * as compiling/awaiting_name above -- an open IF or BEGIN can
+     * legally still be pending when a line ends. */
+    struct forth_ctrl_entry ctrl_stack[FORTH_CTRL_STACK_SIZE];
+    int ctrl_sp;
 
     /* Transient per-eval output cursor, not persistent Forth state --
      * primitives like '.' and CR need somewhere to write, and every

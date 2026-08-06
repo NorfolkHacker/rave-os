@@ -205,6 +205,34 @@ static void prim_over(struct forth_vm *vm) {
     forth_push(vm, a);
 }
 
+/* Real Forth's boolean convention: -1 (all bits set) is true, 0 is
+ * false -- not just an arbitrary choice, this is what IF/BEGIN's
+ * OP_BRANCH_IF_ZERO actually tests against (zero is the only false
+ * value; anything else, including -1, reads as true). */
+static void prim_eq(struct forth_vm *vm) {
+    int32_t a, b;
+    if (!forth_pop(vm, &b) || !forth_pop(vm, &a)) {
+        return;
+    }
+    forth_push(vm, a == b ? -1 : 0);
+}
+
+static void prim_lt(struct forth_vm *vm) {
+    int32_t a, b;
+    if (!forth_pop(vm, &b) || !forth_pop(vm, &a)) {
+        return;
+    }
+    forth_push(vm, a < b ? -1 : 0);
+}
+
+static void prim_gt(struct forth_vm *vm) {
+    int32_t a, b;
+    if (!forth_pop(vm, &b) || !forth_pop(vm, &a)) {
+        return;
+    }
+    forth_push(vm, a > b ? -1 : 0);
+}
+
 static void prim_dot(struct forth_vm *vm) {
     int32_t a;
     char buf[16];
@@ -230,7 +258,8 @@ struct forth_word {
  * re-searching by string every time. */
 static const struct forth_word primitives[] = {
     {"+", prim_add},   {"-", prim_sub},  {"*", prim_mul},   {"/", prim_div}, {"DUP", prim_dup},
-    {"DROP", prim_drop}, {"SWAP", prim_swap}, {"OVER", prim_over}, {".", prim_dot}, {"CR", prim_cr},
+    {"DROP", prim_drop}, {"SWAP", prim_swap}, {"OVER", prim_over}, {"=", prim_eq}, {"<", prim_lt},
+    {">", prim_gt}, {".", prim_dot}, {"CR", prim_cr},
 };
 
 void forth_init(struct forth_vm *vm) {
@@ -243,6 +272,7 @@ void forth_init(struct forth_vm *vm) {
     vm->awaiting_name = 0;
     vm->compile_name[0] = 0;
     vm->compile_start = 0;
+    vm->ctrl_sp = 0;
     vm->out = 0;
     vm->out_pos = 0;
     vm->out_max = 0;
@@ -285,6 +315,17 @@ static void forth_exec(struct forth_vm *vm, int start_ip) {
             }
             ip = vm->rstack[--vm->rsp];
             break;
+        case OP_BRANCH:
+            ip = instr->arg;
+            break;
+        case OP_BRANCH_IF_ZERO: {
+            int32_t cond;
+            if (!forth_pop(vm, &cond)) {
+                return;
+            }
+            ip = (cond == 0) ? (int)instr->arg : ip + 1;
+            break;
+        }
         }
 
         if (vm->error[0]) {
@@ -306,6 +347,33 @@ static void forth_emit(struct forth_vm *vm, int op, int32_t arg) {
     vm->code_len++;
 }
 
+static void ctrl_push(struct forth_vm *vm, int kind, int value) {
+    if (vm->ctrl_sp >= FORTH_CTRL_STACK_SIZE) {
+        forth_set_error(vm, "CTRL STACK FULL");
+        return;
+    }
+    vm->ctrl_stack[vm->ctrl_sp].kind = kind;
+    vm->ctrl_stack[vm->ctrl_sp].value = value;
+    vm->ctrl_sp++;
+}
+
+/* Checks both "something is open" and "it's the kind this caller
+ * expects" in one call -- IF/ELSE/THEN only ever want a CTRL_KIND_IF
+ * entry, BEGIN/UNTIL only ever want CTRL_KIND_BEGIN. A caller doesn't
+ * need to distinguish "nothing was open" from "the wrong thing was
+ * open" -- either way the source has a stray or mismatched control
+ * word, so one error message covers both. */
+static int ctrl_pop(struct forth_vm *vm, int expected_kind, struct forth_ctrl_entry *entry,
+                    const char *mismatch_msg) {
+    if (vm->ctrl_sp <= 0 || vm->ctrl_stack[vm->ctrl_sp - 1].kind != expected_kind) {
+        forth_set_error(vm, mismatch_msg);
+        return 0;
+    }
+    vm->ctrl_sp--;
+    *entry = vm->ctrl_stack[vm->ctrl_sp];
+    return 1;
+}
+
 static void handle_compile_token(struct forth_vm *vm, const char *token) {
     int32_t num;
     int i;
@@ -321,9 +389,65 @@ static void handle_compile_token(struct forth_vm *vm, const char *token) {
         return;
     }
 
+    if (str_eq_ci(token, "IF")) {
+        int idx = vm->code_len;
+        forth_emit(vm, OP_BRANCH_IF_ZERO, -1); /* patched by the matching ELSE or THEN */
+        if (vm->error[0]) {
+            return;
+        }
+        ctrl_push(vm, CTRL_KIND_IF, idx);
+        return;
+    }
+
+    if (str_eq_ci(token, "ELSE")) {
+        struct forth_ctrl_entry e;
+        int idx;
+        if (!ctrl_pop(vm, CTRL_KIND_IF, &e, "MISMATCHED ELSE")) {
+            return;
+        }
+        vm->code[e.value].arg = vm->code_len + 1; /* IF's branch: skip past the unconditional one below */
+        idx = vm->code_len;
+        forth_emit(vm, OP_BRANCH, -1); /* skips the ELSE body when IF's condition was true; patched by THEN */
+        if (vm->error[0]) {
+            return;
+        }
+        ctrl_push(vm, CTRL_KIND_IF, idx);
+        return;
+    }
+
+    if (str_eq_ci(token, "THEN")) {
+        struct forth_ctrl_entry e;
+        if (!ctrl_pop(vm, CTRL_KIND_IF, &e, "MISMATCHED THEN")) {
+            return;
+        }
+        vm->code[e.value].arg = vm->code_len; /* "here" */
+        return;
+    }
+
+    if (str_eq_ci(token, "BEGIN")) {
+        ctrl_push(vm, CTRL_KIND_BEGIN, vm->code_len);
+        return;
+    }
+
+    if (str_eq_ci(token, "UNTIL")) {
+        struct forth_ctrl_entry e;
+        if (!ctrl_pop(vm, CTRL_KIND_BEGIN, &e, "MISMATCHED UNTIL")) {
+            return;
+        }
+        forth_emit(vm, OP_BRANCH_IF_ZERO, e.value); /* loop back if false; falls through if true */
+        return;
+    }
+
     if (str_eq_ci(token, ";")) {
         forth_emit(vm, OP_EXIT, 0);
         if (vm->error[0]) {
+            return;
+        }
+        if (vm->ctrl_sp != 0) {
+            /* An IF never closed with THEN, or a BEGIN never closed with
+             * UNTIL -- registering this word anyway would mean a body
+             * that branches to an unpatched (still -1) target. */
+            forth_set_error(vm, "UNBALANCED CONTROL");
             return;
         }
         if (vm->dict_len >= FORTH_MAX_WORDS) {
@@ -457,6 +581,7 @@ void forth_eval_line(struct forth_vm *vm, const char *line, char *out, int out_m
         vm->rsp = 0;
         vm->compiling = 0;
         vm->awaiting_name = 0;
+        vm->ctrl_sp = 0;
         forth_write(vm, "\n");
         forth_write(vm, vm->error);
     }
