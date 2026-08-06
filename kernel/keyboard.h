@@ -1,6 +1,16 @@
 #ifndef RAVEOS_KEYBOARD_H
 #define RAVEOS_KEYBOARD_H
 
+/* Pseudo-characters keyboard_poll_char()/keyboard_read_char() return for
+ * the 4 arrow keys, decoded from PS/2 "extended" scancodes (an 0xE0
+ * prefix byte + a code byte -- see keyboard.c). Values are unused C0
+ * control codes (DC1-DC4), chosen because nothing in this kernel already
+ * treats them specially (unlike '\b'=8, '\n'=10). */
+#define KEY_UP    0x11
+#define KEY_DOWN  0x12
+#define KEY_LEFT  0x13
+#define KEY_RIGHT 0x14
+
 /* Non-blocking: if a translated character is available right now, writes
  * it to *out and returns 1; otherwise returns 0 immediately. Drains and
  * discards scancodes for non-printable keys (ctrl, alt, function keys,

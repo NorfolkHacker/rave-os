@@ -14,6 +14,7 @@ struct console_input {
     int x, y, w, h;
     char text[CONSOLE_INPUT_MAX + 1];
     int len;
+    int cursor; /* insertion point, 0..len -- where the next typed char lands */
     int focused; /* only a focused field consumes keystrokes */
 };
 
@@ -26,8 +27,24 @@ int console_input_hit_test(const struct console_input *ci, int px, int py);
  * buffer on Enter: the caller needs ci->text to still hold the submitted
  * line (to echo it, then hand it to the interpreter) after this returns
  * 1. Call console_input_clear() explicitly once the caller is done
- * reading it, so "read" and "clear" can never be silently conflated. */
+ * reading it, so "read" and "clear" can never be silently conflated.
+ *
+ * Printable characters insert at ci->cursor (not always the end) and
+ * backspace deletes the character before it -- when cursor == len (the
+ * common case if the arrow keys are never touched) this behaves exactly
+ * like plain append/pop-from-end. Callers are expected to intercept
+ * KEY_UP/KEY_DOWN/KEY_LEFT/KEY_RIGHT (see keyboard.h) before calling
+ * this -- it only understands text and '\b'/'\n'. */
 int console_input_feed_char(struct console_input *ci, char c);
+
+/* Moves the cursor by delta, clamped to [0, len]. For KEY_LEFT (-1) and
+ * KEY_RIGHT (+1). */
+void console_input_move_cursor(struct console_input *ci, int delta);
+
+/* Overwrites the field's text (bounds-checked to CONSOLE_INPUT_MAX,
+ * truncating if needed), moving the cursor to the end -- for history
+ * recall, where a whole recalled line replaces whatever's typed now. */
+void console_input_set_text(struct console_input *ci, const char *text);
 
 void console_input_clear(struct console_input *ci);
 

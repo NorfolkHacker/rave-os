@@ -15,6 +15,7 @@
 #include "taskbar.h"
 #include "desktop_icon.h"
 #include "console_input.h"
+#include "console_history.h"
 #include "console_output.h"
 #include "forth.h"
 #include "io.h"
@@ -122,6 +123,20 @@ static void str_append(char *dst, int *pos, const char *src) {
         dst[(*pos)++] = *src++;
     }
     dst[*pos] = 0;
+}
+
+/* No libc strcmp in this freestanding kernel -- used by the Forth
+ * console's damage tracking to catch a same-length history recall
+ * changing ci.text's content (ci.len alone wouldn't notice). */
+static int str_eq(const char *a, const char *b) {
+    while (*a && *b) {
+        if (*a != *b) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == *b;
 }
 
 #define GLYPH_HEIGHT 7 /* font.c's glyphs are 7 rows tall at scale 1 */
@@ -584,6 +599,7 @@ void kmain(void) {
     struct checkbox cb;
     struct console_output co;
     struct console_input ci;
+    struct console_history hist;
     struct forth_vm vm;
     struct window windows[MAX_WINDOWS];
     int z_order[MAX_WINDOWS];
@@ -702,7 +718,9 @@ void kmain(void) {
         ci.w = body_w - 16;
         ci.text[0] = 0;
         ci.len = 0;
+        ci.cursor = 0;
         ci.focused = 0;
+        console_history_init(&hist);
 
         console_output_init(&co, body_x + 4, body_y + 6, body_w - 8, ci.y - (body_y + 6) - 8);
         console_output_append_line(&co, "RAVE-OS FORTH");
@@ -745,8 +763,15 @@ void kmain(void) {
         int old_icon_hovered = icon_hovered;
         int old_co_generation = co.generation;
         int old_ci_len = ci.len;
+        int old_ci_cursor = ci.cursor;
         int old_ci_focused = ci.focused;
+        char old_ci_text[CONSOLE_INPUT_MAX + 1];
         int i;
+
+        for (i = 0; ci.text[i]; i++) {
+            old_ci_text[i] = ci.text[i];
+        }
+        old_ci_text[i] = 0;
 
         for (i = 0; i < MAX_WINDOWS; i++) {
             old_x[i] = windows[i].x;
@@ -932,7 +957,26 @@ void kmain(void) {
         if (keyboard_poll_char(&c)) {
             if (tf.focused) {
                 textfield_feed_char(&tf, c);
+            } else if (ci.focused && c == KEY_UP) {
+                char recalled[CONSOLE_INPUT_MAX + 1];
+                if (console_history_prev(&hist, recalled)) {
+                    console_input_set_text(&ci, recalled);
+                }
+            } else if (ci.focused && c == KEY_DOWN) {
+                char recalled[CONSOLE_INPUT_MAX + 1];
+                if (console_history_next(&hist, recalled)) {
+                    console_input_set_text(&ci, recalled);
+                }
+            } else if (ci.focused && c == KEY_LEFT) {
+                console_input_move_cursor(&ci, -1);
+            } else if (ci.focused && c == KEY_RIGHT) {
+                console_input_move_cursor(&ci, 1);
             } else if (ci.focused) {
+                /* A real edit (typing or backspace, not just moving the
+                 * cursor) -- the next KEY_UP should start browsing over
+                 * from the most recent entry again, not continue from
+                 * wherever a previous recall left off. */
+                console_history_reset_browse(&hist);
                 if (console_input_feed_char(&ci, c)) {
                     char echoed[CONSOLE_INPUT_MAX + 4];
                     char out[128];
@@ -960,6 +1004,7 @@ void kmain(void) {
                         console_output_append_line(&co, &out[line_start]);
                     }
 
+                    console_history_push(&hist, ci.text);
                     console_input_clear(&ci);
                 }
             }
@@ -985,7 +1030,8 @@ void kmain(void) {
                                       (tf.len != old_tf_len) || (tf.focused != old_tf_focused) ||
                                       (cb.checked != old_cb_checked) || (cb.hovered != old_cb_hovered);
             touched[WIN_KIND_FORTH] = touched[WIN_KIND_FORTH] || (co.generation != old_co_generation) ||
-                                      (ci.len != old_ci_len) || (ci.focused != old_ci_focused);
+                                      (ci.len != old_ci_len) || (ci.cursor != old_ci_cursor) ||
+                                      (ci.focused != old_ci_focused) || !str_eq(ci.text, old_ci_text);
 
             update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, old_z,
                                old_mx, old_my, mx, my, cursor_color, old_x, old_y, touched,

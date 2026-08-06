@@ -12,6 +12,16 @@
 
 static int shift_held = 0;
 
+/* Set by an 0xE0 prefix byte, consumed by the very next byte -- PS/2
+ * "extended" scancodes (arrow keys, among others) are always a 2-byte
+ * sequence: 0xE0 followed by the actual make/break code. */
+static int pending_extended = 0;
+
+#define SC_EXT_UP    0x48
+#define SC_EXT_DOWN  0x50
+#define SC_EXT_LEFT  0x4B
+#define SC_EXT_RIGHT 0x4D
+
 /* Index = make code. 0 means "no printable character" (ctrl, alt, esc,
  * capslock, function keys, etc. -- not handled yet). Covers the main
  * alphanumeric block only; plenty for a first driver. */
@@ -63,6 +73,30 @@ int keyboard_poll_char(char *out) {
     while (kbd_buffer_pop(&sc)) {
         int released = sc & SC_RELEASE_BIT;
         unsigned char code = sc & (unsigned char)~SC_RELEASE_BIT;
+
+        if (sc == 0xE0) {
+            pending_extended = 1;
+            continue;
+        }
+
+        if (pending_extended) {
+            pending_extended = 0;
+            if (!released) {
+                char key = 0;
+                switch (code) {
+                    case SC_EXT_UP:    key = KEY_UP;    break;
+                    case SC_EXT_DOWN:  key = KEY_DOWN;  break;
+                    case SC_EXT_LEFT:  key = KEY_LEFT;  break;
+                    case SC_EXT_RIGHT: key = KEY_RIGHT; break;
+                    default: break; /* unhandled extended key -- drop it */
+                }
+                if (key != 0) {
+                    *out = key;
+                    return 1;
+                }
+            }
+            continue; /* release of an extended key, or an unhandled one */
+        }
 
         if (code == SC_LSHIFT || code == SC_RSHIFT) {
             shift_held = !released;
