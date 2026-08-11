@@ -143,10 +143,12 @@ int ata_write_sector(unsigned char drive, unsigned int lba, const void *buf512) 
     return 0;
 }
 
-/* Arbitrary scratch sector, far from anything else on this dedicated
- * fs.img -- the whole disk is scratch space at this stage, so any LBA
- * would do; this one's picked purely to be a memorable, non-zero value. */
-#define ATA_SELFTEST_LBA 100
+/* The very last sector of fs.img (2048 sectors total -- see kernel/fs.c,
+ * which must agree on this size) -- permanently reserved so this
+ * diagnostic can never collide with a real file once the filesystem
+ * (kernel/fs.c) owns the rest of the disk. Used to be LBA 100, back when
+ * the whole disk was still scratch space with nothing else on it. */
+#define ATA_SELFTEST_LBA 2047
 
 const char *ata_selftest(void) {
     unsigned char write_buf[ATA_SECTOR_SIZE];

@@ -20,6 +20,7 @@
 #include "forth.h"
 #include "io.h"
 #include "ata.h"
+#include "fs.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
  * kernel even starts, so raw VGA text-mode writes at 0xB8000 don't apply
@@ -329,10 +330,11 @@ static void draw_window_group(const struct window *panel, const struct button *b
 
 /* The second window: no buttons, just enough content to prove it's a
  * real window (and a real drag target) rather than a decorative rect. */
-static void draw_info_group(const struct window *info, const char *ata_status) {
+static void draw_info_group(const struct window *info, const char *ata_status, const char *fs_status) {
     window_draw(info);
     text_puts(info->x + 8, info->y + 12, "DRAG ME TOO", TEXT_MUTED_COLOR, 1);
     text_puts(info->x + 8, info->y + 32, ata_status, TEXT_MUTED_COLOR, 1);
+    text_puts(info->x + 8, info->y + 52, fs_status, TEXT_MUTED_COLOR, 1);
 }
 
 /* The third window: the Forth console. Stage A only -- an echo terminal,
@@ -350,13 +352,13 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
 static void draw_window_by_index(int idx, const struct window *windows, const struct button *btn,
                                  const struct button *exit_btn, int click_count, const struct textfield *tf,
                                  const struct checkbox *cb, const struct console_output *co,
-                                 const struct console_input *ci, const char *ata_status) {
+                                 const struct console_input *ci, const char *ata_status, const char *fs_status) {
     if (idx == WIN_KIND_PANEL) {
         draw_window_group(&windows[idx], btn, exit_btn, click_count, tf, cb);
     } else if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
     } else {
-        draw_info_group(&windows[idx], ata_status);
+        draw_info_group(&windows[idx], ata_status, fs_status);
     }
 }
 
@@ -371,7 +373,7 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
                        const struct checkbox *cb, const struct console_output *co, const struct console_input *ci,
                        const int *z_order, const struct taskbar *bar, int hovered_entry,
                        const struct desktop_icons *icons, int icon_hovered, int mx, int my, uint32_t cursor_color,
-                       const char *ata_status) {
+                       const char *ata_status, const char *fs_status) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -390,7 +392,7 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status);
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status);
         }
     }
 
@@ -444,7 +446,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
                                int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
                                const int *touched, int fx_changed, const struct taskbar *bar, int hovered_entry,
                                int old_hovered_entry, const struct desktop_icons *icons, int icon_hovered,
-                               int old_icon_hovered, const char *ata_status) {
+                               int old_icon_hovered, const char *ata_status, const char *fs_status) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
     int redraw[DAMAGE_REGIONS];
@@ -576,7 +578,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status);
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status);
         }
     }
 
@@ -611,6 +613,7 @@ void kmain(void) {
     struct button btn;
     struct button exit_btn;
     const char *ata_status;
+    const char *fs_status;
 
     gfx_init();
     w = gfx_width();
@@ -746,9 +749,10 @@ void kmain(void) {
      * safe to run any time after interrupts_enable(), not tied to the
      * masked-PIC ordering the line above exists for. */
     ata_status = ata_selftest();
+    fs_status = fs_selftest();
 
     draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, &bar, taskbar_hovered,
-              &icons, icon_hovered, mx, my, cursor_color, ata_status);
+              &icons, icon_hovered, mx, my, cursor_color, ata_status, fs_status);
     gfx_present();
 
     for (;;) {
@@ -1045,7 +1049,7 @@ void kmain(void) {
             update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, old_z,
                                old_mx, old_my, mx, my, cursor_color, old_x, old_y, touched,
                                cb.checked != old_cb_checked, &bar, taskbar_hovered, old_taskbar_hovered, &icons,
-                               icon_hovered, old_icon_hovered, ata_status);
+                               icon_hovered, old_icon_hovered, ata_status, fs_status);
         } else {
             __asm__ volatile("hlt");
         }
