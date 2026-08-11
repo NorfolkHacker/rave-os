@@ -30,9 +30,10 @@
 #define CURSOR_SIZE 8
 
 /* Four windows exist right now (the interactive panel, a small static
- * info window, the Forth console, and a read-only file manager listing
- * the root directory -- Stage A of the file manager: no navigation into
- * subdirectories yet), tracked as a real array/z-order list rather than
+ * info window, the Forth console, and a navigable file manager -- click a
+ * directory row to descend, ".." to go back up; opening a file's content
+ * and any create/rename/delete UI are still later stages), tracked as a
+ * real array/z-order list rather than
  * named locals so every window is treated uniformly regardless of what's
  * inside it. Content still differs per window, so each window's content
  * is drawn via a kind-indexed dispatch (draw_window_by_index()) rather
@@ -349,18 +350,62 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
     console_input_draw(ci);
 }
 
-/* The fourth window: a read-only listing of the root directory. Stage A
- * of the file manager -- no navigating into subdirectories yet, so
- * anything shown here is always exactly root's direct entries, read once
- * at boot (see kmain()) rather than re-read from disk on every redraw. */
-static void draw_files_group(const struct window *files, const struct fs_dirent *file_entries,
+/* Room for FS_MAX_PATH_DEPTH (4) components at up to FS_NAME_MAX - 1 (15)
+ * chars each, plus separating slashes and the terminator -- generous. */
+#define FILES_PATH_MAX 80
+#define FILES_ROW_HEIGHT 20
+#define FILES_LIST_Y_OFFSET 12
+
+/* Appends name onto cwd ("/" gets name appended directly, without a
+ * doubled leading slash; anything else gets a separating '/' first). */
+static void path_join(char *dst, const char *cwd, const char *name) {
+    int pos = 0;
+    if (!str_eq(cwd, "/")) {
+        str_append(dst, &pos, cwd);
+    }
+    str_append(dst, &pos, "/");
+    str_append(dst, &pos, name);
+}
+
+/* In place: truncates cwd at its last '/', or resets to "/" if that was
+ * the leading slash (going up from a top-level directory). */
+static void path_parent(char *cwd) {
+    int i;
+    int last_slash = -1;
+    for (i = 0; cwd[i]; i++) {
+        if (cwd[i] == '/') {
+            last_slash = i;
+        }
+    }
+    if (last_slash <= 0) {
+        cwd[0] = '/';
+        cwd[1] = 0;
+    } else {
+        cwd[last_slash] = 0;
+    }
+}
+
+/* The fourth window: a listing of the current directory (cwd), navigable
+ * -- Stage B of the file manager. Row 0 is always the path itself
+ * (not clickable); row 1 is ".." if cwd isn't root; real entries follow.
+ * files_list_hit_test() below mirrors this exact row numbering so the two
+ * can never disagree about what a given pixel row means. */
+static void draw_files_group(const struct window *files, const char *cwd, const struct fs_dirent *file_entries,
                              unsigned int file_entry_count) {
     unsigned int i;
+    int row = 1;
 
     window_draw(files);
+    text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET, cwd, TEXT_ACCENT_COLOR, 1);
+
+    if (!str_eq(cwd, "/")) {
+        text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT, "..", TEXT_PRIMARY_COLOR, 1);
+        row++;
+    }
 
     if (file_entry_count == 0) {
-        text_puts(files->x + 8, files->y + 12, "(EMPTY)", TEXT_MUTED_COLOR, 1);
+        text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT, "(EMPTY)", TEXT_MUTED_COLOR,
+                  1);
         return;
     }
 
@@ -379,8 +424,46 @@ static void draw_files_group(const struct window *files, const struct fs_dirent 
             str_append(line, &pos, "B");
         }
 
-        text_puts(files->x + 8, files->y + 12 + (int)i * 20, line, TEXT_PRIMARY_COLOR, 1);
+        text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT, line, TEXT_PRIMARY_COLOR,
+                  1);
+        row++;
     }
+}
+
+#define FILES_HIT_NONE (-1)
+#define FILES_HIT_UP (-2)
+
+/* Converts a click position into the same row numbering
+ * draw_files_group() just drew -- FILES_HIT_NONE for the path header (row
+ * 0) or outside the window, FILES_HIT_UP for "..", otherwise an index
+ * into file_entries[]. */
+static int files_list_hit_test(const struct window *files, const char *cwd, unsigned int file_entry_count, int px,
+                               int py) {
+    int up_present = !str_eq(cwd, "/");
+    int rel_row;
+
+    if (px < files->x || px >= files->x + files->w || py < files->y || py >= files->y + files->h) {
+        return FILES_HIT_NONE;
+    }
+
+    rel_row = (py - (files->y + FILES_LIST_Y_OFFSET)) / FILES_ROW_HEIGHT;
+    if (rel_row <= 0) {
+        return FILES_HIT_NONE; /* the path header row, or above it */
+    }
+
+    if (up_present) {
+        if (rel_row == 1) {
+            return FILES_HIT_UP;
+        }
+        rel_row -= 2;
+    } else {
+        rel_row -= 1;
+    }
+
+    if (rel_row < 0 || (unsigned int)rel_row >= file_entry_count) {
+        return FILES_HIT_NONE;
+    }
+    return rel_row;
 }
 
 /* The one place that dispatches "draw whatever's inside window index
@@ -390,13 +473,14 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
                                  const struct button *exit_btn, int click_count, const struct textfield *tf,
                                  const struct checkbox *cb, const struct console_output *co,
                                  const struct console_input *ci, const char *ata_status, const char *fs_status,
-                                 const struct fs_dirent *file_entries, unsigned int file_entry_count) {
+                                 const char *cwd, const struct fs_dirent *file_entries,
+                                 unsigned int file_entry_count) {
     if (idx == WIN_KIND_PANEL) {
         draw_window_group(&windows[idx], btn, exit_btn, click_count, tf, cb);
     } else if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
     } else if (idx == WIN_KIND_FILES) {
-        draw_files_group(&windows[idx], file_entries, file_entry_count);
+        draw_files_group(&windows[idx], cwd, file_entries, file_entry_count);
     } else {
         draw_info_group(&windows[idx], ata_status, fs_status);
     }
@@ -413,8 +497,8 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
                        const struct checkbox *cb, const struct console_output *co, const struct console_input *ci,
                        const int *z_order, const struct taskbar *bar, int hovered_entry,
                        const struct desktop_icons *icons, int icon_hovered, int mx, int my, uint32_t cursor_color,
-                       const char *ata_status, const char *fs_status, const struct fs_dirent *file_entries,
-                       unsigned int file_entry_count) {
+                       const char *ata_status, const char *fs_status, const char *cwd,
+                       const struct fs_dirent *file_entries, unsigned int file_entry_count) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -434,7 +518,7 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
             draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status,
-                                 file_entries, file_entry_count);
+                                 cwd, file_entries, file_entry_count);
         }
     }
 
@@ -488,7 +572,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
                                int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
                                const int *touched, int fx_changed, const struct taskbar *bar, int hovered_entry,
                                int old_hovered_entry, const struct desktop_icons *icons, int icon_hovered,
-                               int old_icon_hovered, const char *ata_status, const char *fs_status,
+                               int old_icon_hovered, const char *ata_status, const char *fs_status, const char *cwd,
                                const struct fs_dirent *file_entries, unsigned int file_entry_count) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
@@ -621,7 +705,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status,
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status, cwd,
                                  file_entries, file_entry_count);
         }
     }
@@ -658,6 +742,7 @@ void kmain(void) {
     struct button exit_btn;
     const char *ata_status;
     const char *fs_status;
+    char cwd[FILES_PATH_MAX];
     struct fs_dirent file_entries[FS_MAX_FILES];
     unsigned int file_entry_count;
 
@@ -810,16 +895,19 @@ void kmain(void) {
     ata_status = ata_selftest();
     fs_status = fs_selftest();
 
-    /* Read once here, not on every redraw -- this kernel's event loop
+    /* Read once here (and again only when a navigation click actually
+     * changes cwd, below), not on every redraw -- this kernel's event loop
      * redraws on essentially any mouse movement, and re-reading the
      * directory sector that often would mean a PIO polling round-trip on
      * nearly every frame once this window exists. */
-    if (fs_list_dir("/", file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+    cwd[0] = '/';
+    cwd[1] = 0;
+    if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
         file_entry_count = 0;
     }
 
     draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, &bar, taskbar_hovered,
-              &icons, icon_hovered, mx, my, cursor_color, ata_status, fs_status, file_entries, file_entry_count);
+              &icons, icon_hovered, mx, my, cursor_color, ata_status, fs_status, cwd, file_entries, file_entry_count);
     gfx_present();
 
     for (;;) {
@@ -846,12 +934,18 @@ void kmain(void) {
         int old_ci_cursor = ci.cursor;
         int old_ci_focused = ci.focused;
         char old_ci_text[CONSOLE_INPUT_MAX + 1];
+        char old_cwd[FILES_PATH_MAX];
         int i;
 
         for (i = 0; ci.text[i]; i++) {
             old_ci_text[i] = ci.text[i];
         }
         old_ci_text[i] = 0;
+
+        for (i = 0; cwd[i]; i++) {
+            old_cwd[i] = cwd[i];
+        }
+        old_cwd[i] = 0;
 
         for (i = 0; i < MAX_WINDOWS; i++) {
             old_x[i] = windows[i].x;
@@ -998,6 +1092,7 @@ void kmain(void) {
                 int topmost = topmost_window_at(windows, z_order, cx, cy);
                 int panel_is_topmost = topmost == WIN_KIND_PANEL;
                 int forth_is_topmost = topmost == WIN_KIND_FORTH;
+                int files_is_topmost = topmost == WIN_KIND_FILES;
                 int click_edge = left_held && !prev_left_held;
 
                 btn.hovered = panel_is_topmost && button_hit_test(&btn, cx, cy);
@@ -1025,6 +1120,36 @@ void kmain(void) {
                 cb.hovered = panel_is_topmost && checkbox_hit_test(&cb, cx, cy);
                 if (cb.hovered && click_edge) {
                     cb.checked = !cb.checked;
+                }
+
+                /* Clicking ".." or a directory row navigates and re-lists
+                 * immediately (see the boot-time fs_list_dir() call for
+                 * why this stays an explicit "only when cwd actually
+                 * changes" call rather than something re-run every
+                 * redraw). Clicking a file is a no-op this stage --
+                 * opening file contents is a later increment. */
+                if (files_is_topmost && click_edge) {
+                    int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy);
+
+                    if (hit == FILES_HIT_UP) {
+                        path_parent(cwd);
+                        if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+                            file_entry_count = 0;
+                        }
+                    } else if (hit >= 0 && file_entries[hit].type == FS_TYPE_DIR) {
+                        char new_cwd[FILES_PATH_MAX];
+                        path_join(new_cwd, cwd, file_entries[hit].name);
+                        {
+                            int ci2;
+                            for (ci2 = 0; new_cwd[ci2]; ci2++) {
+                                cwd[ci2] = new_cwd[ci2];
+                            }
+                            cwd[ci2] = 0;
+                        }
+                        if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+                            file_entry_count = 0;
+                        }
+                    }
                 }
             }
 
@@ -1112,11 +1237,13 @@ void kmain(void) {
             touched[WIN_KIND_FORTH] = touched[WIN_KIND_FORTH] || (co.generation != old_co_generation) ||
                                       (ci.len != old_ci_len) || (ci.cursor != old_ci_cursor) ||
                                       (ci.focused != old_ci_focused) || !str_eq(ci.text, old_ci_text);
+            touched[WIN_KIND_FILES] = touched[WIN_KIND_FILES] || !str_eq(cwd, old_cwd);
 
             update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, old_z,
                                old_mx, old_my, mx, my, cursor_color, old_x, old_y, touched,
                                cb.checked != old_cb_checked, &bar, taskbar_hovered, old_taskbar_hovered, &icons,
-                               icon_hovered, old_icon_hovered, ata_status, fs_status, file_entries, file_entry_count);
+                               icon_hovered, old_icon_hovered, ata_status, fs_status, cwd, file_entries,
+                               file_entry_count);
         } else {
             __asm__ volatile("hlt");
         }
