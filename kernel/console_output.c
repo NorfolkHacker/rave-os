@@ -40,6 +40,12 @@ void console_output_append_line(struct console_output *co, const char *text) {
     co->generation++;
 }
 
+void console_output_clear(struct console_output *co) {
+    co->line_count = 0;
+    co->next_line = 0;
+    co->generation++;
+}
+
 /* No clip/scissor primitive exists anywhere in graphics.h (gfx_put_pixel
  * has never bounds-checked) -- self-clipping by only ever computing
  * y-coordinates already proven to land inside [co->y, co->y + co->h) is

@@ -31,6 +31,16 @@ void console_output_init(struct console_output *co, int x, int y, int w, int h);
  * oldest line once the ring is full. */
 void console_output_append_line(struct console_output *co, const char *text);
 
+/* Resets line_count/next_line so a caller can start showing unrelated
+ * content (e.g. a different file's contents) instead of appending onto
+ * what's already there. Bumps generation rather than resetting it to 0 --
+ * append_line()'s "generation only ever increases, so any change is
+ * detectable as != " invariant has to keep holding even across a clear,
+ * or two same-length pieces of content shown back to back could
+ * coincidentally land on the same generation and silently skip a
+ * redraw. */
+void console_output_clear(struct console_output *co);
+
 void console_output_draw(const struct console_output *co);
 
 #endif
