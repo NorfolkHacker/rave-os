@@ -1,6 +1,21 @@
 #ifndef RAVEOS_FS_H
 #define RAVEOS_FS_H
 
+/* Public contract for anyone sizing a buffer for fs_list_dir(): the most
+ * entries any one directory's table can hold, and the max length
+ * (including the terminating nul) of one entry's name. */
+#define FS_MAX_FILES 20
+#define FS_NAME_MAX 16
+
+#define FS_TYPE_FILE 0
+#define FS_TYPE_DIR 1
+
+struct fs_dirent {
+    char name[FS_NAME_MAX];
+    int type; /* FS_TYPE_FILE or FS_TYPE_DIR */
+    unsigned int size_bytes; /* unused (0) for a directory */
+};
+
 /* Mounts the filesystem on the ATA slave drive (kernel/ata.h), formatting
  * it fresh if the superblock's magic/version don't match -- so a blank (or
  * old-format) fs.img just works, no separate host-side mkfs tool needed.
@@ -29,6 +44,13 @@ int fs_create_file(const char *path, const void *data, unsigned int size);
  * not found, not a file (e.g. path names a directory), or too big for the
  * caller's buffer. */
 int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned int *out_size);
+
+/* Lists path's direct entries (not recursive) into out[], up to
+ * max_entries (callers should size their buffer to FS_MAX_FILES to never
+ * truncate). path must name a directory -- "/" for root. Returns 0 and
+ * sets *out_count on success, -1 if path doesn't exist or isn't a
+ * directory. */
+int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count);
 
 /* Mounts (formatting if needed), then proves it end-to-end against a
  * fixed nested path: reads it first -- if it's already there (every boot

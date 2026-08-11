@@ -29,19 +29,21 @@
 
 #define CURSOR_SIZE 8
 
-/* Three windows exist right now (the interactive panel, a small static
- * info window, and the Forth console -- Stage A of Stage 3's four-stage
- * plan, "dumb echo terminal" only, no interpreter yet), tracked as a real
- * array/z-order list rather than named locals so every window is treated
- * uniformly regardless of what's inside it. Content still differs per
- * window, so each window's content is drawn via a kind-indexed dispatch
- * (draw_window_by_index()) rather than a generic widget framework --
- * there are exactly three content kinds, not an open-ended number, so a
- * small switch is simpler than a real polymorphic app system. */
-#define MAX_WINDOWS 3
+/* Four windows exist right now (the interactive panel, a small static
+ * info window, the Forth console, and a read-only file manager listing
+ * the root directory -- Stage A of the file manager: no navigation into
+ * subdirectories yet), tracked as a real array/z-order list rather than
+ * named locals so every window is treated uniformly regardless of what's
+ * inside it. Content still differs per window, so each window's content
+ * is drawn via a kind-indexed dispatch (draw_window_by_index()) rather
+ * than a generic widget framework -- there are exactly four content
+ * kinds, not an open-ended number, so a small switch is simpler than a
+ * real polymorphic app system. */
+#define MAX_WINDOWS 4
 #define WIN_KIND_PANEL 0
 #define WIN_KIND_INFO 1
 #define WIN_KIND_FORTH 2
+#define WIN_KIND_FILES 3
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -300,7 +302,8 @@ static void move_window_content(int kind, struct button *btn, struct button *exi
         ci->x += applied_dx;
         ci->y += applied_dy;
     }
-    /* WIN_KIND_INFO has no content widgets to move. */
+    /* WIN_KIND_INFO and WIN_KIND_FILES have no content widgets to move --
+     * the files window's listing is plain text, no widgets of its own. */
 }
 
 static void draw_window_group(const struct window *panel, const struct button *btn,
@@ -346,17 +349,54 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
     console_input_draw(ci);
 }
 
+/* The fourth window: a read-only listing of the root directory. Stage A
+ * of the file manager -- no navigating into subdirectories yet, so
+ * anything shown here is always exactly root's direct entries, read once
+ * at boot (see kmain()) rather than re-read from disk on every redraw. */
+static void draw_files_group(const struct window *files, const struct fs_dirent *file_entries,
+                             unsigned int file_entry_count) {
+    unsigned int i;
+
+    window_draw(files);
+
+    if (file_entry_count == 0) {
+        text_puts(files->x + 8, files->y + 12, "(EMPTY)", TEXT_MUTED_COLOR, 1);
+        return;
+    }
+
+    for (i = 0; i < file_entry_count; i++) {
+        char line[FS_NAME_MAX + 16];
+        int pos = 0;
+
+        str_append(line, &pos, file_entries[i].name);
+        if (file_entries[i].type == FS_TYPE_DIR) {
+            str_append(line, &pos, "/");
+        } else {
+            char num[12];
+            str_append(line, &pos, " ");
+            format_uint(file_entries[i].size_bytes, num);
+            str_append(line, &pos, num);
+            str_append(line, &pos, "B");
+        }
+
+        text_puts(files->x + 8, files->y + 12 + (int)i * 20, line, TEXT_PRIMARY_COLOR, 1);
+    }
+}
+
 /* The one place that dispatches "draw whatever's inside window index
  * idx" -- both draw_scene() and update_and_present() go through this
  * instead of each hand-rolling their own kind check. */
 static void draw_window_by_index(int idx, const struct window *windows, const struct button *btn,
                                  const struct button *exit_btn, int click_count, const struct textfield *tf,
                                  const struct checkbox *cb, const struct console_output *co,
-                                 const struct console_input *ci, const char *ata_status, const char *fs_status) {
+                                 const struct console_input *ci, const char *ata_status, const char *fs_status,
+                                 const struct fs_dirent *file_entries, unsigned int file_entry_count) {
     if (idx == WIN_KIND_PANEL) {
         draw_window_group(&windows[idx], btn, exit_btn, click_count, tf, cb);
     } else if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
+    } else if (idx == WIN_KIND_FILES) {
+        draw_files_group(&windows[idx], file_entries, file_entry_count);
     } else {
         draw_info_group(&windows[idx], ata_status, fs_status);
     }
@@ -373,7 +413,8 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
                        const struct checkbox *cb, const struct console_output *co, const struct console_input *ci,
                        const int *z_order, const struct taskbar *bar, int hovered_entry,
                        const struct desktop_icons *icons, int icon_hovered, int mx, int my, uint32_t cursor_color,
-                       const char *ata_status, const char *fs_status) {
+                       const char *ata_status, const char *fs_status, const struct fs_dirent *file_entries,
+                       unsigned int file_entry_count) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -392,7 +433,8 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status);
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status,
+                                 file_entries, file_entry_count);
         }
     }
 
@@ -446,7 +488,8 @@ static void update_and_present(int w, int h, const struct window *windows, const
                                int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
                                const int *touched, int fx_changed, const struct taskbar *bar, int hovered_entry,
                                int old_hovered_entry, const struct desktop_icons *icons, int icon_hovered,
-                               int old_icon_hovered, const char *ata_status, const char *fs_status) {
+                               int old_icon_hovered, const char *ata_status, const char *fs_status,
+                               const struct fs_dirent *file_entries, unsigned int file_entry_count) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
     int redraw[DAMAGE_REGIONS];
@@ -578,7 +621,8 @@ static void update_and_present(int w, int h, const struct window *windows, const
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status);
+            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status,
+                                 file_entries, file_entry_count);
         }
     }
 
@@ -614,6 +658,8 @@ void kmain(void) {
     struct button exit_btn;
     const char *ata_status;
     const char *fs_status;
+    struct fs_dirent file_entries[FS_MAX_FILES];
+    unsigned int file_entry_count;
 
     gfx_init();
     w = gfx_width();
@@ -669,10 +715,23 @@ void kmain(void) {
     windows[WIN_KIND_FORTH].minimize_hovered = 0;
     windows[WIN_KIND_FORTH].close_hovered = 0;
 
+    /* Sized for ~8 visible listing lines (see draw_files_group()) --
+     * plenty for the current tree. Overlapping the other windows' corners
+     * is fine, same as every other window here. */
+    windows[WIN_KIND_FILES].x = 420;
+    windows[WIN_KIND_FILES].y = 120;
+    windows[WIN_KIND_FILES].w = 180;
+    windows[WIN_KIND_FILES].h = 190;
+    windows[WIN_KIND_FILES].title = "RAVE-OS FILES";
+    windows[WIN_KIND_FILES].state = WINDOW_OPEN;
+    windows[WIN_KIND_FILES].minimize_hovered = 0;
+    windows[WIN_KIND_FILES].close_hovered = 0;
+
     /* Panel starts frontmost, matching the old panel_on_top = 1 default. */
     z_order[0] = WIN_KIND_PANEL;
     z_order[1] = WIN_KIND_INFO;
     z_order[2] = WIN_KIND_FORTH;
+    z_order[3] = WIN_KIND_FILES;
 
     bar.x = 0;
     bar.y = h - TASKBAR_HEIGHT;
@@ -751,8 +810,16 @@ void kmain(void) {
     ata_status = ata_selftest();
     fs_status = fs_selftest();
 
+    /* Read once here, not on every redraw -- this kernel's event loop
+     * redraws on essentially any mouse movement, and re-reading the
+     * directory sector that often would mean a PIO polling round-trip on
+     * nearly every frame once this window exists. */
+    if (fs_list_dir("/", file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+        file_entry_count = 0;
+    }
+
     draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, &bar, taskbar_hovered,
-              &icons, icon_hovered, mx, my, cursor_color, ata_status, fs_status);
+              &icons, icon_hovered, mx, my, cursor_color, ata_status, fs_status, file_entries, file_entry_count);
     gfx_present();
 
     for (;;) {
@@ -1049,7 +1116,7 @@ void kmain(void) {
             update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, old_z,
                                old_mx, old_my, mx, my, cursor_color, old_x, old_y, touched,
                                cb.checked != old_cb_checked, &bar, taskbar_hovered, old_taskbar_hovered, &icons,
-                               icon_hovered, old_icon_hovered, ata_status, fs_status);
+                               icon_hovered, old_icon_hovered, ata_status, fs_status, file_entries, file_entry_count);
         } else {
             __asm__ volatile("hlt");
         }

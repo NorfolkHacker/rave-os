@@ -12,8 +12,9 @@
 #define FS_MAGIC 0x45564152u /* on-disk bytes read as ASCII "RAVE" */
 #define FS_VERSION 2 /* bumped from 1: entries gained a type field (file/dir) */
 
-#define FS_MAX_FILES 20
-#define FS_NAME_MAX 16 /* includes the terminating nul, so 15 usable chars */
+/* FS_MAX_FILES/FS_NAME_MAX moved to fs.h -- fs_list_dir() made them a
+ * public contract (callers need to know them to size a buffer), so a
+ * private copy here would just be a second definition to keep in sync. */
 #define FS_MAX_PATH_DEPTH 4
 
 #define FS_SUPERBLOCK_LBA 0
@@ -32,9 +33,6 @@
  * real file or directory table can never be silently corrupted by that
  * diagnostic. */
 #define FS_RESERVED_TAIL_SECTORS 1u
-
-#define FS_TYPE_FILE 0
-#define FS_TYPE_DIR 1
 
 struct fs_superblock {
     uint32_t magic;
@@ -177,33 +175,69 @@ static int path_split(const char *path, char components[][FS_NAME_MAX]) {
     return count;
 }
 
-/* Walks all but the last component of path, starting from the root table
- * and following each directory component's start_lba into the next
- * table. Hands back the LBA of the table that should hold the final
- * component (*out_table_lba) and that component's own name (leaf_name).
- * -1 if any component along the way is missing or isn't a directory. */
-static int walk_to_parent(const char *path, char *leaf_name, unsigned int *out_table_lba) {
-    char components[FS_MAX_PATH_DEPTH][FS_NAME_MAX];
-    unsigned int table_lba = FS_ROOT_LBA;
-    int count = path_split(path, components);
+/* Walks the first n components as directories, starting from the root
+ * table and following each one's start_lba into the next table, updating
+ * *table_lba as it goes. -1 if any component along the way is missing or
+ * isn't a directory. Shared by walk_to_parent() (n = count - 1, stopping
+ * short of the final component) and resolve_dir_lba() (n = count, since
+ * every component of a directory path is itself a directory). */
+static int walk_components(char components[][FS_NAME_MAX], int n, unsigned int *table_lba) {
     int i;
-
-    if (count < 0) {
-        return -1;
-    }
-
-    for (i = 0; i < count - 1; i++) {
+    for (i = 0; i < n; i++) {
         struct fs_entry entries[FS_MAX_FILES];
         int slot;
-        dirtable_read(table_lba, entries);
+        dirtable_read(*table_lba, entries);
         slot = dirtable_find(entries, components[i]);
         if (slot < 0 || entries[slot].type != FS_TYPE_DIR) {
             return -1;
         }
-        table_lba = entries[slot].start_lba;
+        *table_lba = entries[slot].start_lba;
+    }
+    return 0;
+}
+
+/* Walks all but the last component of path. Hands back the LBA of the
+ * table that should hold the final component (*out_table_lba) and that
+ * component's own name (leaf_name). -1 if any component along the way is
+ * missing or isn't a directory. */
+static int walk_to_parent(const char *path, char *leaf_name, unsigned int *out_table_lba) {
+    char components[FS_MAX_PATH_DEPTH][FS_NAME_MAX];
+    unsigned int table_lba = FS_ROOT_LBA;
+    int count = path_split(path, components);
+
+    if (count < 0) {
+        return -1;
+    }
+    if (walk_components(components, count - 1, &table_lba) != 0) {
+        return -1;
     }
 
     name_copy(leaf_name, components[count - 1]);
+    *out_table_lba = table_lba;
+    return 0;
+}
+
+/* Resolves a directory path (including "/" for root, which has no parent
+ * to look itself up in -- a fixed special case) to that directory's own
+ * entry-table LBA. -1 if any component is missing or isn't a directory. */
+static int resolve_dir_lba(const char *path, unsigned int *out_table_lba) {
+    char components[FS_MAX_PATH_DEPTH][FS_NAME_MAX];
+    unsigned int table_lba = FS_ROOT_LBA;
+    int count;
+
+    if (path[0] == '/' && path[1] == 0) {
+        *out_table_lba = FS_ROOT_LBA;
+        return 0;
+    }
+
+    count = path_split(path, components);
+    if (count < 0) {
+        return -1;
+    }
+    if (walk_components(components, count, &table_lba) != 0) {
+        return -1;
+    }
+
     *out_table_lba = table_lba;
     return 0;
 }
@@ -404,6 +438,38 @@ int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned in
     }
 
     *out_size = entries[slot].size_bytes;
+    return 0;
+}
+
+int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count) {
+    struct fs_entry entries[FS_MAX_FILES];
+    unsigned int table_lba;
+    unsigned int count = 0;
+    int i;
+
+    if (!mounted) {
+        fs_init();
+    }
+
+    if (resolve_dir_lba(path, &table_lba) != 0) {
+        return -1;
+    }
+
+    dirtable_read(table_lba, entries);
+    for (i = 0; i < FS_MAX_FILES; i++) {
+        if (entries[i].name[0] == 0) {
+            continue;
+        }
+        if (count >= max_entries) {
+            break; /* truncate rather than overflow the caller's buffer */
+        }
+        name_copy(out[count].name, entries[i].name);
+        out[count].type = entries[i].type;
+        out[count].size_bytes = entries[i].size_bytes;
+        count++;
+    }
+
+    *out_count = count;
     return 0;
 }
 
