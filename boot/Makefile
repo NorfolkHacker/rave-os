@@ -36,11 +36,24 @@ disk.img: stage1.asm stage2.asm $(KERNEL_BIN)
 	truncate -s $$(( kernel_sectors * 512 )) $(KERNEL_BIN); \
 	cat stage1.bin stage2.bin $(KERNEL_BIN) > disk.img
 
-run: disk.img
-	$(QEMU) -drive file=disk.img,format=raw
+# Dedicated scratch disk for the ATA driver (kernel/ata.c) and, later, a
+# real on-disk filesystem -- deliberately a second drive rather than extra
+# sectors tacked onto disk.img, so filesystem sectors can never collide
+# with anything the bootloader/BIOS cares about. No prerequisites, so make
+# only creates it once and never truncates it again -- writes from a
+# previous QEMU run (this is how the ATA self-test's persistence gets
+# checked) survive across builds.
+fs.img:
+	dd if=/dev/zero of=fs.img bs=1M count=1
+
+# bus=0,unit=0/1 = primary IDE channel, master/slave -- same I/O ports
+# (0x1F0-0x1F7, 0x3F6) the kernel's ATA driver talks to, just a different
+# drive-select bit, so no secondary-channel support is needed yet.
+run: disk.img fs.img
+	$(QEMU) -drive file=disk.img,format=raw,if=ide,bus=0,unit=0 -drive file=fs.img,format=raw,if=ide,bus=0,unit=1
 
 clean:
-	rm -f stage1.bin stage2.bin disk.img
+	rm -f stage1.bin stage2.bin disk.img fs.img
 	$(MAKE) -C $(KERNEL_DIR) clean
 
 .PHONY: all run clean FORCE
