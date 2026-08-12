@@ -4,7 +4,7 @@ A running record of how Rave-OS gets built: decisions made, concepts learned, an
 
 ## Vision
 
-Rave-OS is a custom operating system in C, C++, and assembly. Visually it fuses 90s pixel art with rave/acid-graphics (demoscene, Amiga, plasma/hue-cycling palettes). It draws inspiration from TempleOS and the book *Build Your Own Operating System* by Lucas Darnell. Initial target is x86/x64 running as a VM guest.
+Rave-OS is a custom operating system in C, C++, and assembly. Visually it fuses 90s pixel art with rave/acid-graphics (demoscene, Amiga, plasma/hue-cycling palettes). It draws inspiration from the book *Build Your Own Operating System* by Lucas Darnell. Initial target is x86/x64 running as a VM guest.
 
 Ambitions beyond the visuals:
 - A mouse-driven GUI (own windowing system).
@@ -24,7 +24,7 @@ ACIDSTORM (`demos/acidstorm/`), a Robotron/Llamatron-inspired twin-stick shooter
 
 - Named the project **Rave-OS** and committed to building it as a full OS, not just a series of demos.
 - Confirmed ACIDSTORM's role as a bundled demo game rather than a throwaway prototyping stage.
-- Chose *Build Your Own Operating System* (Lucas Darnell) and TempleOS as reference points.
+- Chose *Build Your Own Operating System* (Lucas Darnell) as a reference point.
 - Established the 4-stage roadmap above.
 - Started this build log.
 
