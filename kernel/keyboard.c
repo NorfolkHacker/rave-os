@@ -10,7 +10,13 @@
 #define SC_RSHIFT 0x36
 #define SC_RELEASE_BIT 0x80
 
-static int shift_held = 0;
+/* Tracked per physical key, not as one shared flag -- with a single
+ * shift_held, pressing both shift keys and releasing only one (ordinary
+ * two-handed typing) incorrectly cleared it while the other was still
+ * physically held, typing unshifted until the remaining key was pressed
+ * and released once more to accidentally "resync" it. */
+static int lshift_held = 0;
+static int rshift_held = 0;
 
 /* Set by an 0xE0 prefix byte, consumed by the very next byte -- PS/2
  * "extended" scancodes (arrow keys, among others) are always a 2-byte
@@ -98,8 +104,12 @@ int keyboard_poll_char(char *out) {
             continue; /* release of an extended key, or an unhandled one */
         }
 
-        if (code == SC_LSHIFT || code == SC_RSHIFT) {
-            shift_held = !released;
+        if (code == SC_LSHIFT) {
+            lshift_held = !released;
+            continue;
+        }
+        if (code == SC_RSHIFT) {
+            rshift_held = !released;
             continue;
         }
 
@@ -107,7 +117,7 @@ int keyboard_poll_char(char *out) {
             continue;
         }
 
-        char c = shift_held ? scancode_to_ascii_shift[code] : scancode_to_ascii[code];
+        char c = (lshift_held || rshift_held) ? scancode_to_ascii_shift[code] : scancode_to_ascii[code];
         if (c != 0) {
             *out = c;
             return 1;

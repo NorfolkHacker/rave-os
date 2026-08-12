@@ -87,18 +87,26 @@ static void sb_write(void) {
 /* Reads/writes one directory's entry table, at whichever LBA that
  * particular directory (root or a subdirectory) happens to live at --
  * every directory is the same shape, so this one pair of functions serves
- * all of them. */
-static void dirtable_read(unsigned int lba, struct fs_entry *entries) {
+ * all of them. Both return 0 on success, -1 if the underlying ATA
+ * operation failed -- callers must check this rather than assume it
+ * always succeeds: on a read failure, buf (and thus entries[]) would
+ * otherwise be whatever was already on the stack, misread as real
+ * on-disk file/directory records; on a write failure, the caller would
+ * otherwise believe a change was persisted when it wasn't. */
+static int dirtable_read(unsigned int lba, struct fs_entry *entries) {
     unsigned char buf[ATA_SECTOR_SIZE];
     struct fs_entry *on_disk = (struct fs_entry *)buf;
     int i;
-    ata_read_sector(ATA_DRIVE_SLAVE, lba, buf);
+    if (ata_read_sector(ATA_DRIVE_SLAVE, lba, buf) != 0) {
+        return -1;
+    }
     for (i = 0; i < FS_MAX_FILES; i++) {
         entries[i] = on_disk[i];
     }
+    return 0;
 }
 
-static void dirtable_write(unsigned int lba, const struct fs_entry *entries) {
+static int dirtable_write(unsigned int lba, const struct fs_entry *entries) {
     unsigned char buf[ATA_SECTOR_SIZE];
     struct fs_entry *on_disk = (struct fs_entry *)buf;
     int i;
@@ -108,7 +116,7 @@ static void dirtable_write(unsigned int lba, const struct fs_entry *entries) {
     for (i = 0; i < FS_MAX_FILES; i++) {
         on_disk[i] = entries[i];
     }
-    ata_write_sector(ATA_DRIVE_SLAVE, lba, buf);
+    return ata_write_sector(ATA_DRIVE_SLAVE, lba, buf);
 }
 
 static int dirtable_find(const struct fs_entry *entries, const char *name) {
@@ -175,6 +183,23 @@ static int path_split(const char *path, char components[][FS_NAME_MAX]) {
     return count;
 }
 
+/* True only if [lba, lba+span) is entirely within the allocator's valid
+ * data range -- never the superblock (LBA 0), the root table (LBA 1), or
+ * anything at/past the reserved tail. Every start_lba this file uses as a
+ * sector address comes straight off disk (a directory entry, or the
+ * superblock's next_free_lba) with no other guarantee it wasn't
+ * corrupted; callers check this before dereferencing one, instead of
+ * trusting it to have been written by this same code. Written to avoid
+ * overflow: the `lba >= limit` check runs before `limit - lba`, so that
+ * subtraction can never wrap. */
+static int lba_span_valid(unsigned int lba, unsigned int span) {
+    unsigned int limit = FS_TOTAL_SECTORS - FS_RESERVED_TAIL_SECTORS;
+    if (lba < FS_DATA_START_LBA || lba >= limit) {
+        return 0;
+    }
+    return span <= limit - lba;
+}
+
 /* Walks the first n components as directories, starting from the root
  * table and following each one's start_lba into the next table, updating
  * *table_lba as it goes. -1 if any component along the way is missing or
@@ -186,9 +211,11 @@ static int walk_components(char components[][FS_NAME_MAX], int n, unsigned int *
     for (i = 0; i < n; i++) {
         struct fs_entry entries[FS_MAX_FILES];
         int slot;
-        dirtable_read(*table_lba, entries);
+        if (dirtable_read(*table_lba, entries) != 0) {
+            return -1;
+        }
         slot = dirtable_find(entries, components[i]);
-        if (slot < 0 || entries[slot].type != FS_TYPE_DIR) {
+        if (slot < 0 || entries[slot].type != FS_TYPE_DIR || !lba_span_valid(entries[slot].start_lba, 1)) {
             return -1;
         }
         *table_lba = entries[slot].start_lba;
@@ -244,11 +271,21 @@ static int resolve_dir_lba(const char *path, unsigned int *out_table_lba) {
 
 void fs_init(void) {
     unsigned char buf[ATA_SECTOR_SIZE];
+    int read_ok = ata_read_sector(ATA_DRIVE_SLAVE, FS_SUPERBLOCK_LBA, buf) == 0;
 
-    ata_read_sector(ATA_DRIVE_SLAVE, FS_SUPERBLOCK_LBA, buf);
-    sb = *(struct fs_superblock *)buf;
+    if (read_ok) {
+        sb = *(struct fs_superblock *)buf;
+    }
 
-    if (sb.magic != FS_MAGIC || sb.version != FS_VERSION) {
+    /* Reformat whenever the superblock can't be trusted: the read itself
+     * failed (buf is whatever was on the stack), the magic/version don't
+     * match, total_sectors doesn't match what this build actually uses,
+     * or next_free_lba is out of the allocator's valid range (e.g. bit
+     * rot, or a previous run that crashed mid-write). Every field the
+     * rest of this file trusts unconditionally is validated right here,
+     * once, rather than by every caller that touches sb later. */
+    if (!read_ok || sb.magic != FS_MAGIC || sb.version != FS_VERSION || sb.total_sectors != FS_TOTAL_SECTORS ||
+        sb.next_free_lba < FS_DATA_START_LBA || sb.next_free_lba > FS_TOTAL_SECTORS - FS_RESERVED_TAIL_SECTORS) {
         unsigned char root_buf[ATA_SECTOR_SIZE];
         int i;
 
@@ -267,13 +304,15 @@ void fs_init(void) {
     mounted = 1;
 }
 
-/* Allocates one fresh sector from the bump allocator, past the reserved
- * tail boundary check shared by both files and directory tables. Returns
- * the LBA, or 0xFFFFFFFF (never a valid LBA -- sector 0 is the
- * superblock) on failure. */
+/* Allocates count fresh sectors from the bump allocator. Returns the
+ * starting LBA, or 0xFFFFFFFF (never a valid LBA -- sector 0 is the
+ * superblock) on failure. Delegates the bounds check to lba_span_valid()
+ * so a huge count (e.g. from an overflowed sectors_needed computation
+ * upstream) can't wrap sb.next_free_lba + count back into range the way
+ * a direct `next_free_lba + count > limit` comparison could. */
 static unsigned int alloc_sectors(unsigned int count) {
     unsigned int lba;
-    if (sb.next_free_lba + count > FS_TOTAL_SECTORS - FS_RESERVED_TAIL_SECTORS) {
+    if (!lba_span_valid(sb.next_free_lba, count)) {
         return 0xFFFFFFFFu;
     }
     lba = sb.next_free_lba;
@@ -299,7 +338,9 @@ int fs_create_dir(const char *path) {
         return -1;
     }
 
-    dirtable_read(table_lba, entries);
+    if (dirtable_read(table_lba, entries) != 0) {
+        return -1;
+    }
     if (dirtable_find(entries, leaf) >= 0) {
         return -1; /* already exists */
     }
@@ -316,15 +357,15 @@ int fs_create_dir(const char *path) {
     for (i = 0; i < (int)sizeof(zero_buf); i++) {
         zero_buf[i] = 0;
     }
-    ata_write_sector(ATA_DRIVE_SLAVE, new_lba, zero_buf);
+    if (ata_write_sector(ATA_DRIVE_SLAVE, new_lba, zero_buf) != 0) {
+        return -1;
+    }
 
     name_copy(entries[slot].name, leaf);
     entries[slot].start_lba = new_lba;
     entries[slot].size_bytes = 0;
     entries[slot].type = FS_TYPE_DIR;
-    dirtable_write(table_lba, entries);
-
-    return 0;
+    return dirtable_write(table_lba, entries);
 }
 
 int fs_create_file(const char *path, const void *data, unsigned int size) {
@@ -347,7 +388,9 @@ int fs_create_file(const char *path, const void *data, unsigned int size) {
         return -1;
     }
 
-    dirtable_read(table_lba, entries);
+    if (dirtable_read(table_lba, entries) != 0) {
+        return -1;
+    }
     if (dirtable_find(entries, leaf) >= 0) {
         return -1; /* write-once: already exists */
     }
@@ -356,7 +399,13 @@ int fs_create_file(const char *path, const void *data, unsigned int size) {
         return -1; /* parent's table full */
     }
 
-    sectors_needed = (size + ATA_SECTOR_SIZE - 1) / ATA_SECTOR_SIZE;
+    /* Deliberately not `(size + ATA_SECTOR_SIZE - 1) / ATA_SECTOR_SIZE` --
+     * that addition overflows uint32_t for size close to UINT32_MAX,
+     * wrapping sectors_needed down to a tiny number while size_bytes
+     * below still records the full (huge) size, desyncing the directory
+     * entry's metadata from the sectors actually allocated. This form
+     * can't overflow: division and modulo never wrap. */
+    sectors_needed = size / ATA_SECTOR_SIZE + (size % ATA_SECTOR_SIZE != 0 ? 1 : 0);
     if (sectors_needed == 0) {
         sectors_needed = 1; /* even a zero-byte file still owns one sector */
     }
@@ -385,9 +434,7 @@ int fs_create_file(const char *path, const void *data, unsigned int size) {
     entries[slot].start_lba = lba;
     entries[slot].size_bytes = size;
     entries[slot].type = FS_TYPE_FILE;
-    dirtable_write(table_lba, entries);
-
-    return 0;
+    return dirtable_write(table_lba, entries);
 }
 
 int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned int *out_size) {
@@ -408,7 +455,9 @@ int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned in
         return -1;
     }
 
-    dirtable_read(table_lba, entries);
+    if (dirtable_read(table_lba, entries) != 0) {
+        return -1;
+    }
     slot = dirtable_find(entries, leaf);
     if (slot < 0 || entries[slot].type != FS_TYPE_FILE) {
         return -1;
@@ -417,9 +466,13 @@ int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned in
         return -1;
     }
 
-    sectors = (entries[slot].size_bytes + ATA_SECTOR_SIZE - 1) / ATA_SECTOR_SIZE;
+    sectors = entries[slot].size_bytes / ATA_SECTOR_SIZE + (entries[slot].size_bytes % ATA_SECTOR_SIZE != 0 ? 1 : 0);
     if (sectors == 0) {
         sectors = 1;
+    }
+
+    if (!lba_span_valid(entries[slot].start_lba, sectors)) {
+        return -1;
     }
 
     for (s = 0; s < sectors; s++) {
@@ -456,7 +509,9 @@ int fs_delete(const char *path) {
         return -1;
     }
 
-    dirtable_read(table_lba, entries);
+    if (dirtable_read(table_lba, entries) != 0) {
+        return -1;
+    }
     slot = dirtable_find(entries, leaf);
     if (slot < 0) {
         return -1; /* not found */
@@ -465,7 +520,12 @@ int fs_delete(const char *path) {
     if (entries[slot].type == FS_TYPE_DIR) {
         struct fs_entry sub_entries[FS_MAX_FILES];
         int j;
-        dirtable_read(entries[slot].start_lba, sub_entries);
+        if (!lba_span_valid(entries[slot].start_lba, 1)) {
+            return -1;
+        }
+        if (dirtable_read(entries[slot].start_lba, sub_entries) != 0) {
+            return -1;
+        }
         for (j = 0; j < FS_MAX_FILES; j++) {
             if (sub_entries[j].name[0] != 0) {
                 return -1; /* refuse: not empty, no recursive delete */
@@ -479,9 +539,7 @@ int fs_delete(const char *path) {
     entries[slot].start_lba = 0;
     entries[slot].size_bytes = 0;
     entries[slot].type = 0;
-    dirtable_write(table_lba, entries);
-
-    return 0;
+    return dirtable_write(table_lba, entries);
 }
 
 int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count) {
@@ -498,7 +556,9 @@ int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entrie
         return -1;
     }
 
-    dirtable_read(table_lba, entries);
+    if (dirtable_read(table_lba, entries) != 0) {
+        return -1;
+    }
     for (i = 0; i < FS_MAX_FILES; i++) {
         if (entries[i].name[0] == 0) {
             continue;

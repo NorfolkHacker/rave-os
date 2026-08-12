@@ -169,6 +169,15 @@ static void prim_div(struct forth_vm *vm) {
         forth_set_error(vm, "DIV BY ZERO");
         return;
     }
+    /* x86's idiv traps with the same #DE (divide error) exception for
+     * signed overflow, not just division by zero -- specifically
+     * INT32_MIN / -1, whose true quotient (2^31) doesn't fit back into a
+     * 32-bit signed result. Left unchecked, that trap is exactly the
+     * kernel panic this file's header comment says `/` must never cause. */
+    if (a == INT32_MIN && b == -1) {
+        forth_set_error(vm, "DIV OVERFLOW");
+        return;
+    }
     forth_push(vm, a / b);
 }
 

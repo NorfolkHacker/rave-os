@@ -23,6 +23,7 @@ KERNEL_SECTORS equ 20
 %endif
 KERNEL_SEGMENT   equ 0x1000   ; 0x1000:0x0000 = physical 0x10000
 KERNEL_LOAD_ADDR equ 0x10000
+SEGMENT_CHUNK_SECTORS equ 128 ; 128 * 512 = 65536 = exactly one 64KB real-mode segment
 
 ; VBE mode 0x112 = 640x480, 32 bits/pixel, linear framebuffer. Bit 14
 ; (0x4000) of the mode number tells VBE function 4F02h to use the linear
@@ -43,17 +44,59 @@ start:
     mov si, msg_stage2
     call print_string
 
+    ; Load the kernel across as many 64KB real-mode segments as it takes.
+    ; A single INT 13h AH=02h call only advances the 16-bit BX offset as
+    ; it fills the buffer -- it never carries into ES -- so one call
+    ; asking for more than SEGMENT_CHUNK_SECTORS (64KB / 512 = 128, one
+    ; full segment) would silently wrap BX back to 0 partway through and
+    ; overwrite the start of the buffer instead of extending it, with
+    ; carry left clear (no reported error). Splitting into chunks that
+    ; each start at offset 0 of their own segment (ES bumped by 0x1000 =
+    ; 64KB between chunks) keeps every individual read inside one
+    ; segment no matter how large KERNEL_SECTORS grows as the kernel
+    ; itself grows -- this used to only work by luck, staying under the
+    ; 128-sector limit by a shrinking margin (kernel.bin is already over
+    ; half that at time of writing).
     mov ax, KERNEL_SEGMENT
     mov es, ax
-    mov ah, 0x02              ; BIOS function: read sectors (CHS addressing)
-    mov al, KERNEL_SECTORS
-    mov ch, 0                  ; cylinder 0
     mov cl, KERNEL_START_SECTOR
+    mov word [sectors_left], KERNEL_SECTORS
+
+.load_chunk:
+    mov ax, [sectors_left]
+    or ax, ax
+    jz .load_done
+    cmp ax, SEGMENT_CHUNK_SECTORS
+    jbe .chunk_size_ok
+    mov ax, SEGMENT_CHUNK_SECTORS
+.chunk_size_ok:
+    mov [this_chunk], ax
+
+    mov ah, 0x02               ; BIOS function: read sectors (CHS addressing)
+    mov al, byte [this_chunk]
+    mov ch, 0                  ; cylinder 0
+    ; cl already holds this chunk's starting sector number
     mov dh, 0                  ; head 0
     mov dl, [boot_drive]
-    xor bx, bx                 ; ES:BX destination, ES = KERNEL_SEGMENT
+    xor bx, bx                 ; ES:BX destination, BX=0 -- start of this chunk's segment
     int 0x13
     jc disk_error
+    cmp al, byte [this_chunk]  ; AL is updated with sectors actually transferred --
+    jne disk_error              ; a short read without carry set is still a failure
+
+    mov ax, [sectors_left]
+    sub ax, [this_chunk]
+    mov [sectors_left], ax
+
+    mov al, byte [this_chunk]
+    add cl, al                  ; next chunk's starting sector number
+
+    mov ax, es
+    add ax, 0x1000               ; next chunk's segment, 64KB further up
+    mov es, ax
+
+    jmp .load_chunk
+.load_done:
 
     xor ax, ax
     mov es, ax                 ; restore ES=0 now that the disk read is done
@@ -144,6 +187,8 @@ vbe_error:
     jmp .hang16
 
 boot_drive db 0
+sectors_left dw 0   ; sectors still to load, decremented as load_chunk consumes them
+this_chunk   dw 0    ; size of the chunk load_chunk is currently reading/just read
 
 ; --- Global Descriptor Table: flat model, one code + one data segment,
 ; both base 0 / limit 4GB, so segmentation is effectively a no-op and all

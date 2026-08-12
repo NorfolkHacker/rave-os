@@ -124,8 +124,17 @@ static void format_uint(unsigned int v, char *out) {
     out[j] = 0;
 }
 
-static void str_append(char *dst, int *pos, const char *src) {
-    while (*src) {
+/* cap is dst's total size (including room for the terminator) -- every
+ * caller must pass sizeof(dst) for a real array, not a guess. src is
+ * truncated rather than overflowing dst if it would run past cap; this
+ * matters because some callers build dst out of on-disk filenames
+ * (fs_dirent.name) that are trusted only to fit FS_NAME_MAX, not to
+ * respect whatever fixed-size buffer they're being appended into. */
+static void str_append(char *dst, int *pos, int cap, const char *src) {
+    if (cap <= 0) {
+        return;
+    }
+    while (*src && *pos < cap - 1) {
         dst[(*pos)++] = *src++;
     }
     dst[*pos] = 0;
@@ -325,11 +334,11 @@ static void draw_window_group(const struct window *panel, const struct button *b
     button_draw(exit_btn);
 
     pos = 0;
-    str_append(line, &pos, "CLICKS: ");
+    str_append(line, &pos, (int)sizeof(line), "CLICKS: ");
     {
         char num[12];
         format_uint((unsigned int)click_count, num);
-        str_append(line, &pos, num);
+        str_append(line, &pos, (int)sizeof(line), num);
     }
     text_puts(btn->x, btn->y + btn->h + 16, line, TEXT_PRIMARY_COLOR, 1);
 
@@ -375,14 +384,20 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
 #define VIEWER_BUF_SIZE 512
 
 /* Appends name onto cwd ("/" gets name appended directly, without a
- * doubled leading slash; anything else gets a separating '/' first). */
-static void path_join(char *dst, const char *cwd, const char *name) {
+ * doubled leading slash; anything else gets a separating '/' first).
+ * cap is dst's real size (callers pass FILES_PATH_MAX, not a guess) --
+ * cwd is only ever built by this same bounded machinery, but name comes
+ * straight from an on-disk directory entry (fs_dirent.name), which fs.c
+ * only guarantees fits FS_NAME_MAX, not that cwd+"/"+name fits in
+ * FILES_PATH_MAX. A corrupted/crafted directory entry deep enough in the
+ * tree must truncate here, not overflow dst. */
+static void path_join(char *dst, int cap, const char *cwd, const char *name) {
     int pos = 0;
     if (!str_eq(cwd, "/")) {
-        str_append(dst, &pos, cwd);
+        str_append(dst, &pos, cap, cwd);
     }
-    str_append(dst, &pos, "/");
-    str_append(dst, &pos, name);
+    str_append(dst, &pos, cap, "/");
+    str_append(dst, &pos, cap, name);
 }
 
 /* In place: truncates cwd at its last '/', or resets to "/" if that was
@@ -435,15 +450,26 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
         int row_y = files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT;
         uint32_t text_color = TEXT_PRIMARY_COLOR;
 
-        str_append(line, &pos, file_entries[i].name);
+        /* file_entry_count can be as large as FS_MAX_FILES (20), but the
+         * window is only ever sized for a handful of visible rows. Stop
+         * drawing once a row would run past the window's bottom edge
+         * instead of walking gfx_fill_rect/text_puts below it -- rows
+         * this far down are already unreachable by
+         * files_list_hit_test()'s own py bounds check, so nothing here
+         * needs to become clickable, just stop being drawn. */
+        if (row_y + FILES_ROW_HEIGHT > files->y + files->h) {
+            break;
+        }
+
+        str_append(line, &pos, (int)sizeof(line), file_entries[i].name);
         if (file_entries[i].type == FS_TYPE_DIR) {
-            str_append(line, &pos, "/");
+            str_append(line, &pos, (int)sizeof(line), "/");
         } else {
             char num[12];
-            str_append(line, &pos, " ");
+            str_append(line, &pos, (int)sizeof(line), " ");
             format_uint(file_entries[i].size_bytes, num);
-            str_append(line, &pos, num);
-            str_append(line, &pos, "B");
+            str_append(line, &pos, (int)sizeof(line), num);
+            str_append(line, &pos, (int)sizeof(line), "B");
         }
 
         if ((int)i == files_selected) {
@@ -1225,10 +1251,10 @@ void kmain(void) {
                         }
                     } else if (hit >= 0 && file_entries[hit].type == FS_TYPE_DIR) {
                         char new_cwd[FILES_PATH_MAX];
-                        path_join(new_cwd, cwd, file_entries[hit].name);
+                        path_join(new_cwd, (int)sizeof(new_cwd), cwd, file_entries[hit].name);
                         {
                             int ci2;
-                            for (ci2 = 0; new_cwd[ci2]; ci2++) {
+                            for (ci2 = 0; new_cwd[ci2] && ci2 < (int)sizeof(cwd) - 1; ci2++) {
                                 cwd[ci2] = new_cwd[ci2];
                             }
                             cwd[ci2] = 0;
@@ -1242,7 +1268,7 @@ void kmain(void) {
                         char buf[VIEWER_BUF_SIZE];
                         unsigned int out_size;
 
-                        path_join(file_path, cwd, file_entries[hit].name);
+                        path_join(file_path, (int)sizeof(file_path), cwd, file_entries[hit].name);
                         console_output_clear(&viewer_co);
 
                         if (fs_read_file(file_path, buf, VIEWER_BUF_SIZE - 1, &out_size) != 0) {
@@ -1294,7 +1320,7 @@ void kmain(void) {
                 delete_btn.hovered = files_is_topmost && button_hit_test(&delete_btn, cx, cy);
                 if (delete_btn.hovered && click_edge && files_selected >= 0) {
                     char del_path[FILES_PATH_MAX];
-                    path_join(del_path, cwd, file_entries[files_selected].name);
+                    path_join(del_path, (int)sizeof(del_path), cwd, file_entries[files_selected].name);
                     if (fs_delete(del_path) == 0) {
                         files_selected = FILES_HIT_NONE;
                         if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
@@ -1340,8 +1366,8 @@ void kmain(void) {
                     char out[128];
                     int pos = 0, oi = 0, line_start = 0;
 
-                    str_append(echoed, &pos, "> ");
-                    str_append(echoed, &pos, ci.text);
+                    str_append(echoed, &pos, (int)sizeof(echoed), "> ");
+                    str_append(echoed, &pos, (int)sizeof(echoed), ci.text);
                     console_output_append_line(&co, echoed);
 
                     /* forth_eval_line() never touches console_output.h

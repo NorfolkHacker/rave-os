@@ -48,11 +48,24 @@ int gfx_height(void) {
     return boot_info->height;
 }
 
+/* Every drawing routine in this kernel funnels through these two
+ * functions to reach the backbuffer, so this is the one place that needs
+ * to clamp x/y against the screen -- anything off-screen (negative, or
+ * >= width/height) would otherwise compute an out-of-bounds index into
+ * backbuffer[], corrupting whatever memory sits before/after it. Callers
+ * (gfx_fill_rect, text_puts, ...) are free to pass coordinates that walk
+ * off-screen; clipping here means they don't each have to get it right. */
 uint32_t gfx_get_pixel(int x, int y) {
+    if (x < 0 || y < 0 || x >= gfx_width() || y >= gfx_height()) {
+        return 0;
+    }
     return backbuffer[y * gfx_width() + x];
 }
 
 void gfx_put_pixel(int x, int y, uint32_t rgb) {
+    if (x < 0 || y < 0 || x >= gfx_width() || y >= gfx_height()) {
+        return;
+    }
     backbuffer[y * gfx_width() + x] = rgb;
 }
 

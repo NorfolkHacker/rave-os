@@ -98,32 +98,53 @@ static int mouse_buffer_pop(unsigned char *out) {
     return 1;
 }
 
-/* Blocks by halting the CPU (hlt) until the next interrupt, rather than
- * busy-spinning on a port. Only used once a packet start byte has
- * already been found -- see mouse_poll_packet(). */
-static unsigned char wait_mouse_byte(void) {
-    unsigned char b;
-    while (!mouse_buffer_pop(&b)) {
-        __asm__ volatile("hlt");
-    }
-    return b;
-}
+/* Bytes already captured toward the packet currently in progress (0, 1,
+ * or 2) -- lets mouse_poll_packet() resume across calls instead of
+ * blocking internally to complete a packet. Genuinely necessary, not just
+ * defensive: mouse_irq_push_byte() above silently drops a byte if the
+ * ring is full, which can leave byte 1 or 2 of a packet missing after
+ * byte 0 was already consumed. Blocking (the previous wait_mouse_byte()
+ * approach) would then hang forever waiting for a byte that's never
+ * coming -- freezing the whole single-threaded event loop, despite
+ * mouse.h documenting this function as non-blocking. mouse_read_packet()
+ * below already supplies its own block-until-ready loop on top of this,
+ * so making this function honestly non-blocking doesn't change that
+ * caller's behavior at all. */
+static unsigned char pending[2];
+static int pending_count = 0;
 
 int mouse_poll_packet(int *dx, int *dy, int *buttons) {
     unsigned char b0, b1, b2;
     int raw_dx, raw_dy;
 
-    if (!mouse_buffer_pop(&b0)) {
-        return 0;
-    }
-    while (!(b0 & 0x08)) { /* bit 3 is always 1 in byte 0 of a real packet; resync on anything else */
-        if (!mouse_buffer_pop(&b0)) {
-            return 0; /* ran out of bytes mid-resync; caller tries again later */
+    if (pending_count == 0) {
+        unsigned char b;
+        if (!mouse_buffer_pop(&b)) {
+            return 0;
         }
+        while (!(b & 0x08)) { /* bit 3 is always 1 in byte 0 of a real packet; resync on anything else */
+            if (!mouse_buffer_pop(&b)) {
+                return 0; /* ran out of bytes mid-resync; caller tries again later */
+            }
+        }
+        pending[0] = b;
+        pending_count = 1;
     }
 
-    b1 = wait_mouse_byte();
-    b2 = wait_mouse_byte();
+    if (pending_count == 1) {
+        if (!mouse_buffer_pop(&pending[1])) {
+            return 0; /* byte 0 already captured; caller tries again later */
+        }
+        pending_count = 2;
+    }
+
+    if (!mouse_buffer_pop(&b2)) {
+        return 0; /* bytes 0/1 already captured; caller tries again later */
+    }
+
+    b0 = pending[0];
+    b1 = pending[1];
+    pending_count = 0;
 
     raw_dx = b1;
     raw_dy = b2;
