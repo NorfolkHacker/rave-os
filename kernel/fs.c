@@ -441,6 +441,49 @@ int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned in
     return 0;
 }
 
+int fs_delete(const char *path) {
+    struct fs_entry entries[FS_MAX_FILES];
+    char leaf[FS_NAME_MAX];
+    unsigned int table_lba;
+    int slot;
+    int i;
+
+    if (!mounted) {
+        fs_init();
+    }
+
+    if (walk_to_parent(path, leaf, &table_lba) != 0) {
+        return -1;
+    }
+
+    dirtable_read(table_lba, entries);
+    slot = dirtable_find(entries, leaf);
+    if (slot < 0) {
+        return -1; /* not found */
+    }
+
+    if (entries[slot].type == FS_TYPE_DIR) {
+        struct fs_entry sub_entries[FS_MAX_FILES];
+        int j;
+        dirtable_read(entries[slot].start_lba, sub_entries);
+        for (j = 0; j < FS_MAX_FILES; j++) {
+            if (sub_entries[j].name[0] != 0) {
+                return -1; /* refuse: not empty, no recursive delete */
+            }
+        }
+    }
+
+    for (i = 0; i < FS_NAME_MAX; i++) {
+        entries[slot].name[i] = 0;
+    }
+    entries[slot].start_lba = 0;
+    entries[slot].size_bytes = 0;
+    entries[slot].type = 0;
+    dirtable_write(table_lba, entries);
+
+    return 0;
+}
+
 int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count) {
     struct fs_entry entries[FS_MAX_FILES];
     unsigned int table_lba;

@@ -45,6 +45,15 @@ int fs_create_file(const char *path, const void *data, unsigned int size);
  * caller's buffer. */
 int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned int *out_size);
 
+/* Removes the entry at path from its parent's table. Fails (-1) if path
+ * doesn't exist, or if it names a non-empty directory -- there's no
+ * recursive delete yet, so a directory must be emptied first. Note: this
+ * only unlinks the directory-table entry; the sectors it (or a deleted
+ * file's data) occupied are never reclaimed, since the allocator is a
+ * simple one-way bump allocator with no free list yet. Returns 0 on
+ * success. */
+int fs_delete(const char *path);
+
 /* Lists path's direct entries (not recursive) into out[], up to
  * max_entries (callers should size their buffer to FS_MAX_FILES to never
  * truncate). path must name a directory -- "/" for root. Returns 0 and

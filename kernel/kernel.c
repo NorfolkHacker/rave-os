@@ -30,9 +30,10 @@
 #define CURSOR_SIZE 8
 
 /* Five windows exist right now (the interactive panel, a small static
- * info window, the Forth console, a navigable file manager, and a
- * read-only viewer for whatever file was last opened -- create/rename/
- * delete UI is still a later stage), tracked as a real array/z-order list
+ * info window, the Forth console, a navigable file manager -- which can
+ * now delete a selected entry too, create/rename still later -- and a
+ * read-only viewer for whatever file was last opened), tracked as a real
+ * array/z-order list
  * rather than named locals so every window is treated uniformly
  * regardless of what's inside it. Content still differs per window, so
  * each window's content is drawn via a kind-indexed dispatch
@@ -287,7 +288,8 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
  * site that moves the panel. */
 static void move_window_content(int kind, struct button *btn, struct button *exit_btn, struct textfield *tf,
                                 struct checkbox *cb, struct console_output *co, struct console_input *ci,
-                                struct console_output *viewer_co, int applied_dx, int applied_dy) {
+                                struct button *delete_btn, struct console_output *viewer_co, int applied_dx,
+                                int applied_dy) {
     if (kind == WIN_KIND_PANEL) {
         btn->x += applied_dx;
         btn->y += applied_dy;
@@ -302,12 +304,14 @@ static void move_window_content(int kind, struct button *btn, struct button *exi
         co->y += applied_dy;
         ci->x += applied_dx;
         ci->y += applied_dy;
+    } else if (kind == WIN_KIND_FILES) {
+        delete_btn->x += applied_dx;
+        delete_btn->y += applied_dy;
     } else if (kind == WIN_KIND_VIEWER) {
         viewer_co->x += applied_dx;
         viewer_co->y += applied_dy;
     }
-    /* WIN_KIND_INFO and WIN_KIND_FILES have no content widgets to move --
-     * the files window's listing is plain text, no widgets of its own. */
+    /* WIN_KIND_INFO has no content widgets to move. */
 }
 
 static void draw_window_group(const struct window *panel, const struct button *btn,
@@ -359,6 +363,11 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
 #define FILES_ROW_HEIGHT 20
 #define FILES_LIST_Y_OFFSET 12
 
+/* Subtle green tint behind the row a right-click selected -- same value
+ * as BUTTON_HOVER_COLOR (button.c) so a "highlighted" thing looks the
+ * same everywhere in the UI, not a color invented just for this. */
+#define FILES_SELECTED_BG_COLOR 0x123322
+
 /* One sector's worth -- every current test file is far smaller. Read
  * calls use VIEWER_BUF_SIZE - 1 so there's always room for a manual nul
  * terminator, since fs_read_file() copies exactly out_size raw bytes and
@@ -395,12 +404,15 @@ static void path_parent(char *cwd) {
 }
 
 /* The fourth window: a listing of the current directory (cwd), navigable
- * -- Stage B of the file manager. Row 0 is always the path itself
- * (not clickable); row 1 is ".." if cwd isn't root; real entries follow.
+ * -- Stage B of the file manager, plus (Stage D) a right-click-selected
+ * entry and a DELETE button. Row 0 is always the path itself (not
+ * clickable); row 1 is ".." if cwd isn't root; real entries follow.
  * files_list_hit_test() below mirrors this exact row numbering so the two
- * can never disagree about what a given pixel row means. */
+ * can never disagree about what a given pixel row means. files_selected is
+ * an index into file_entries (FILES_HIT_NONE for "nothing selected") --
+ * the row it names, if any, is drawn with a highlight background. */
 static void draw_files_group(const struct window *files, const char *cwd, const struct fs_dirent *file_entries,
-                             unsigned int file_entry_count) {
+                             unsigned int file_entry_count, int files_selected, const struct button *delete_btn) {
     unsigned int i;
     int row = 1;
 
@@ -415,12 +427,13 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
     if (file_entry_count == 0) {
         text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT, "(EMPTY)", TEXT_MUTED_COLOR,
                   1);
-        return;
     }
 
     for (i = 0; i < file_entry_count; i++) {
         char line[FS_NAME_MAX + 16];
         int pos = 0;
+        int row_y = files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT;
+        uint32_t text_color = TEXT_PRIMARY_COLOR;
 
         str_append(line, &pos, file_entries[i].name);
         if (file_entries[i].type == FS_TYPE_DIR) {
@@ -433,10 +446,16 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
             str_append(line, &pos, "B");
         }
 
-        text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT, line, TEXT_PRIMARY_COLOR,
-                  1);
+        if ((int)i == files_selected) {
+            gfx_fill_rect(files->x + 4, row_y - 2, files->w - 8, FILES_ROW_HEIGHT - 2, FILES_SELECTED_BG_COLOR);
+            text_color = TEXT_ACCENT_COLOR;
+        }
+
+        text_puts(files->x + 8, row_y, line, text_color, 1);
         row++;
     }
+
+    button_draw(delete_btn);
 }
 
 #define FILES_HIT_NONE (-1)
@@ -492,13 +511,14 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
                                  const struct checkbox *cb, const struct console_output *co,
                                  const struct console_input *ci, const char *ata_status, const char *fs_status,
                                  const char *cwd, const struct fs_dirent *file_entries, unsigned int file_entry_count,
+                                 int files_selected, const struct button *delete_btn,
                                  const struct console_output *viewer_co) {
     if (idx == WIN_KIND_PANEL) {
         draw_window_group(&windows[idx], btn, exit_btn, click_count, tf, cb);
     } else if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
     } else if (idx == WIN_KIND_FILES) {
-        draw_files_group(&windows[idx], cwd, file_entries, file_entry_count);
+        draw_files_group(&windows[idx], cwd, file_entries, file_entry_count, files_selected, delete_btn);
     } else if (idx == WIN_KIND_VIEWER) {
         draw_viewer_group(&windows[idx], viewer_co);
     } else {
@@ -518,8 +538,8 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
                        const int *z_order, const struct taskbar *bar, int hovered_entry,
                        const struct desktop_icons *icons, int icon_hovered, int mx, int my, uint32_t cursor_color,
                        const char *ata_status, const char *fs_status, const char *cwd,
-                       const struct fs_dirent *file_entries, unsigned int file_entry_count,
-                       const struct console_output *viewer_co) {
+                       const struct fs_dirent *file_entries, unsigned int file_entry_count, int files_selected,
+                       const struct button *delete_btn, const struct console_output *viewer_co) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -539,7 +559,7 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
             draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status,
-                                 cwd, file_entries, file_entry_count, viewer_co);
+                                 cwd, file_entries, file_entry_count, files_selected, delete_btn, viewer_co);
         }
     }
 
@@ -595,6 +615,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
                                int old_hovered_entry, const struct desktop_icons *icons, int icon_hovered,
                                int old_icon_hovered, const char *ata_status, const char *fs_status, const char *cwd,
                                const struct fs_dirent *file_entries, unsigned int file_entry_count,
+                               int files_selected, const struct button *delete_btn,
                                const struct console_output *viewer_co) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
@@ -728,7 +749,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
             draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status, cwd,
-                                 file_entries, file_entry_count, viewer_co);
+                                 file_entries, file_entry_count, files_selected, delete_btn, viewer_co);
         }
     }
 
@@ -746,6 +767,7 @@ void kmain(void) {
     int mx, my;
     int click_count = 0;
     int prev_left_held = 0;
+    int prev_right_held = 0;
     int dragging_window = -1;
     int taskbar_hovered = -1;
     int icon_hovered = -1;
@@ -763,11 +785,13 @@ void kmain(void) {
     struct desktop_icons icons;
     struct button btn;
     struct button exit_btn;
+    struct button delete_btn;
     const char *ata_status;
     const char *fs_status;
     char cwd[FILES_PATH_MAX];
     struct fs_dirent file_entries[FS_MAX_FILES];
     unsigned int file_entry_count;
+    int files_selected = FILES_HIT_NONE;
 
     gfx_init();
     w = gfx_width();
@@ -829,11 +853,27 @@ void kmain(void) {
     windows[WIN_KIND_FILES].x = 420;
     windows[WIN_KIND_FILES].y = 120;
     windows[WIN_KIND_FILES].w = 180;
-    windows[WIN_KIND_FILES].h = 190;
+    /* 34px taller than Stage A-C's plain listing -- room for the DELETE
+     * button footer added below, without shrinking the list's existing
+     * ~8-row capacity. */
+    windows[WIN_KIND_FILES].h = 224;
     windows[WIN_KIND_FILES].title = "RAVE-OS FILES";
     windows[WIN_KIND_FILES].state = WINDOW_OPEN;
     windows[WIN_KIND_FILES].minimize_hovered = 0;
     windows[WIN_KIND_FILES].close_hovered = 0;
+
+    /* Right-click a row to select it (files_selected, set in the event
+     * loop below), then this button deletes it via fs_delete(). Sits in
+     * a footer strip below the listing, same left margin as the list
+     * text and bottom margin the panel's buttons use inside their
+     * window. No-op if nothing is selected -- see the click handler. */
+    delete_btn.x = windows[WIN_KIND_FILES].x + 8;
+    delete_btn.y = windows[WIN_KIND_FILES].y + windows[WIN_KIND_FILES].h - 30;
+    delete_btn.w = windows[WIN_KIND_FILES].w - 16;
+    delete_btn.h = 22;
+    delete_btn.label = "DELETE";
+    delete_btn.hovered = 0;
+    delete_btn.pressed = 0;
 
     /* Wide and short, suited to a handful of text lines rather than a
      * long listing -- sits below the other windows, clear of the taskbar. */
@@ -946,7 +986,7 @@ void kmain(void) {
 
     draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, &bar, taskbar_hovered,
               &icons, icon_hovered, mx, my, cursor_color, ata_status, fs_status, cwd, file_entries, file_entry_count,
-              &viewer_co);
+              files_selected, &delete_btn, &viewer_co);
     gfx_present();
 
     for (;;) {
@@ -975,6 +1015,9 @@ void kmain(void) {
         int old_ci_focused = ci.focused;
         char old_ci_text[CONSOLE_INPUT_MAX + 1];
         char old_cwd[FILES_PATH_MAX];
+        int old_files_selected = files_selected;
+        int old_delete_btn_hovered = delete_btn.hovered;
+        int old_delete_btn_pressed = delete_btn.pressed;
         int i;
 
         for (i = 0; ci.text[i]; i++) {
@@ -1006,7 +1049,7 @@ void kmain(void) {
          * queued packets into one redraw keeps the loop caught up instead
          * of falling further behind with every packet. */
         while (mouse_poll_packet(&dx, &dy, &buttons)) {
-            int left_held, cx, cy;
+            int left_held, right_held, cx, cy;
 
             mx += dx;
             my += dy;
@@ -1024,6 +1067,7 @@ void kmain(void) {
             }
 
             left_held = buttons & 0x01;
+            right_held = buttons & 0x02;
             cx = mx + CURSOR_SIZE / 2;
             cy = my + CURSOR_SIZE / 2;
 
@@ -1051,8 +1095,8 @@ void kmain(void) {
 
                     applied_dx = windows[dragging_window].x - drag_start_x;
                     applied_dy = windows[dragging_window].y - drag_start_y;
-                    move_window_content(dragging_window, &btn, &exit_btn, &tf, &cb, &co, &ci, &viewer_co, applied_dx,
-                                        applied_dy);
+                    move_window_content(dragging_window, &btn, &exit_btn, &tf, &cb, &co, &ci, &delete_btn, &viewer_co,
+                                        applied_dx, applied_dy);
                 } else {
                     dragging_window = -1;
                 }
@@ -1175,6 +1219,7 @@ void kmain(void) {
 
                     if (hit == FILES_HIT_UP) {
                         path_parent(cwd);
+                        files_selected = FILES_HIT_NONE; /* stale relative to the new listing */
                         if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
@@ -1188,6 +1233,7 @@ void kmain(void) {
                             }
                             cwd[ci2] = 0;
                         }
+                        files_selected = FILES_HIT_NONE; /* stale relative to the new listing */
                         if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
@@ -1226,9 +1272,41 @@ void kmain(void) {
                         raise_window(z_order, WIN_KIND_VIEWER);
                     }
                 }
+
+                /* Right-click selects a row for deletion without
+                 * triggering the left-click navigate/open behavior above
+                 * -- the mouse driver already decodes this bit
+                 * (mouse.h's buttons bitmask), just unused until now.
+                 * Right-clicking the already-selected row deselects it. */
+                if (files_is_topmost && right_held && !prev_right_held) {
+                    int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy);
+                    if (hit >= 0) {
+                        files_selected = (files_selected == hit) ? FILES_HIT_NONE : hit;
+                    }
+                }
+
+                /* Deletes whatever files_selected names. A non-empty
+                 * directory or an already-stale selection just makes
+                 * fs_delete() fail, left as a silent no-op -- no
+                 * error-message UI in the FILES window yet, same
+                 * deferred-for-now choice as this window's other no-ops
+                 * (e.g. clicking the header row). */
+                delete_btn.hovered = files_is_topmost && button_hit_test(&delete_btn, cx, cy);
+                if (delete_btn.hovered && click_edge && files_selected >= 0) {
+                    char del_path[FILES_PATH_MAX];
+                    path_join(del_path, cwd, file_entries[files_selected].name);
+                    if (fs_delete(del_path) == 0) {
+                        files_selected = FILES_HIT_NONE;
+                        if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+                            file_entry_count = 0;
+                        }
+                    }
+                }
+                delete_btn.pressed = delete_btn.hovered && left_held;
             }
 
             prev_left_held = left_held;
+            prev_right_held = right_held;
             cursor_color = left_held ? CURSOR_CLICK_COLOR : CURSOR_IDLE_COLOR;
 
             had_event = 1;
@@ -1312,14 +1390,17 @@ void kmain(void) {
             touched[WIN_KIND_FORTH] = touched[WIN_KIND_FORTH] || (co.generation != old_co_generation) ||
                                       (ci.len != old_ci_len) || (ci.cursor != old_ci_cursor) ||
                                       (ci.focused != old_ci_focused) || !str_eq(ci.text, old_ci_text);
-            touched[WIN_KIND_FILES] = touched[WIN_KIND_FILES] || !str_eq(cwd, old_cwd);
+            touched[WIN_KIND_FILES] = touched[WIN_KIND_FILES] || !str_eq(cwd, old_cwd) ||
+                                      (files_selected != old_files_selected) ||
+                                      (delete_btn.hovered != old_delete_btn_hovered) ||
+                                      (delete_btn.pressed != old_delete_btn_pressed);
             touched[WIN_KIND_VIEWER] = touched[WIN_KIND_VIEWER] || (viewer_co.generation != old_viewer_co_generation);
 
             update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, old_z,
                                old_mx, old_my, mx, my, cursor_color, old_x, old_y, touched,
                                cb.checked != old_cb_checked, &bar, taskbar_hovered, old_taskbar_hovered, &icons,
                                icon_hovered, old_icon_hovered, ata_status, fs_status, cwd, file_entries,
-                               file_entry_count, &viewer_co);
+                               file_entry_count, files_selected, &delete_btn, &viewer_co);
         } else {
             __asm__ volatile("hlt");
         }
