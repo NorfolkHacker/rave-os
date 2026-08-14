@@ -50,7 +50,7 @@ fs.img:
 # (0x1F0-0x1F7, 0x3F6) the kernel's ATA driver talks to, just a different
 # drive-select bit, so no secondary-channel support is needed yet.
 run: disk.img fs.img
-	$(QEMU) -drive file=disk.img,format=raw,if=ide,bus=0,unit=0 -drive file=fs.img,format=raw,if=ide,bus=0,unit=1
+	$(QEMU) -accel kvm -drive file=disk.img,format=raw,if=ide,bus=0,unit=0 -drive file=fs.img,format=raw,if=ide,bus=0,unit=1
 
 clean:
 	rm -f stage1.bin stage2.bin disk.img fs.img
