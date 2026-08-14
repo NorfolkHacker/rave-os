@@ -31,7 +31,7 @@
 
 /* Five windows exist right now (the interactive panel, a small static
  * info window, the Forth console, a navigable file manager -- which can
- * now delete a selected entry too, create/rename still later -- and a
+ * now delete, create, and rename entries too -- and a
  * read-only viewer for whatever file was last opened), tracked as a real
  * array/z-order list
  * rather than named locals so every window is treated uniformly
@@ -1474,18 +1474,35 @@ void kmain(void) {
             } else if (name_input.focused && c == KEY_RIGHT) {
                 console_input_move_cursor(&name_input, 1);
             } else if (name_input.focused) {
-                /* Enter creates a plain file with the typed name -- NEW
-                 * DIR (the click handler above) is the only way to
-                 * create a directory, so Enter unambiguously means
-                 * "file" here, the same Enter-submits convention the
-                 * Forth console already uses. An empty name, or an
-                 * already-existing/full-table failure from
-                 * fs_create_file(), is a silent no-op that leaves the
-                 * typed name in place, same as NEW DIR's failure case. */
+                /* Enter's meaning depends on whether a row is selected
+                 * (Stage D's right-click selection, files_selected):
+                 * with a selection, it renames that entry to the typed
+                 * name; with none, it creates a plain file with that
+                 * name, same as before -- NEW DIR (the click handler
+                 * above) remains the only way to create a directory.
+                 * Splitting the action on selection state, rather than
+                 * adding a third RENAME button, follows the same
+                 * one-field reasoning Stage E used for NEW DIR vs.
+                 * Enter-creates-a-file. Either way, an empty name or a
+                 * failure (fs_rename()/fs_create_file() returning
+                 * nonzero -- not found, name taken, too long, ...) is a
+                 * silent no-op that leaves the typed name in place, same
+                 * as NEW DIR's failure case. A successful rename leaves
+                 * files_selected as-is: renaming is in place, so the
+                 * same table slot -- and thus the same listing index --
+                 * still names the (now renamed) entry. */
                 if (console_input_feed_char(&name_input, c) && name_input.text[0] != 0) {
-                    char new_path[FILES_PATH_MAX];
-                    path_join(new_path, (int)sizeof(new_path), cwd, name_input.text);
-                    if (fs_create_file(new_path, 0, 0) == 0) {
+                    int ok;
+                    if (files_selected >= 0) {
+                        char old_path[FILES_PATH_MAX];
+                        path_join(old_path, (int)sizeof(old_path), cwd, file_entries[files_selected].name);
+                        ok = fs_rename(old_path, name_input.text) == 0;
+                    } else {
+                        char new_path[FILES_PATH_MAX];
+                        path_join(new_path, (int)sizeof(new_path), cwd, name_input.text);
+                        ok = fs_create_file(new_path, 0, 0) == 0;
+                    }
+                    if (ok) {
                         console_input_clear(&name_input);
                         if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
                             file_entry_count = 0;

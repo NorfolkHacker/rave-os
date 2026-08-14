@@ -54,6 +54,15 @@ int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned in
  * success. */
 int fs_delete(const char *path);
 
+/* Renames the entry at path to new_name, in place, within the same parent
+ * directory -- new_name is a bare leaf name, not a path, so this can't
+ * move an entry to a different directory. Fails (-1) if path doesn't
+ * exist, new_name is empty, contains '/', is longer than 15 characters,
+ * or already names a different entry in the same directory. Works on
+ * files and directories alike -- a directory's contents aren't touched,
+ * only its own table entry. Returns 0 on success. */
+int fs_rename(const char *path, const char *new_name);
+
 /* Lists path's direct entries (not recursive) into out[], up to
  * max_entries (callers should size their buffer to FS_MAX_FILES to never
  * truncate). path must name a directory -- "/" for root. Returns 0 and

@@ -542,6 +542,48 @@ int fs_delete(const char *path) {
     return dirtable_write(table_lba, entries);
 }
 
+int fs_rename(const char *path, const char *new_name) {
+    struct fs_entry entries[FS_MAX_FILES];
+    char leaf[FS_NAME_MAX];
+    unsigned int table_lba;
+    int slot;
+    int existing;
+    int i;
+
+    if (!mounted) {
+        fs_init();
+    }
+
+    if (walk_to_parent(path, leaf, &table_lba) != 0) {
+        return -1;
+    }
+
+    if (dirtable_read(table_lba, entries) != 0) {
+        return -1;
+    }
+    slot = dirtable_find(entries, leaf);
+    if (slot < 0) {
+        return -1; /* not found */
+    }
+
+    if (new_name[0] == 0) {
+        return -1;
+    }
+    for (i = 0; new_name[i]; i++) {
+        if (new_name[i] == '/' || i >= FS_NAME_MAX - 1) {
+            return -1;
+        }
+    }
+
+    existing = dirtable_find(entries, new_name);
+    if (existing >= 0 && existing != slot) {
+        return -1; /* taken by a different entry */
+    }
+
+    name_copy(entries[slot].name, new_name);
+    return dirtable_write(table_lba, entries);
+}
+
 int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count) {
     struct fs_entry entries[FS_MAX_FILES];
     unsigned int table_lba;
