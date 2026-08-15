@@ -1043,6 +1043,7 @@ void kmain(void) {
      * masked-PIC ordering the line above exists for. */
     ata_status = ata_selftest();
     fs_status = fs_selftest();
+    fs_bootstrap_dirs();
 
     /* Read once here (and again only when a navigation click actually
      * changes cwd, below), not on every redraw -- this kernel's event loop

@@ -22,6 +22,14 @@ struct fs_dirent {
  * Safe to call more than once (re-reads the superblock each time). */
 void fs_init(void);
 
+/* Idempotent: creates /BIN /ETC /HOME /USR /VAR /TMP if they don't
+ * already exist (fs_create_dir()'s "already exists" failure is treated
+ * as success), the same shape fs_selftest() already relies on for
+ * /TESTDIR. Safe -- expected -- to call every boot, not just on a fresh
+ * format. Deliberately does NOT create /DEV -- that name is reserved
+ * for fs_list_dir()'s synthetic listing, see its own comment below. */
+void fs_bootstrap_dirs(void);
+
 /* Paths are absolute and '/'-separated, e.g. "/TESTDIR/NESTED.TXT" -- no
  * relative paths or a current-directory concept yet. Each component is
  * capped at 15 characters, and a path may have at most FS_MAX_PATH_DEPTH

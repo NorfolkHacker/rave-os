@@ -618,6 +618,21 @@ int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entrie
     return 0;
 }
 
+#define FS_NUM_STANDARD_DIRS 6
+static const char *const fs_standard_dirs[FS_NUM_STANDARD_DIRS] = {
+    "/BIN", "/ETC", "/HOME", "/USR", "/VAR", "/TMP",
+};
+
+void fs_bootstrap_dirs(void) {
+    int i;
+    if (!mounted) {
+        fs_init();
+    }
+    for (i = 0; i < FS_NUM_STANDARD_DIRS; i++) {
+        fs_create_dir(fs_standard_dirs[i]); /* -1 ("already exists", or a full parent table) is fine to ignore here -- boot-time plumbing, not a user action */
+    }
+}
+
 #define FS_SELFTEST_DIR "/TESTDIR"
 #define FS_SELFTEST_PATH "/TESTDIR/NESTED.TXT"
 static const char fs_selftest_content[] = "RAVE-OS FS OK";
