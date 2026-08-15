@@ -457,7 +457,7 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
         int row_y = files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT;
         uint32_t text_color = TEXT_PRIMARY_COLOR;
 
-        /* file_entry_count can be as large as FS_MAX_FILES (20), but the
+        /* file_entry_count can be as large as FS_LIST_MAX (21), but the
          * window is only ever sized for a handful of visible rows. Stop
          * drawing once a row would run past name_input's top edge (the
          * start of the footer chrome, not the window's own bottom edge --
@@ -834,7 +834,7 @@ void kmain(void) {
     const char *ata_status;
     const char *fs_status;
     char cwd[FILES_PATH_MAX];
-    struct fs_dirent file_entries[FS_MAX_FILES];
+    struct fs_dirent file_entries[FS_LIST_MAX];
     unsigned int file_entry_count;
     int files_selected = FILES_HIT_NONE;
 
@@ -1052,7 +1052,7 @@ void kmain(void) {
      * nearly every frame once this window exists. */
     cwd[0] = '/';
     cwd[1] = 0;
-    if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+    if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
         file_entry_count = 0;
     }
 
@@ -1304,7 +1304,7 @@ void kmain(void) {
                     if (hit == FILES_HIT_UP) {
                         path_parent(cwd);
                         files_selected = FILES_HIT_NONE; /* stale relative to the new listing */
-                        if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+                        if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
                     } else if (hit >= 0 && file_entries[hit].type == FS_TYPE_DIR) {
@@ -1318,7 +1318,7 @@ void kmain(void) {
                             cwd[ci2] = 0;
                         }
                         files_selected = FILES_HIT_NONE; /* stale relative to the new listing */
-                        if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+                        if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
                     } else if (hit >= 0 && file_entries[hit].type == FS_TYPE_FILE) {
@@ -1381,7 +1381,7 @@ void kmain(void) {
                     path_join(del_path, (int)sizeof(del_path), cwd, file_entries[files_selected].name);
                     if (fs_delete(del_path) == 0) {
                         files_selected = FILES_HIT_NONE;
-                        if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+                        if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
                     }
@@ -1402,7 +1402,7 @@ void kmain(void) {
                     path_join(new_path, (int)sizeof(new_path), cwd, name_input.text);
                     if (fs_create_dir(new_path) == 0) {
                         console_input_clear(&name_input);
-                        if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+                        if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
                     }
@@ -1505,7 +1505,7 @@ void kmain(void) {
                     }
                     if (ok) {
                         console_input_clear(&name_input);
-                        if (fs_list_dir(cwd, file_entries, FS_MAX_FILES, &file_entry_count) != 0) {
+                        if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
                     }

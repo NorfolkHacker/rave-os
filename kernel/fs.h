@@ -7,6 +7,12 @@
 #define FS_MAX_FILES 20
 #define FS_NAME_MAX 16
 
+/* fs_list_dir()'s true worst case: FS_MAX_FILES real entries plus one
+ * synthetic "DEV" row when listing root (see fs_list_dir()'s own
+ * comment below) -- callers must size their listing buffer to this,
+ * not FS_MAX_FILES, or the synthetic row can be silently dropped. */
+#define FS_LIST_MAX (FS_MAX_FILES + 1)
+
 #define FS_TYPE_FILE 0
 #define FS_TYPE_DIR 1
 
@@ -37,14 +43,16 @@ void fs_bootstrap_dirs(void);
 
 /* Creates a directory at path. The parent must already exist and be a
  * directory; fails (-1) if the path itself already exists, the parent's
- * table is full, or there isn't room left before the reserved tail
- * sector (see fs.c). Returns 0 on success. */
+ * table is full, there isn't room left before the reserved tail sector
+ * (see fs.c), or the path is exactly "/DEV" (reserved -- see
+ * fs_list_dir()'s comment). Returns 0 on success. */
 int fs_create_dir(const char *path);
 
 /* Write-once: fails (-1) if a file at this path already exists, if the
- * parent directory doesn't exist, if the parent's table is full, or if
- * there isn't enough room left before the reserved tail sector. No
- * delete/overwrite yet -- deferred to a later stage. Returns 0 on
+ * parent directory doesn't exist, if the parent's table is full, if
+ * there isn't enough room left before the reserved tail sector, or if
+ * the path is exactly "/DEV" (reserved -- see fs_list_dir()'s comment).
+ * No delete/overwrite yet -- deferred to a later stage. Returns 0 on
  * success. */
 int fs_create_file(const char *path, const void *data, unsigned int size);
 
@@ -66,13 +74,15 @@ int fs_delete(const char *path);
  * directory -- new_name is a bare leaf name, not a path, so this can't
  * move an entry to a different directory. Fails (-1) if path doesn't
  * exist, new_name is empty, contains '/', is longer than 15 characters,
- * or already names a different entry in the same directory. Works on
- * files and directories alike -- a directory's contents aren't touched,
- * only its own table entry. Returns 0 on success. */
+ * already names a different entry in the same directory, or new_name is
+ * exactly "DEV" and path's parent is root (reserved -- see
+ * fs_list_dir()'s comment). Works on files and directories alike -- a
+ * directory's contents aren't touched, only its own table entry. Returns
+ * 0 on success. */
 int fs_rename(const char *path, const char *new_name);
 
 /* Lists path's direct entries (not recursive) into out[], up to
- * max_entries (callers should size their buffer to FS_MAX_FILES to never
+ * max_entries (callers should size their buffer to FS_LIST_MAX to never
  * truncate). path must name a directory -- "/" for root. Returns 0 and
  * sets *out_count on success, -1 if path doesn't exist or isn't a
  * directory.

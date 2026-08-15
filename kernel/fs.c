@@ -17,6 +17,8 @@
  * private copy here would just be a second definition to keep in sync. */
 #define FS_MAX_PATH_DEPTH 4
 
+#define FS_DEV_NAME "DEV" /* the bare (not "/DEV" path) reserved name -- kept in one place so the write-guards and fs_list_dir()'s synthesis can't drift apart */
+
 #define FS_SUPERBLOCK_LBA 0
 #define FS_ROOT_LBA 1 /* root directory's own entry table -- same shape as any other directory's */
 #define FS_DATA_START_LBA 2
@@ -51,6 +53,14 @@ struct fs_entry {
 static struct fs_superblock sb;
 static int mounted = 0;
 
+/* Caps its comparison at FS_NAME_MAX (16) bytes and reports equal if
+ * both strings match up to that point with no terminator seen yet --
+ * correct for the FS_NAME_MAX-bounded entry names this was written for,
+ * but a silent prefix-equality trap if ever used to compare two longer
+ * strings (e.g. full paths) that happen to share their first 16 bytes.
+ * Every current caller passes a short literal ("/DEV", "/", or an
+ * entry name already known to fit) that terminates the loop well before
+ * byte 16, so this is a latent risk, not a live bug. */
 static int str_eq(const char *a, const char *b) {
     int i;
     for (i = 0; i < FS_NAME_MAX; i++) {
@@ -338,7 +348,7 @@ int fs_create_dir(const char *path) {
         return -1;
     }
 
-    if (table_lba == FS_ROOT_LBA && str_eq(leaf, "DEV")) {
+    if (table_lba == FS_ROOT_LBA && str_eq(leaf, FS_DEV_NAME)) {
         return -1; /* reserved: /DEV is synthetic (see fs_list_dir()), never a real directory */
     }
 
@@ -392,7 +402,7 @@ int fs_create_file(const char *path, const void *data, unsigned int size) {
         return -1;
     }
 
-    if (table_lba == FS_ROOT_LBA && str_eq(leaf, "DEV")) {
+    if (table_lba == FS_ROOT_LBA && str_eq(leaf, FS_DEV_NAME)) {
         return -1; /* reserved: /DEV is synthetic (see fs_list_dir()), never a real directory */
     }
 
@@ -583,7 +593,7 @@ int fs_rename(const char *path, const char *new_name) {
         }
     }
 
-    if (table_lba == FS_ROOT_LBA && str_eq(new_name, "DEV")) {
+    if (table_lba == FS_ROOT_LBA && str_eq(new_name, FS_DEV_NAME)) {
         return -1; /* reserved: renaming something to shadow synthetic /DEV */
     }
 
@@ -655,7 +665,7 @@ int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entrie
         if (count >= max_entries) {
             break; /* truncate rather than overflow the caller's buffer */
         }
-        if (is_root && str_eq(entries[i].name, "DEV")) {
+        if (is_root && str_eq(entries[i].name, FS_DEV_NAME)) {
             dev_shadowed = 1; /* a real entry already claims the name; don't double-list it */
         }
         name_copy(out[count].name, entries[i].name);
@@ -665,7 +675,7 @@ int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entrie
     }
 
     if (is_root && !dev_shadowed && count < max_entries) {
-        name_copy(out[count].name, "DEV");
+        name_copy(out[count].name, FS_DEV_NAME);
         out[count].type = FS_TYPE_DIR;
         out[count].size_bytes = 0;
         count++;
