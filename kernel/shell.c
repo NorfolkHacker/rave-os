@@ -100,11 +100,15 @@ static void shell_first_word(const char *line, char *out, int cap) {
 
 /* Resolves arg against sh->cwd into resolved (cap should be
  * FS_PATH_MAX): a leading '/' is used as-is (absolute); the bare token
- * ".." copies cwd and walks up via fs_path_parent(); anything else
- * joins onto cwd via fs_path_join(). Deliberately does not support a
- * ".." embedded partway through a longer relative path (e.g.
- * "../foo") -- the FILES window's own ".." affordance is exactly this
- * same one-level granularity, and the shell reaches the same set of
+ * ".." copies cwd and walks up via fs_path_parent(); the bare token "."
+ * copies cwd unchanged (real bash's "current directory, no-op" -- with
+ * no `.` entry ever on disk, this needs its own branch the same way
+ * ".." does, or it would fall through to fs_path_join() and look for a
+ * real entry literally named "."); anything else joins onto cwd via
+ * fs_path_join(). Deliberately does not support "." or ".." embedded
+ * partway through a longer relative path (e.g. "../foo", "./foo") --
+ * the FILES window's own ".." affordance is exactly this same
+ * one-level granularity, and the shell reaches the same set of
  * destinations FILES already does, not a superset. */
 static void shell_resolve(const struct shell *sh, const char *arg, char *resolved, int cap) {
     if (arg[0] == '/') {
@@ -114,6 +118,9 @@ static void shell_resolve(const struct shell *sh, const char *arg, char *resolve
         int pos = 0;
         shell_append(resolved, &pos, cap, sh->cwd);
         fs_path_parent(resolved);
+    } else if (arg[0] == '.' && arg[1] == 0) {
+        int pos = 0;
+        shell_append(resolved, &pos, cap, sh->cwd);
     } else {
         fs_path_join(resolved, cap, sh->cwd, arg);
     }

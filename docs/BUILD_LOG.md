@@ -994,3 +994,13 @@ Picked up next, on request: closes the last of the final code review's Minor rec
 **Verified headlessly**: booted, opened SHELL, typed `ls` at boot -> echoed as `/ > LS`; typed `cd home` -> echoed `/ > CD HOME`; typed `ls` again -> echoed `/HOME > LS`, confirming the prompt tracks `cwd` correctly across a real directory change, not just showing a static value from boot.
 
 Files: `kernel/kernel.c` only (the shell's Enter-key handler's `echoed` construction).
+
+## 2026-08-15 -- SHELL: `cd .` added alongside `cd ..`
+
+Picked up next, on request: `..` (one level up) already had its own special case in `shell_resolve()`, but `.` (current directory, real bash's own no-op form) didn't -- it would have fallen through to the general `fs_path_join()` branch and looked for a real directory-table entry literally named `.`, which never exists on disk, so `cd .` would have failed with `cd: no such directory` despite being valid in every real shell.
+
+**One new branch in `shell_resolve()`**, same shape as the existing `..` one: `arg[0] == '.' && arg[1] == 0` copies `cwd` into `resolved` unchanged (no `fs_path_parent()` call, since nothing should change). Applies to every command that resolves a path (`cd`/`ls`/`cat`/`mkdir`/`rm`), not just `cd`, since they all funnel through the same function -- `ls .` and `cat ./x`-shaped things (well, `cat .` alone; multi-segment paths remain out of scope, same restriction `..` already has) get the same treatment for free.
+
+**Verified headlessly**: `cd home` -> `pwd`-equivalent confirmed via the prompt (`/HOME >`); `cd .` -> next prompt still `/HOME >`, confirming no change; `cd ..` -> `pwd` confirmed `/`, confirming the sibling case still works correctly alongside the new one.
+
+Files: `kernel/shell.c` only (`shell_resolve()`'s new `.` branch, doc comment updated).
