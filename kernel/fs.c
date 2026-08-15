@@ -455,6 +455,119 @@ int fs_create_file(const char *path, const void *data, unsigned int size) {
     return dirtable_write(table_lba, entries);
 }
 
+/* Appends data to an existing file, or creates it (via fs_create_file())
+ * if it doesn't exist yet -- a logger shouldn't need two separate code
+ * paths for "first write" vs. "later writes". Every other write in this
+ * file is write-once; this is the first genuine append, and the bump
+ * allocator (no free list, no reclaim) shapes what it can safely do:
+ * spare space in the file's own already-allocated last sector is always
+ * safe to fill in place, but growing onto MORE sectors is only safe
+ * when this file's data is still the very last thing the allocator has
+ * handed out (start_lba + old_sectors == sb.next_free_lba) -- otherwise
+ * something else already occupies the sectors right after it, and
+ * there's no relocate-and-copy support here. Refuses (-1) rather than
+ * attempt that, the same "real gap, not solved before it has to be"
+ * reasoning fs_delete()'s never-reclaims-sectors limitation already
+ * uses. If a failure happens after the tail sector was already written
+ * but before size_bytes is updated below, those extra bytes are
+ * harmlessly orphaned (physically on disk, but past what size_bytes
+ * claims, so fs_read_file() never sees them) rather than corrupting
+ * anything previously readable. */
+int fs_append_file(const char *path, const void *data, unsigned int size) {
+    struct fs_entry entries[FS_MAX_FILES];
+    const unsigned char *src = (const unsigned char *)data;
+    unsigned char buf[ATA_SECTOR_SIZE];
+    char leaf[FS_NAME_MAX];
+    unsigned int table_lba;
+    int slot;
+    unsigned int old_size, new_size;
+    unsigned int old_sectors, last_sector_offset, tail_space, into_tail;
+    unsigned int remaining, extra_sectors, extra_lba;
+    unsigned int s, i;
+
+    if (!mounted) {
+        fs_init();
+    }
+
+    if (walk_to_parent(path, leaf, &table_lba) != 0) {
+        return -1;
+    }
+
+    if (dirtable_read(table_lba, entries) != 0) {
+        return -1;
+    }
+    slot = dirtable_find(entries, leaf);
+    if (slot < 0) {
+        return fs_create_file(path, data, size);
+    }
+    if (entries[slot].type != FS_TYPE_FILE) {
+        return -1;
+    }
+
+    if (size == 0) {
+        return 0;
+    }
+
+    old_size = entries[slot].size_bytes;
+    new_size = old_size + size;
+    if (new_size < old_size) {
+        return -1; /* overflow */
+    }
+
+    old_sectors = old_size / ATA_SECTOR_SIZE + (old_size % ATA_SECTOR_SIZE != 0 ? 1 : 0);
+    if (old_sectors == 0) {
+        old_sectors = 1; /* even a zero-byte file owns one sector, matching fs_create_file() */
+    }
+    if (!lba_span_valid(entries[slot].start_lba, old_sectors)) {
+        return -1;
+    }
+    last_sector_offset = old_size - (old_sectors - 1) * ATA_SECTOR_SIZE;
+    tail_space = ATA_SECTOR_SIZE - last_sector_offset;
+
+    into_tail = size < tail_space ? size : tail_space;
+    if (into_tail > 0) {
+        if (ata_read_sector(ATA_DRIVE_SLAVE, entries[slot].start_lba + old_sectors - 1, buf) != 0) {
+            return -1;
+        }
+        for (i = 0; i < into_tail; i++) {
+            buf[last_sector_offset + i] = src[i];
+        }
+        if (ata_write_sector(ATA_DRIVE_SLAVE, entries[slot].start_lba + old_sectors - 1, buf) != 0) {
+            return -1;
+        }
+    }
+
+    remaining = size - into_tail;
+    if (remaining > 0) {
+        if (entries[slot].start_lba + old_sectors != sb.next_free_lba) {
+            return -1; /* something else follows this file on disk -- can't extend safely */
+        }
+        extra_sectors = remaining / ATA_SECTOR_SIZE + (remaining % ATA_SECTOR_SIZE != 0 ? 1 : 0);
+        extra_lba = alloc_sectors(extra_sectors);
+        if (extra_lba == 0xFFFFFFFFu) {
+            return -1;
+        }
+        for (s = 0; s < extra_sectors; s++) {
+            unsigned int chunk = remaining - s * ATA_SECTOR_SIZE;
+            if (chunk > ATA_SECTOR_SIZE) {
+                chunk = ATA_SECTOR_SIZE;
+            }
+            for (i = 0; i < ATA_SECTOR_SIZE; i++) {
+                buf[i] = 0;
+            }
+            for (i = 0; i < chunk; i++) {
+                buf[i] = src[into_tail + s * ATA_SECTOR_SIZE + i];
+            }
+            if (ata_write_sector(ATA_DRIVE_SLAVE, extra_lba + s, buf) != 0) {
+                return -1;
+            }
+        }
+    }
+
+    entries[slot].size_bytes = new_size;
+    return dirtable_write(table_lba, entries);
+}
+
 int fs_read_file(const char *path, void *buf, unsigned int buf_size, unsigned int *out_size) {
     struct fs_entry entries[FS_MAX_FILES];
     unsigned char *dst = (unsigned char *)buf;

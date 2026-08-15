@@ -56,6 +56,16 @@ int fs_create_dir(const char *path);
  * success. */
 int fs_create_file(const char *path, const void *data, unsigned int size);
 
+/* Appends data to an existing file, or creates it (same as
+ * fs_create_file()) if it doesn't exist yet. Spare space in the file's
+ * own last allocated sector is always used first; growing beyond that
+ * only succeeds if this file's data is still the very last thing
+ * allocated on disk (nothing else has been created since) -- otherwise
+ * fails (-1), since there's no relocate-and-copy support. Also fails if
+ * path names a directory, or the total size would overflow. Returns 0
+ * on success. */
+int fs_append_file(const char *path, const void *data, unsigned int size);
+
 /* Returns 0 and fills *out_size if found and it fits in buf_size, -1 if
  * not found, not a file (e.g. path names a directory), or too big for the
  * caller's buffer. */

@@ -1168,6 +1168,22 @@ void kmain(void) {
     fs_status = fs_selftest();
     fs_bootstrap_dirs();
 
+    /* Real logging, not just a name on disk: one line per boot, appended
+     * (not overwritten) to /VAR/LOG -- ata_status/fs_status already read
+     * "ATA: ..."/"FS: ..." (ata.h/fs.h), so no extra labeling needed.
+     * fs_append_file() creates the file on the first boot and genuinely
+     * grows it on every boot after, proving the append path works
+     * across real reboots, not just within one running session. */
+    {
+        char log_line[64];
+        int pos = 0;
+        str_append(log_line, &pos, (int)sizeof(log_line), ata_status);
+        str_append(log_line, &pos, (int)sizeof(log_line), " ");
+        str_append(log_line, &pos, (int)sizeof(log_line), fs_status);
+        str_append(log_line, &pos, (int)sizeof(log_line), "\n");
+        fs_append_file("/VAR/LOG", log_line, (unsigned int)pos);
+    }
+
     /* Real config, not just a name on disk: cb.checked was set to a
      * hardcoded 0 above, before the filesystem was even mounted --
      * overwritten here now that /ETC/CONFIG can actually be read.
