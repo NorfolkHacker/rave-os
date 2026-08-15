@@ -798,9 +798,9 @@ int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entrie
     return 0;
 }
 
-#define FS_NUM_STANDARD_DIRS 6
+#define FS_NUM_STANDARD_DIRS 7
 static const char *const fs_standard_dirs[FS_NUM_STANDARD_DIRS] = {
-    "/BIN", "/ETC", "/HOME", "/USR", "/VAR", "/TMP",
+    "/BIN", "/ETC", "/HOME", "/USR", "/VAR", "/TMP", "/GAMES",
 };
 
 void fs_bootstrap_dirs(void) {

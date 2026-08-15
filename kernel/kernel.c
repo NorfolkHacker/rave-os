@@ -10,10 +10,8 @@
 #include "interrupts.h"
 #include "window.h"
 #include "button.h"
-#include "textfield.h"
-#include "checkbox.h"
 #include "taskbar.h"
-#include "desktop_icon.h"
+#include "startmenu.h"
 #include "console_input.h"
 #include "console_history.h"
 #include "console_output.h"
@@ -29,23 +27,24 @@
 
 #define CURSOR_SIZE 8
 
-/* Five windows exist right now (the interactive panel, a small static
- * info window, the Forth console, a navigable file manager -- which can
- * now delete, create, and rename entries too -- and a
- * read-only viewer for whatever file was last opened), tracked as a real
- * array/z-order list
- * rather than named locals so every window is treated uniformly
- * regardless of what's inside it. Content still differs per window, so
- * each window's content is drawn via a kind-indexed dispatch
+/* Two windows exist now (the Forth console and a navigable file manager
+ * that can delete, create, and rename entries too), tracked as a real
+ * array/z-order list rather than named locals so every window is treated
+ * uniformly regardless of what's inside it. The original two demo
+ * windows (PANEL, INFO) are gone -- their one piece of real content each
+ * (the EXIT/FX controls, ATA/FS status text) either moved into the
+ * bottom-left start menu (startmenu.h) or was dropped as boot-only
+ * diagnostic noise nothing was actually reading off-screen. The
+ * read-only file VIEWER window is gone too, on request -- clicking a
+ * file in FILES is now a no-op, same as clicking anything else this
+ * project doesn't have a use for yet. Content still differs per window,
+ * so each window's content is drawn via a kind-indexed dispatch
  * (draw_window_by_index()) rather than a generic widget framework --
- * there are exactly five content kinds, not an open-ended number, so a
+ * there are exactly two content kinds, not an open-ended number, so a
  * small switch is simpler than a real polymorphic app system. */
-#define MAX_WINDOWS 5
-#define WIN_KIND_PANEL 0
-#define WIN_KIND_INFO 1
-#define WIN_KIND_FORTH 2
-#define WIN_KIND_FILES 3
-#define WIN_KIND_VIEWER 4
+#define MAX_WINDOWS 2
+#define WIN_KIND_FORTH 0
+#define WIN_KIND_FILES 1
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -83,9 +82,9 @@ static void power_shutdown(void) {
 #define BACKDROP_B 7
 #define GLOW_PEAK 36
 
-/* fx_enabled gates the glow blob -- the panel's "FX" checkbox toggles it,
- * the one existing visual effect there was to wire a checkbox labeled
- * that to. Without it, the backdrop is flat near-black. */
+/* fx_enabled gates the glow blob -- the start menu's "FX" row toggles it,
+ * the one existing visual effect there was to wire a toggle to. Without
+ * it, the backdrop is flat near-black. */
 static uint32_t backdrop_color(int x, int y, int w, int h, int fx_enabled) {
     int gx = w * 3 / 10;
     int gy = h / 8;
@@ -156,9 +155,9 @@ static int str_eq(const char *a, const char *b) {
 
 /* Splits buf on '\n' and appends each segment as its own console line,
  * in place (buf is mutated -- '\n' bytes become nul terminators). The
- * shared idiom fs_read_file() output (the viewer) and forth_eval_line()
- * output (the Forth console, and now RUN's per-script-line output) both
- * need, since forth.c/fs.c never touch console_output.h themselves. */
+ * shared idiom forth_eval_line() output (the Forth console, and RUN's
+ * per-script-line output) needs, since forth.c never touches
+ * console_output.h itself. */
 static void append_split_lines(struct console_output *co, char *buf) {
     int oi = 0, line_start = 0;
     while (buf[oi]) {
@@ -205,7 +204,7 @@ static void title_block_rect(int w, int *x0, int *y0, int *x1, int *y1) {
 
 /* The window's full painted extent, border included -- matches the
  * rects window_draw() actually fills (see window.c). Works for any
- * window, not just the panel -- callers pass whichever one they mean. */
+ * window -- callers pass whichever one they mean. */
 static void window_outer_rect(const struct window *win, int *x0, int *y0, int *x1, int *y1) {
     *x0 = win->x - 2;
     *y0 = win->y - WINDOW_TITLEBAR_HEIGHT - 2;
@@ -310,26 +309,14 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
  * the window itself during a drag. This is the single place that
  * happens now, replacing what used to be a hand-written list of
  * `widget.x += dx` lines duplicated at each drag site -- exactly the
- * spot that twice forgot a widget earlier this session (the text field's
- * position, then almost the checkbox's) when a new one was added.
- * Centralizing it here means a future panel widget only needs to be
- * added in one place to drag correctly, not remembered at every call
- * site that moves the panel. */
-static void move_window_content(int kind, struct button *btn, struct button *exit_btn, struct textfield *tf,
-                                struct checkbox *cb, struct console_output *co, struct console_input *ci,
+ * spot that twice forgot a widget earlier this session when a new one
+ * was added. Centralizing it here means a future window's widget only
+ * needs to be added in one place to drag correctly, not remembered at
+ * every call site that moves the window. */
+static void move_window_content(int kind, struct console_output *co, struct console_input *ci,
                                 struct console_input *name_input, struct button *new_dir_btn,
-                                struct button *delete_btn, struct console_output *viewer_co, int applied_dx,
-                                int applied_dy) {
-    if (kind == WIN_KIND_PANEL) {
-        btn->x += applied_dx;
-        btn->y += applied_dy;
-        exit_btn->x += applied_dx;
-        exit_btn->y += applied_dy;
-        tf->x += applied_dx;
-        tf->y += applied_dy;
-        cb->x += applied_dx;
-        cb->y += applied_dy;
-    } else if (kind == WIN_KIND_FORTH) {
+                                struct button *delete_btn, int applied_dx, int applied_dy) {
+    if (kind == WIN_KIND_FORTH) {
         co->x += applied_dx;
         co->y += applied_dy;
         ci->x += applied_dx;
@@ -341,49 +328,10 @@ static void move_window_content(int kind, struct button *btn, struct button *exi
         new_dir_btn->y += applied_dy;
         delete_btn->x += applied_dx;
         delete_btn->y += applied_dy;
-    } else if (kind == WIN_KIND_VIEWER) {
-        viewer_co->x += applied_dx;
-        viewer_co->y += applied_dy;
     }
-    /* WIN_KIND_INFO has no content widgets to move. */
 }
 
-static void draw_window_group(const struct window *panel, const struct button *btn,
-                              const struct button *exit_btn, int click_count, const struct textfield *tf,
-                              const struct checkbox *cb) {
-    char line[40];
-    int pos;
-
-    window_draw(panel);
-    button_draw(btn);
-    button_draw(exit_btn);
-
-    pos = 0;
-    str_append(line, &pos, (int)sizeof(line), "CLICKS: ");
-    {
-        char num[12];
-        format_uint((unsigned int)click_count, num);
-        str_append(line, &pos, (int)sizeof(line), num);
-    }
-    text_puts(btn->x, btn->y + btn->h + 16, line, TEXT_PRIMARY_COLOR, 1);
-
-    text_puts(btn->x, btn->y + btn->h + 36, "TYPE:", TEXT_PRIMARY_COLOR, 1);
-    textfield_draw(tf);
-
-    checkbox_draw(cb);
-}
-
-/* The second window: no buttons, just enough content to prove it's a
- * real window (and a real drag target) rather than a decorative rect. */
-static void draw_info_group(const struct window *info, const char *ata_status, const char *fs_status) {
-    window_draw(info);
-    text_puts(info->x + 8, info->y + 12, "DRAG ME TOO", TEXT_MUTED_COLOR, 1);
-    text_puts(info->x + 8, info->y + 32, ata_status, TEXT_MUTED_COLOR, 1);
-    text_puts(info->x + 8, info->y + 52, fs_status, TEXT_MUTED_COLOR, 1);
-}
-
-/* The third window: the Forth console. Stage A only -- an echo terminal,
- * no interpreter behind it yet (that's Stage B). */
+/* The first window: the Forth console. */
 static void draw_forth_group(const struct window *forth, const struct console_output *co,
                              const struct console_input *ci) {
     window_draw(forth);
@@ -402,10 +350,13 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
  * same everywhere in the UI, not a color invented just for this. */
 #define FILES_SELECTED_BG_COLOR 0x123322
 
-/* One sector's worth -- every current test file is far smaller. Read
- * calls use VIEWER_BUF_SIZE - 1 so there's always room for a manual nul
- * terminator, since fs_read_file() copies exactly out_size raw bytes and
- * doesn't add one itself. */
+/* One sector's worth -- every current test file is far smaller. RUN
+ * (forth_run_command(), the only remaining reader) uses VIEWER_BUF_SIZE
+ * - 1 so there's always room for a manual nul terminator, since
+ * fs_read_file() copies exactly out_size raw bytes and doesn't add one
+ * itself. Kept its original name (predating the VIEWER window's removal)
+ * rather than renamed, since RUN's read really is the same "read a whole
+ * small file into one buffer" shape the VIEWER used. */
 #define VIEWER_BUF_SIZE 512
 
 /* Appends name onto cwd ("/" gets name appended directly, without a
@@ -521,7 +472,7 @@ static void forth_run_command(struct forth_vm *vm, struct console_output *co, co
 
 /* Seeds /ETC/CONFIG with today's default if missing (same idempotent
  * fs_create_file() write-once shape as /BIN/HELLO), then reads it back
- * to decide the FX checkbox's initial state -- real config the kernel
+ * to decide the FX toggle's initial state -- real config the kernel
  * acts on, not just a name on disk. Plain KEY=VALUE lines, even with a
  * single key today, so the format doesn't need retrofitting once a
  * second setting exists; no generic parser, just enough to find one key. */
@@ -546,15 +497,15 @@ static int fx_default_from_config(void) {
     return 0;
 }
 
-/* The fourth window: a listing of the current directory (cwd), navigable
- * -- Stage B of the file manager, plus (Stage D) a right-click-selected
- * entry and a DELETE button, plus (Stage E) a name-entry field and a NEW
- * DIR button. Row 0 is always the path itself (not clickable); row 1 is
- * ".." if cwd isn't root; real entries follow. files_list_hit_test()
- * below mirrors this exact row numbering so the two can never disagree
- * about what a given pixel row means. files_selected is an index into
- * file_entries (FILES_HIT_NONE for "nothing selected") -- the row it
- * names, if any, is drawn with a highlight background. */
+/* A listing of the current directory (cwd), navigable -- Stage B of the
+ * file manager, plus (Stage D) a right-click-selected entry and a
+ * DELETE button, plus (Stage E) a name-entry field and a NEW DIR button.
+ * Row 0 is always the path itself (not clickable); row 1 is ".." if cwd
+ * isn't root; real entries follow. files_list_hit_test() below mirrors
+ * this exact row numbering so the two can never disagree about what a
+ * given pixel row means. files_selected is an index into file_entries
+ * (FILES_HIT_NONE for "nothing selected") -- the row it names, if any,
+ * is drawn with a highlight background. */
 static void draw_files_group(const struct window *files, const char *cwd, const struct fs_dirent *file_entries,
                              unsigned int file_entry_count, int files_selected, const struct console_input *name_input,
                              const struct button *new_dir_btn, const struct button *delete_btn) {
@@ -654,37 +605,36 @@ static int files_list_hit_test(const struct window *files, const char *cwd, unsi
     return rel_row;
 }
 
-/* The fifth window: a read-only view of whatever file was last opened
- * from the FILES window. Same console_output pane draw_forth_group()
- * already uses for the Forth console's scrollback, minus the input line
- * -- no new text-rendering code needed for a read-only pane. */
-static void draw_viewer_group(const struct window *viewer, const struct console_output *viewer_co) {
-    window_draw(viewer);
-    console_output_draw(viewer_co);
+/* Navigates the FILES window straight to `target` (an absolute path,
+ * e.g. "/ETC") and raises it -- the start menu's CONFIG/GAMES items
+ * (startmenu.h) funnel through this instead of duplicating the "set cwd,
+ * re-list, clear selection, open, raise" sequence twice. Same re-listing
+ * call every other cwd change in this file already uses. */
+static void open_files_at(char *cwd, int cwd_cap, const char *target, struct window *windows, int *z_order,
+                          struct fs_dirent *file_entries, unsigned int *file_entry_count, int *files_selected) {
+    int pos = 0;
+    str_append(cwd, &pos, cwd_cap, target);
+    *files_selected = FILES_HIT_NONE;
+    if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, file_entry_count) != 0) {
+        *file_entry_count = 0;
+    }
+    windows[WIN_KIND_FILES].state = WINDOW_OPEN;
+    raise_window(z_order, WIN_KIND_FILES);
 }
 
 /* The one place that dispatches "draw whatever's inside window index
  * idx" -- both draw_scene() and update_and_present() go through this
  * instead of each hand-rolling their own kind check. */
-static void draw_window_by_index(int idx, const struct window *windows, const struct button *btn,
-                                 const struct button *exit_btn, int click_count, const struct textfield *tf,
-                                 const struct checkbox *cb, const struct console_output *co,
-                                 const struct console_input *ci, const char *ata_status, const char *fs_status,
-                                 const char *cwd, const struct fs_dirent *file_entries, unsigned int file_entry_count,
+static void draw_window_by_index(int idx, const struct window *windows, const struct console_output *co,
+                                 const struct console_input *ci, const char *cwd,
+                                 const struct fs_dirent *file_entries, unsigned int file_entry_count,
                                  int files_selected, const struct console_input *name_input,
-                                 const struct button *new_dir_btn, const struct button *delete_btn,
-                                 const struct console_output *viewer_co) {
-    if (idx == WIN_KIND_PANEL) {
-        draw_window_group(&windows[idx], btn, exit_btn, click_count, tf, cb);
-    } else if (idx == WIN_KIND_FORTH) {
+                                 const struct button *new_dir_btn, const struct button *delete_btn) {
+    if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
-    } else if (idx == WIN_KIND_FILES) {
+    } else {
         draw_files_group(&windows[idx], cwd, file_entries, file_entry_count, files_selected, name_input, new_dir_btn,
                          delete_btn);
-    } else if (idx == WIN_KIND_VIEWER) {
-        draw_viewer_group(&windows[idx], viewer_co);
-    } else {
-        draw_info_group(&windows[idx], ata_status, fs_status);
     }
 }
 
@@ -694,50 +644,42 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
  * correct by full reconstruction, same reasoning the whole scene used to
  * be redrawn this way every frame before damage tracking (see
  * update_and_present() below). */
-static void draw_scene(int w, int h, const struct window *windows, const struct button *btn,
-                       const struct button *exit_btn, int click_count, const struct textfield *tf,
-                       const struct checkbox *cb, const struct console_output *co, const struct console_input *ci,
-                       const int *z_order, const struct taskbar *bar, int hovered_entry,
-                       const struct desktop_icons *icons, int icon_hovered, int mx, int my, uint32_t cursor_color,
-                       const char *ata_status, const char *fs_status, const char *cwd,
-                       const struct fs_dirent *file_entries, unsigned int file_entry_count, int files_selected,
-                       const struct console_input *name_input, const struct button *new_dir_btn,
-                       const struct button *delete_btn, const struct console_output *viewer_co) {
+static void draw_scene(int w, int h, const struct window *windows, int fx_enabled, const struct console_output *co,
+                       const struct console_input *ci, const int *z_order, const struct taskbar *bar,
+                       int hovered_entry, const struct startmenu *menu, int menu_hovered_item, int mx, int my,
+                       uint32_t cursor_color, const char *cwd, const struct fs_dirent *file_entries,
+                       unsigned int file_entry_count, int files_selected, const struct console_input *name_input,
+                       const struct button *new_dir_btn, const struct button *delete_btn) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
-            gfx_put_pixel(x, y, backdrop_color(x, y, w, h, cb->checked));
+            gfx_put_pixel(x, y, backdrop_color(x, y, w, h, fx_enabled));
         }
     }
 
     draw_title_subtitle(w);
 
-    /* Icons are part of the desktop, underneath every window -- drawn
-     * before the z-order loop so a window dragged over the icon column
-     * correctly paints over it, same as a real desktop. */
-    desktop_icons_draw(icons, windows, MAX_WINDOWS, icon_hovered);
-
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status,
-                                 cwd, file_entries, file_entry_count, files_selected, name_input, new_dir_btn,
-                                 delete_btn, viewer_co);
+            draw_window_by_index(idx, windows, co, ci, cwd, file_entries, file_entry_count, files_selected,
+                                 name_input, new_dir_btn, delete_btn);
         }
     }
 
     taskbar_draw(bar, windows, z_order, MAX_WINDOWS, hovered_entry);
+    startmenu_draw(menu, menu_hovered_item, fx_enabled);
 
     gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
 }
 
 /* Region index constants for update_and_present()'s damage array: one
- * slot per window, plus the title block, the taskbar, and the desktop
- * icon column. */
+ * slot per window, plus the title block, the taskbar, and the start
+ * menu. */
 #define TITLE_REGION (MAX_WINDOWS)
 #define TASKBAR_REGION (MAX_WINDOWS + 1)
-#define ICON_REGION (MAX_WINDOWS + 2)
+#define MENU_REGION (MAX_WINDOWS + 2)
 #define DAMAGE_REGIONS (MAX_WINDOWS + 3)
 
 /* Per-event redraw: repaints only a damage rectangle instead of the whole
@@ -746,8 +688,8 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
  * per event is what let a real mouse's packet rate outrun the redraw
  * loop and overflow the ring buffer in an earlier stage). The damage rect
  * has to track DAMAGE_REGIONS independent regions -- each window, the
- * title block, and the taskbar -- rather than a fixed few named ones, now
- * that windows are a real array:
+ * title block, the taskbar, and the start menu -- rather than a fixed few
+ * named ones, now that windows are a real array:
  *
  * - It starts as the union of the cursor's old and new position, since
  *   the cursor moves on nearly every event.
@@ -770,18 +712,15 @@ static void draw_scene(int w, int h, const struct window *windows, const struct 
  * redraw used, just scoped down to whatever actually needs it, and
  * painted back-to-front in z-order so the topmost window correctly wins
  * wherever two windows overlap. */
-static void update_and_present(int w, int h, const struct window *windows, const struct button *btn,
-                               const struct button *exit_btn, int click_count, const struct textfield *tf,
-                               const struct checkbox *cb, const struct console_output *co,
-                               const struct console_input *ci, const int *z_order, const int *old_z, int old_mx,
-                               int old_my, int mx, int my, uint32_t cursor_color, const int *old_x, const int *old_y,
-                               const int *touched, int fx_changed, const struct taskbar *bar, int hovered_entry,
-                               int old_hovered_entry, const struct desktop_icons *icons, int icon_hovered,
-                               int old_icon_hovered, const char *ata_status, const char *fs_status, const char *cwd,
+static void update_and_present(int w, int h, const struct window *windows, int fx_enabled,
+                               const struct console_output *co, const struct console_input *ci, const int *z_order,
+                               const int *old_z, int old_mx, int old_my, int mx, int my, uint32_t cursor_color,
+                               const int *old_x, const int *old_y, const int *touched, int fx_changed,
+                               const struct taskbar *bar, int hovered_entry, int old_hovered_entry,
+                               const struct startmenu *menu, int menu_hovered_item, int menu_touched, const char *cwd,
                                const struct fs_dirent *file_entries, unsigned int file_entry_count,
                                int files_selected, const struct console_input *name_input,
-                               const struct button *new_dir_btn, const struct button *delete_btn,
-                               const struct console_output *viewer_co) {
+                               const struct button *new_dir_btn, const struct button *delete_btn) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
     int redraw[DAMAGE_REGIONS];
@@ -789,7 +728,6 @@ static void update_and_present(int w, int h, const struct window *windows, const
     int i, x, y;
     int z_reordered = 0;
     int taskbar_touched;
-    int icons_touched;
 
     for (i = 0; i < MAX_WINDOWS; i++) {
         if (z_order[i] != old_z[i]) {
@@ -798,8 +736,8 @@ static void update_and_present(int w, int h, const struct window *windows, const
     }
 
     /* fx_enabled changes what backdrop_color() returns everywhere on
-     * screen, not just near the panel -- toggling FX has to repaint the
-     * whole backdrop, so the damage rect starts at the full screen
+     * screen, not just near the start menu -- toggling FX has to repaint
+     * the whole backdrop, so the damage rect starts at the full screen
      * instead of just the cursor's motion. Every open window's rect then
      * overlaps that damage automatically, so the usual fixed-point loop
      * below redraws them correctly without needing a special case. */
@@ -820,16 +758,9 @@ static void update_and_present(int w, int h, const struct window *windows, const
      * any window's touched flag in too (position included) is a harmless
      * superset, not worth a separate finer-grained check for a 24px bar. */
     taskbar_touched = z_reordered || (hovered_entry != old_hovered_entry);
-    /* The icon column's appearance only depends on window state (closed
-     * or not) and hover, not position/z-order -- but folding every
-     * window's touched flag in too is the same harmless superset taskbar
-     * touched above already accepts, not worth a finer-grained check for
-     * a couple of small icons. */
-    icons_touched = (icon_hovered != old_icon_hovered);
     for (i = 0; i < MAX_WINDOWS; i++) {
         if (touched[i]) {
             taskbar_touched = 1;
-            icons_touched = 1;
         }
     }
 
@@ -844,11 +775,8 @@ static void update_and_present(int w, int h, const struct window *windows, const
     rx1[TASKBAR_REGION] = bar->x + bar->w;
     ry1[TASKBAR_REGION] = bar->y + bar->h;
     redraw[TASKBAR_REGION] = taskbar_touched;
-    rx0[ICON_REGION] = icons->x;
-    ry0[ICON_REGION] = icons->y;
-    rx1[ICON_REGION] = icons->x + icons->w;
-    ry1[ICON_REGION] = icons->y + icons->h;
-    redraw[ICON_REGION] = icons_touched;
+    startmenu_bounds(menu, &rx0[MENU_REGION], &ry0[MENU_REGION], &rx1[MENU_REGION], &ry1[MENU_REGION]);
+    redraw[MENU_REGION] = menu_touched;
 
     for (i = 0; i < MAX_WINDOWS; i++) {
         if (touched[i]) {
@@ -868,8 +796,8 @@ static void update_and_present(int w, int h, const struct window *windows, const
         rect_union(&dx0, &dy0, &dx1, &dy1, rx0[TASKBAR_REGION], ry0[TASKBAR_REGION], rx1[TASKBAR_REGION],
                   ry1[TASKBAR_REGION]);
     }
-    if (redraw[ICON_REGION]) {
-        rect_union(&dx0, &dy0, &dx1, &dy1, rx0[ICON_REGION], ry0[ICON_REGION], rx1[ICON_REGION], ry1[ICON_REGION]);
+    if (redraw[MENU_REGION]) {
+        rect_union(&dx0, &dy0, &dx1, &dy1, rx0[MENU_REGION], ry0[MENU_REGION], rx1[MENU_REGION], ry1[MENU_REGION]);
     }
 
     do {
@@ -898,7 +826,7 @@ static void update_and_present(int w, int h, const struct window *windows, const
 
     for (y = dy0; y < dy1; y++) {
         for (x = dx0; x < dx1; x++) {
-            gfx_put_pixel(x, y, backdrop_color(x, y, w, h, cb->checked));
+            gfx_put_pixel(x, y, backdrop_color(x, y, w, h, fx_enabled));
         }
     }
 
@@ -906,21 +834,20 @@ static void update_and_present(int w, int h, const struct window *windows, const
         draw_title_subtitle(w);
     }
 
-    if (redraw[ICON_REGION]) {
-        desktop_icons_draw(icons, windows, MAX_WINDOWS, icon_hovered);
-    }
 
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
-            draw_window_by_index(idx, windows, btn, exit_btn, click_count, tf, cb, co, ci, ata_status, fs_status, cwd,
-                                 file_entries, file_entry_count, files_selected, name_input, new_dir_btn, delete_btn,
-                                 viewer_co);
+            draw_window_by_index(idx, windows, co, ci, cwd, file_entries, file_entry_count, files_selected,
+                                 name_input, new_dir_btn, delete_btn);
         }
     }
 
     if (redraw[TASKBAR_REGION]) {
         taskbar_draw(bar, windows, z_order, MAX_WINDOWS, hovered_entry);
+    }
+    if (redraw[MENU_REGION]) {
+        startmenu_draw(menu, menu_hovered_item, fx_enabled);
     }
 
     gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, cursor_color);
@@ -931,26 +858,21 @@ static void update_and_present(int w, int h, const struct window *windows, const
 void kmain(void) {
     int w, h;
     int mx, my;
-    int click_count = 0;
     int prev_left_held = 0;
     int prev_right_held = 0;
     int dragging_window = -1;
     int taskbar_hovered = -1;
-    int icon_hovered = -1;
+    int menu_hovered_item = -1;
+    int fx_enabled = 0;
     uint32_t cursor_color = CURSOR_IDLE_COLOR;
-    struct textfield tf;
-    struct checkbox cb;
     struct console_output co;
     struct console_input ci;
-    struct console_output viewer_co;
     struct console_history hist;
     struct forth_vm vm;
     struct window windows[MAX_WINDOWS];
     int z_order[MAX_WINDOWS];
     struct taskbar bar;
-    struct desktop_icons icons;
-    struct button btn;
-    struct button exit_btn;
+    struct startmenu menu;
     struct button delete_btn;
     struct button new_dir_btn;
     struct console_input name_input;
@@ -965,53 +887,18 @@ void kmain(void) {
     w = gfx_width();
     h = gfx_height();
 
-    windows[WIN_KIND_PANEL].x = 140;
-    windows[WIN_KIND_PANEL].y = 160;
-    windows[WIN_KIND_PANEL].w = 360;
-    windows[WIN_KIND_PANEL].h = 200;
-    windows[WIN_KIND_PANEL].title = "RAVE-OS PANEL";
-    windows[WIN_KIND_PANEL].state = WINDOW_OPEN;
-    windows[WIN_KIND_PANEL].minimize_hovered = 0;
-    windows[WIN_KIND_PANEL].close_hovered = 0;
-
-    btn.x = windows[WIN_KIND_PANEL].x + 20;
-    btn.y = windows[WIN_KIND_PANEL].y + 20;
-    btn.w = 140;
-    btn.h = 30;
-    btn.label = "CLICK ME";
-    btn.hovered = 0;
-    btn.pressed = 0;
-
-    exit_btn.x = btn.x + btn.w + 20;
-    exit_btn.y = btn.y;
-    exit_btn.w = windows[WIN_KIND_PANEL].x + windows[WIN_KIND_PANEL].w - 20 - exit_btn.x;
-    exit_btn.h = 30;
-    exit_btn.label = "EXIT";
-    exit_btn.hovered = 0;
-    exit_btn.pressed = 0;
-
-    /* Positioned to overlap the panel's bottom-right corner from the
-     * start, so the two windows' stacking order is visibly meaningful
-     * the moment this boots, not just after someone drags one on top of
-     * the other. */
-    windows[WIN_KIND_INFO].x = 380;
-    windows[WIN_KIND_INFO].y = 300;
-    windows[WIN_KIND_INFO].w = 200;
-    windows[WIN_KIND_INFO].h = 90;
-    windows[WIN_KIND_INFO].title = "RAVE-OS INFO";
-    windows[WIN_KIND_INFO].state = WINDOW_OPEN;
-    windows[WIN_KIND_INFO].minimize_hovered = 0;
-    windows[WIN_KIND_INFO].close_hovered = 0;
-
-    /* Sized/positioned clear of the taskbar strip below it; overlapping
-     * the other two windows' corners is fine (expected, even -- INFO
-     * already overlaps PANEL by the same design choice). */
+    /* Sized/positioned clear of the taskbar strip below it. */
     windows[WIN_KIND_FORTH].x = 170;
     windows[WIN_KIND_FORTH].y = 230;
     windows[WIN_KIND_FORTH].w = 400;
     windows[WIN_KIND_FORTH].h = 180;
     windows[WIN_KIND_FORTH].title = "RAVE-OS FORTH";
-    windows[WIN_KIND_FORTH].state = WINDOW_OPEN;
+    /* Closed at boot, same as every other window now -- see the z_order
+     * comment below for why. Opened via the start menu's FORTH item --
+     * there's no desktop-icon fallback anymore (removed on request, since
+     * every window now has a direct menu launcher, making the icon
+     * column pure redundancy). */
+    windows[WIN_KIND_FORTH].state = WINDOW_CLOSED;
     windows[WIN_KIND_FORTH].minimize_hovered = 0;
     windows[WIN_KIND_FORTH].close_hovered = 0;
 
@@ -1028,7 +915,10 @@ void kmain(void) {
      * the footer here doesn't eat into the list either). */
     windows[WIN_KIND_FILES].h = 250;
     windows[WIN_KIND_FILES].title = "RAVE-OS FILES";
-    windows[WIN_KIND_FILES].state = WINDOW_OPEN;
+    /* Closed at boot -- opened via the start menu's FILES item (a plain
+     * launch) or CONFIG/GAMES (which also navigate cwd -- see
+     * open_files_at()). */
+    windows[WIN_KIND_FILES].state = WINDOW_CLOSED;
     windows[WIN_KIND_FILES].minimize_hovered = 0;
     windows[WIN_KIND_FILES].close_hovered = 0;
 
@@ -1056,10 +946,7 @@ void kmain(void) {
     delete_btn.pressed = 0;
 
     /* Name-entry field for both NEW DIR and Enter-creates-file, sitting
-     * just above the button row. console_input, not textfield -- the
-     * panel's textfield clears itself on Enter (fine for a demo widget
-     * with nowhere to submit to), which would silently eat the typed
-     * name before this code ever saw it. */
+     * just above the button row. */
     name_input.x = windows[WIN_KIND_FILES].x + 8;
     name_input.y = new_dir_btn.y - 20 - 6;
     name_input.w = windows[WIN_KIND_FILES].w - 16;
@@ -1069,60 +956,26 @@ void kmain(void) {
     name_input.cursor = 0;
     name_input.focused = 0;
 
-    /* Wide and short, suited to a handful of text lines rather than a
-     * long listing -- sits below the other windows, clear of the taskbar. */
-    windows[WIN_KIND_VIEWER].x = 220;
-    windows[WIN_KIND_VIEWER].y = 330;
-    windows[WIN_KIND_VIEWER].w = 340;
-    windows[WIN_KIND_VIEWER].h = 110;
-    windows[WIN_KIND_VIEWER].title = "RAVE-OS VIEWER";
-    windows[WIN_KIND_VIEWER].state = WINDOW_OPEN;
-    windows[WIN_KIND_VIEWER].minimize_hovered = 0;
-    windows[WIN_KIND_VIEWER].close_hovered = 0;
-    console_output_init(&viewer_co, windows[WIN_KIND_VIEWER].x + 4, windows[WIN_KIND_VIEWER].y + 6,
-                        windows[WIN_KIND_VIEWER].w - 8, windows[WIN_KIND_VIEWER].h - 12);
-    console_output_append_line(&viewer_co, "(NO FILE OPEN)");
+    /* z_order still needs a valid starting permutation even though every
+     * window opens closed now -- topmost_window_at()/raise_window() both
+     * assume it's always a full ordering of every window index, not just
+     * the currently-open ones. Order is otherwise meaningless until the
+     * user opens something. */
+    z_order[0] = WIN_KIND_FORTH;
+    z_order[1] = WIN_KIND_FILES;
 
-    /* Panel starts frontmost, matching the old panel_on_top = 1 default. */
-    z_order[0] = WIN_KIND_PANEL;
-    z_order[1] = WIN_KIND_INFO;
-    z_order[2] = WIN_KIND_FORTH;
-    z_order[3] = WIN_KIND_FILES;
-    z_order[4] = WIN_KIND_VIEWER;
-
-    bar.x = 0;
+    /* Narrowed to leave room for the start menu's button at the same y,
+     * so the two together read as one continuous bottom bar. */
+    bar.x = STARTMENU_BUTTON_WIDTH;
     bar.y = h - TASKBAR_HEIGHT;
-    bar.w = w;
+    bar.w = w - STARTMENU_BUTTON_WIDTH;
     bar.h = TASKBAR_HEIGHT;
 
-    /* Column sits entirely left of both windows' default x (140), clear
-     * of the centered title/subtitle text above it -- so on first boot
-     * nothing overlaps it at all; a window dragged over it later is
-     * expected to occlude it, same as any real desktop. */
-    desktop_icons_init(&icons, DESKTOP_ICON_MARGIN, SUBTITLE_Y + GLYPH_HEIGHT * SUBTITLE_SCALE + 16, MAX_WINDOWS);
-
-    /* Sits to the right of the "TYPE:" label drawn by draw_window_group(),
-     * on the same baseline (see textfield_draw()'s vertical-centering math
-     * for why tf.y is offset by -3), extending to the same right margin
-     * exit_btn already uses. */
-    {
-        int type_line_y = btn.y + btn.h + 36;
-        tf.x = btn.x + text_width("TYPE:", 1) + 6;
-        tf.y = type_line_y - 3;
-        tf.w = windows[WIN_KIND_PANEL].x + windows[WIN_KIND_PANEL].w - 20 - tf.x;
-        tf.h = 14;
-    }
-    tf.text[0] = 0;
-    tf.len = 0;
-    tf.focused = 0;
-
-    /* Below the field, same left margin as the buttons above it. */
-    cb.x = btn.x;
-    cb.y = tf.y + tf.h + 14;
-    cb.size = 14;
-    cb.label = "FX";
-    cb.checked = 0;
-    cb.hovered = 0;
+    menu.x = 0;
+    menu.y = h - TASKBAR_HEIGHT;
+    menu.w = STARTMENU_BUTTON_WIDTH;
+    menu.h = TASKBAR_HEIGHT;
+    menu.open = 0;
 
     /* Console input line sits along the bottom of the Forth window's
      * body; the output pane fills the rest above it, with a small gap
@@ -1151,7 +1004,7 @@ void kmain(void) {
     forth_init(&vm);
 
     mx = w / 2;
-    my = h - 100; /* start clear of the panels above */
+    my = h - 100; /* clear of the taskbar/start menu strip below it */
 
     /* IDT/PIC set up first (masked, no sti yet), then the mouse's polling
      * handshake runs with IRQ12 still masked so it can't race the new
@@ -1184,12 +1037,11 @@ void kmain(void) {
         fs_append_file("/VAR/LOG", log_line, (unsigned int)pos);
     }
 
-    /* Real config, not just a name on disk: cb.checked was set to a
-     * hardcoded 0 above, before the filesystem was even mounted --
-     * overwritten here now that /ETC/CONFIG can actually be read.
-     * Nothing reads cb.checked before draw_scene() further down, so
-     * this reassignment is safe. */
-    cb.checked = fx_default_from_config();
+    /* fx_enabled was set to a hardcoded 0 above, before the filesystem
+     * was even mounted -- overwritten here now that /ETC/CONFIG can
+     * actually be read. Nothing reads fx_enabled before draw_scene()
+     * further down, so this reassignment is safe. */
+    fx_enabled = fx_default_from_config();
 
     /* Seeds one real script into /BIN so RUN has something to actually
      * run -- there's no in-OS text editor yet, so this is the only way
@@ -1219,9 +1071,9 @@ void kmain(void) {
         file_entry_count = 0;
     }
 
-    draw_scene(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, &bar, taskbar_hovered,
-              &icons, icon_hovered, mx, my, cursor_color, ata_status, fs_status, cwd, file_entries, file_entry_count,
-              files_selected, &name_input, &new_dir_btn, &delete_btn, &viewer_co);
+    draw_scene(w, h, windows, fx_enabled, &co, &ci, z_order, &bar, taskbar_hovered, &menu, menu_hovered_item, mx, my,
+              cursor_color, cwd, file_entries, file_entry_count, files_selected, &name_input, &new_dir_btn,
+              &delete_btn);
     gfx_present();
 
     for (;;) {
@@ -1232,19 +1084,11 @@ void kmain(void) {
         int old_my = my;
         int old_x[MAX_WINDOWS], old_y[MAX_WINDOWS], old_z[MAX_WINDOWS];
         int old_state[MAX_WINDOWS], old_min_hov[MAX_WINDOWS], old_close_hov[MAX_WINDOWS];
-        int old_btn_hovered = btn.hovered;
-        int old_btn_pressed = btn.pressed;
-        int old_exit_hovered = exit_btn.hovered;
-        int old_exit_pressed = exit_btn.pressed;
-        int old_click_count = click_count;
-        int old_tf_len = tf.len;
-        int old_tf_focused = tf.focused;
-        int old_cb_checked = cb.checked;
-        int old_cb_hovered = cb.hovered;
+        int old_fx_enabled = fx_enabled;
         int old_taskbar_hovered = taskbar_hovered;
-        int old_icon_hovered = icon_hovered;
+        int old_menu_open = menu.open;
+        int old_menu_hovered_item = menu_hovered_item;
         int old_co_generation = co.generation;
-        int old_viewer_co_generation = viewer_co.generation;
         int old_ci_len = ci.len;
         int old_ci_cursor = ci.cursor;
         int old_ci_focused = ci.focused;
@@ -1328,7 +1172,11 @@ void kmain(void) {
              * raised to front, and if the press specifically landed on its
              * title bar, a drag starts too -- so grabbing a background
              * window's title bar both raises and starts moving it in one
-             * motion, the same as any desktop. */
+             * motion, the same as any desktop. The start menu's button and
+             * popup are checked first, ahead of the taskbar/window stack,
+             * since they're the outermost layer of chrome -- a
+             * click anywhere while the popup is open either hits an item
+             * or closes it, never falls through to whatever's underneath. */
             if (dragging_window >= 0) {
                 if (left_held) {
                     int drag_start_x = windows[dragging_window].x;
@@ -1341,11 +1189,39 @@ void kmain(void) {
 
                     applied_dx = windows[dragging_window].x - drag_start_x;
                     applied_dy = windows[dragging_window].y - drag_start_y;
-                    move_window_content(dragging_window, &btn, &exit_btn, &tf, &cb, &co, &ci, &name_input,
-                                        &new_dir_btn, &delete_btn, &viewer_co, applied_dx, applied_dy);
+                    move_window_content(dragging_window, &co, &ci, &name_input, &new_dir_btn, &delete_btn,
+                                        applied_dx, applied_dy);
                 } else {
                     dragging_window = -1;
                 }
+            } else if (left_held && !prev_left_held && menu.open && startmenu_hit_item(&menu, cx, cy) >= 0) {
+                int item = startmenu_hit_item(&menu, cx, cy);
+
+                if (item == STARTMENU_ITEM_EXIT) {
+                    power_shutdown();
+                } else if (item == STARTMENU_ITEM_FX) {
+                    fx_enabled = !fx_enabled;
+                } else if (item == STARTMENU_ITEM_FORTH) {
+                    windows[WIN_KIND_FORTH].state = WINDOW_OPEN;
+                    raise_window(z_order, WIN_KIND_FORTH);
+                } else if (item == STARTMENU_ITEM_FILES) {
+                    windows[WIN_KIND_FILES].state = WINDOW_OPEN;
+                    raise_window(z_order, WIN_KIND_FILES);
+                } else if (item == STARTMENU_ITEM_CONFIG) {
+                    open_files_at(cwd, (int)sizeof(cwd), "/ETC", windows, z_order, file_entries, &file_entry_count,
+                                 &files_selected);
+                } else if (item == STARTMENU_ITEM_GAMES) {
+                    open_files_at(cwd, (int)sizeof(cwd), "/GAMES", windows, z_order, file_entries, &file_entry_count,
+                                 &files_selected);
+                }
+                menu.open = 0;
+            } else if (left_held && !prev_left_held && startmenu_hit_button(&menu, cx, cy)) {
+                menu.open = !menu.open;
+            } else if (left_held && !prev_left_held && menu.open) {
+                /* Click landed somewhere else while the popup was open --
+                 * closes it without acting on whatever's underneath, same
+                 * as clicking away from a real start menu. */
+                menu.open = 0;
             } else if (left_held && !prev_left_held && taskbar_hit_entry(&bar, windows, MAX_WINDOWS, cx, cy) >= 0) {
                 /* The taskbar sits above every window (windows are
                  * clamped to never go under it), so its clicks are
@@ -1364,17 +1240,6 @@ void kmain(void) {
                     windows[entry].state = WINDOW_OPEN;
                     raise_window(z_order, entry);
                 }
-            } else if (left_held && !prev_left_held && desktop_icon_hit(&icons, windows, MAX_WINDOWS, cx, cy) >= 0) {
-                /* Same reasoning as the taskbar branch above -- icons
-                 * aren't part of the window stack, so they're checked
-                 * before generic window hit-testing. A closed window's
-                 * only icon click behavior is reopening it: there's no
-                 * "already active" case to toggle, unlike the taskbar,
-                 * since a closed window is never the active one. */
-                int icon = desktop_icon_hit(&icons, windows, MAX_WINDOWS, cx, cy);
-
-                windows[icon].state = WINDOW_OPEN;
-                raise_window(z_order, icon);
             } else if (left_held && !prev_left_held) {
                 int target = topmost_window_at(windows, z_order, cx, cy);
 
@@ -1399,8 +1264,8 @@ void kmain(void) {
             /* Hover-highlight whichever window's controls are actually
              * under the cursor -- only the topmost window at that point,
              * so an occluded window's controls never light up. Runs every
-             * packet (not just click edges), same as button/checkbox
-             * hover elsewhere. */
+             * packet (not just click edges), same as button hover
+             * elsewhere. */
             {
                 int hover_target = topmost_window_at(windows, z_order, cx, cy);
                 int wi;
@@ -1413,54 +1278,32 @@ void kmain(void) {
             }
 
             taskbar_hovered = taskbar_hit_entry(&bar, windows, MAX_WINDOWS, cx, cy);
-            icon_hovered = desktop_icon_hit(&icons, windows, MAX_WINDOWS, cx, cy);
+            menu_hovered_item = startmenu_hit_item(&menu, cx, cy);
 
-            /* The panel's buttons only respond if the panel is actually
-             * the topmost thing under the cursor -- otherwise a click on
-             * a point where the info window covers the panel would click
-             * straight through to a button the user can't even see. */
             {
                 int topmost = topmost_window_at(windows, z_order, cx, cy);
-                int panel_is_topmost = topmost == WIN_KIND_PANEL;
                 int forth_is_topmost = topmost == WIN_KIND_FORTH;
                 int files_is_topmost = topmost == WIN_KIND_FILES;
                 int click_edge = left_held && !prev_left_held;
 
-                btn.hovered = panel_is_topmost && button_hit_test(&btn, cx, cy);
-                if (btn.hovered && click_edge) {
-                    click_count++;
-                }
-                btn.pressed = btn.hovered && left_held;
-
-                exit_btn.hovered = panel_is_topmost && button_hit_test(&exit_btn, cx, cy);
-                if (exit_btn.hovered && click_edge) {
-                    power_shutdown();
-                }
-                exit_btn.pressed = exit_btn.hovered && left_held;
-
                 /* Any click edge sets focus: hitting the field itself
-                 * focuses it, anything else (a button, empty panel space,
-                 * another window, the backdrop) defocuses it -- same
+                 * focuses it, anything else (another window, the
+                 * backdrop, the start menu) defocuses it -- same
                  * single-focus-owner behavior as clicking around a normal
                  * desktop text field. */
                 if (click_edge) {
-                    tf.focused = panel_is_topmost && textfield_hit_test(&tf, cx, cy);
                     ci.focused = forth_is_topmost && console_input_hit_test(&ci, cx, cy);
                     name_input.focused = files_is_topmost && console_input_hit_test(&name_input, cx, cy);
-                }
-
-                cb.hovered = panel_is_topmost && checkbox_hit_test(&cb, cx, cy);
-                if (cb.hovered && click_edge) {
-                    cb.checked = !cb.checked;
                 }
 
                 /* Clicking ".." or a directory row navigates and re-lists
                  * immediately (see the boot-time fs_list_dir() call for
                  * why this stays an explicit "only when cwd actually
                  * changes" call rather than something re-run every
-                 * redraw). Clicking a file reads it into the viewer and
-                 * raises that window so the result is immediately
-                 * visible. */
+                 * redraw). Clicking a file is a no-op -- there's no
+                 * VIEWER window to show its content in anymore, same as
+                 * every other not-yet-supported click in this window
+                 * (e.g. the path header row). */
                 if (files_is_topmost && click_edge) {
                     int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy);
 
@@ -1484,26 +1327,6 @@ void kmain(void) {
                         if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
-                    } else if (hit >= 0 && file_entries[hit].type == FS_TYPE_FILE) {
-                        char file_path[FILES_PATH_MAX];
-                        char buf[VIEWER_BUF_SIZE];
-                        unsigned int out_size;
-
-                        path_join(file_path, (int)sizeof(file_path), cwd, file_entries[hit].name);
-                        console_output_clear(&viewer_co);
-
-                        if (fs_read_file(file_path, buf, VIEWER_BUF_SIZE - 1, &out_size) != 0) {
-                            console_output_append_line(&viewer_co, "(READ FAILED)");
-                        } else {
-                            /* fs_read_file() doesn't nul-terminate (it copies
-                             * exactly out_size raw bytes), so that's done
-                             * here first, guaranteed to fit within
-                             * VIEWER_BUF_SIZE. */
-                            buf[out_size] = 0;
-                            append_split_lines(&viewer_co, buf);
-                        }
-
-                        raise_window(z_order, WIN_KIND_VIEWER);
                     }
                 }
 
@@ -1568,9 +1391,7 @@ void kmain(void) {
         }
 
         if (keyboard_poll_char(&c)) {
-            if (tf.focused) {
-                textfield_feed_char(&tf, c);
-            } else if (ci.focused && c == KEY_UP) {
+            if (ci.focused && c == KEY_UP) {
                 char recalled[CONSOLE_INPUT_MAX + 1];
                 if (console_history_prev(&hist, recalled)) {
                     console_input_set_text(&ci, recalled);
@@ -1668,22 +1489,17 @@ void kmain(void) {
 
         if (had_event) {
             int touched[MAX_WINDOWS];
+            int menu_touched = (menu.open != old_menu_open) || (menu_hovered_item != old_menu_hovered_item);
 
             /* Position, open/minimized/closed state, and control hover are
-             * generic to every window regardless of content; click_count,
-             * the widgets' hover/pressed/focus/text state are specific to
-             * the panel's content, folded in on top. */
+             * generic to every window regardless of content; the rest is
+             * specific to each window's own content, folded in on top. */
             for (i = 0; i < MAX_WINDOWS; i++) {
                 touched[i] = (windows[i].x != old_x[i]) || (windows[i].y != old_y[i]) ||
                              (windows[i].state != old_state[i]) ||
                              (windows[i].minimize_hovered != old_min_hov[i]) ||
                              (windows[i].close_hovered != old_close_hov[i]);
             }
-            touched[WIN_KIND_PANEL] = touched[WIN_KIND_PANEL] || (btn.hovered != old_btn_hovered) ||
-                                      (btn.pressed != old_btn_pressed) || (exit_btn.hovered != old_exit_hovered) ||
-                                      (exit_btn.pressed != old_exit_pressed) || (click_count != old_click_count) ||
-                                      (tf.len != old_tf_len) || (tf.focused != old_tf_focused) ||
-                                      (cb.checked != old_cb_checked) || (cb.hovered != old_cb_hovered);
             touched[WIN_KIND_FORTH] = touched[WIN_KIND_FORTH] || (co.generation != old_co_generation) ||
                                       (ci.len != old_ci_len) || (ci.cursor != old_ci_cursor) ||
                                       (ci.focused != old_ci_focused) || !str_eq(ci.text, old_ci_text);
@@ -1697,13 +1513,11 @@ void kmain(void) {
                                       (name_input.cursor != old_name_input_cursor) ||
                                       (name_input.focused != old_name_input_focused) ||
                                       !str_eq(name_input.text, old_name_input_text);
-            touched[WIN_KIND_VIEWER] = touched[WIN_KIND_VIEWER] || (viewer_co.generation != old_viewer_co_generation);
-
-            update_and_present(w, h, windows, &btn, &exit_btn, click_count, &tf, &cb, &co, &ci, z_order, old_z,
-                               old_mx, old_my, mx, my, cursor_color, old_x, old_y, touched,
-                               cb.checked != old_cb_checked, &bar, taskbar_hovered, old_taskbar_hovered, &icons,
-                               icon_hovered, old_icon_hovered, ata_status, fs_status, cwd, file_entries,
-                               file_entry_count, files_selected, &name_input, &new_dir_btn, &delete_btn, &viewer_co);
+            update_and_present(w, h, windows, fx_enabled, &co, &ci, z_order, old_z, old_mx, old_my, mx, my,
+                               cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled, &bar,
+                               taskbar_hovered, old_taskbar_hovered, &menu,
+                               menu_hovered_item, menu_touched, cwd, file_entries, file_entry_count, files_selected,
+                               &name_input, &new_dir_btn, &delete_btn);
         } else {
             __asm__ volatile("hlt");
         }
