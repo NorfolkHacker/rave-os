@@ -259,9 +259,14 @@ static void shell_cmd_rm(const struct shell *sh, const char *arg, char *out, int
     }
 }
 
+/* Starts at root, not /HOME (unlike the FILES window's own cwd, and
+ * unlike shell_cmd_cd()'s own bare-cd-goes-home behavior below) -- on
+ * request, so the very first `ls` a user types shows the standard
+ * system folders immediately rather than landing on an empty directory
+ * first. */
 void shell_init(struct shell *sh) {
     int pos = 0;
-    shell_append(sh->cwd, &pos, (int)sizeof(sh->cwd), "/HOME");
+    shell_append(sh->cwd, &pos, (int)sizeof(sh->cwd), "/");
 }
 
 void shell_eval_line(struct shell *sh, const char *line, char *out, int out_cap) {

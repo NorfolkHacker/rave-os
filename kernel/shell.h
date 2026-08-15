@@ -11,9 +11,11 @@ struct shell {
     char cwd[FS_PATH_MAX];
 };
 
-/* Sets cwd to "/HOME" -- fs_bootstrap_dirs() (fs.c) already guarantees
- * it exists by the time any window can open, same starting point the
- * FILES window's own cwd already uses. */
+/* Sets cwd to "/" -- so the first `ls` a user types shows the standard
+ * system folders immediately, rather than the FILES window's own
+ * /HOME starting point (which is empty by default). `cd` with no
+ * argument still goes to /HOME (shell.c), matching bash's own
+ * bare-cd-goes-home behavior -- only the boot-time default differs. */
 void shell_init(struct shell *sh);
 
 /* Executes one typed line against sh's cwd, writing '\n'-separated

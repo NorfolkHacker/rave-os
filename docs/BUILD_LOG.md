@@ -950,3 +950,11 @@ Reported immediately after the SHELL stage shipped: live use of the real GUI mad
 **Verified headlessly**: rebuilt, booted, opened SHELL fresh (boot cwd `/HOME`, still empty), typed `ls` -- confirmed `(EMPTY)` now appears where the scrollback previously stayed blank.
 
 Files: `kernel/shell.c` only (`shell_cmd_ls()`, `shell_cmd_cat()`).
+
+## 2026-08-15 -- SHELL starts at `/`, not `/HOME`
+
+Immediate follow-up, on request, once the `(EMPTY)` fix made the actual root cause visible: booting straight into an empty `/HOME` meant the very first thing a new user typed (`ls`) showed nothing, `(EMPTY)` or not -- fine once you know why, still not a good first impression. `shell_init()` (`shell.c`) now sets `cwd` to `/` instead of `/HOME`, so the first `ls` immediately shows the standard system folders. `shell_cmd_cd()`'s existing bare-`cd`-goes-home behavior is unchanged -- `cd` with no argument still resets to `/HOME`, so `/HOME` is still one keystroke away, just no longer the starting point. This deliberately diverges from the FILES window, which keeps opening at `/HOME` -- the two windows now have different defaults on purpose, not a copy-paste that was missed.
+
+**Verified headlessly**: rebuilt (confirmed `kernel.o` correctly rebuilt too, not just `shell.o` -- the dependency-list fix from the previous SHELL stage's final review doing its job), booted, opened SHELL: `pwd` -> `/`, `ls` -> `OLD DIR/ TESTDIR/ BIN/ ETC/ HOME/ USR/ VAR/ TMP/ GAMES/ DEV/` immediately, no navigation needed first.
+
+Files: `kernel/shell.h`/`.c` (`shell_init()`'s default `cwd` and its doc comment).
