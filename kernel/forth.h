@@ -16,6 +16,16 @@
 #define FORTH_TOKEN_MAX 32
 #define FORTH_ERROR_MAX 32
 
+/* @/! memory access: deliberately NOT raw addresses into kernel RAM --
+ * this kernel has no paging, so a typo'd address typed at the console
+ * would silently corrupt whatever .bss the linker happened to place
+ * nearby. mem[] is its own fixed-size scratch array instead, cell-
+ * indexed (0..FORTH_MEM_SIZE-1) to match dstack's int32_t cell width;
+ * @/! bounds-check the index exactly like every other array access in
+ * this file, so an out-of-range address is a Forth-level error, never
+ * memory corruption. */
+#define FORTH_MEM_SIZE 64
+
 /* Stage C: user-defined words (':'/';'), compiled into a shared,
  * append-only threaded-code array -- the same technique classic Forth
  * implementations use, minus the assembly-level indirect-threading
@@ -70,6 +80,8 @@ struct forth_vm {
     int32_t dstack[FORTH_DSTACK_SIZE];
     int dsp; /* 0 = empty */
     char error[FORTH_ERROR_MAX]; /* empty string = no error */
+
+    int32_t mem[FORTH_MEM_SIZE]; /* @/! scratch array, see FORTH_MEM_SIZE comment above */
 
     struct forth_instr code[FORTH_CODE_SIZE];
     int code_len; /* next free slot -- append-only, never reclaimed */

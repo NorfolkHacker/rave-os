@@ -257,6 +257,30 @@ static void prim_cr(struct forth_vm *vm) {
     forth_write(vm, "\n");
 }
 
+static void prim_fetch(struct forth_vm *vm) {
+    int32_t addr;
+    if (!forth_pop(vm, &addr)) {
+        return;
+    }
+    if (addr < 0 || addr >= FORTH_MEM_SIZE) {
+        forth_set_error(vm, "BAD ADDR");
+        return;
+    }
+    forth_push(vm, vm->mem[addr]);
+}
+
+static void prim_store(struct forth_vm *vm) {
+    int32_t val, addr;
+    if (!forth_pop(vm, &addr) || !forth_pop(vm, &val)) {
+        return;
+    }
+    if (addr < 0 || addr >= FORTH_MEM_SIZE) {
+        forth_set_error(vm, "BAD ADDR");
+        return;
+    }
+    vm->mem[addr] = val;
+}
+
 struct forth_word {
     const char *name;
     void (*fn)(struct forth_vm *vm);
@@ -268,7 +292,7 @@ struct forth_word {
 static const struct forth_word primitives[] = {
     {"+", prim_add},   {"-", prim_sub},  {"*", prim_mul},   {"/", prim_div}, {"DUP", prim_dup},
     {"DROP", prim_drop}, {"SWAP", prim_swap}, {"OVER", prim_over}, {"=", prim_eq}, {"<", prim_lt},
-    {">", prim_gt}, {".", prim_dot}, {"CR", prim_cr},
+    {">", prim_gt}, {".", prim_dot}, {"CR", prim_cr}, {"@", prim_fetch}, {"!", prim_store},
 };
 
 void forth_init(struct forth_vm *vm) {
