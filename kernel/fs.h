@@ -75,7 +75,14 @@ int fs_rename(const char *path, const char *new_name);
  * max_entries (callers should size their buffer to FS_MAX_FILES to never
  * truncate). path must name a directory -- "/" for root. Returns 0 and
  * sets *out_count on success, -1 if path doesn't exist or isn't a
- * directory. */
+ * directory.
+ *
+ * "/DEV" is special: synthetic, never a real on-disk directory. Listing
+ * it probes the two fixed ATA drives live (see fs.c) instead of reading
+ * a stored table. Listing "/" always includes a synthetic "DEV" entry
+ * alongside whatever real entries exist. Nothing can be created inside
+ * "/DEV", and nothing can be created/renamed to shadow the name "DEV" at
+ * root -- fs_create_dir()/fs_create_file()/fs_rename() all reject it. */
 int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count);
 
 /* Mounts (formatting if needed), then proves it end-to-end against a

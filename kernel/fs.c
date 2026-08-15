@@ -338,6 +338,10 @@ int fs_create_dir(const char *path) {
         return -1;
     }
 
+    if (table_lba == FS_ROOT_LBA && str_eq(leaf, "DEV")) {
+        return -1; /* reserved: /DEV is synthetic (see fs_list_dir()), never a real directory */
+    }
+
     if (dirtable_read(table_lba, entries) != 0) {
         return -1;
     }
@@ -386,6 +390,10 @@ int fs_create_file(const char *path, const void *data, unsigned int size) {
 
     if (walk_to_parent(path, leaf, &table_lba) != 0) {
         return -1;
+    }
+
+    if (table_lba == FS_ROOT_LBA && str_eq(leaf, "DEV")) {
+        return -1; /* reserved: /DEV is synthetic (see fs_list_dir()), never a real directory */
     }
 
     if (dirtable_read(table_lba, entries) != 0) {
@@ -575,6 +583,10 @@ int fs_rename(const char *path, const char *new_name) {
         }
     }
 
+    if (table_lba == FS_ROOT_LBA && str_eq(new_name, "DEV")) {
+        return -1; /* reserved: renaming something to shadow synthetic /DEV */
+    }
+
     existing = dirtable_find(entries, new_name);
     if (existing >= 0 && existing != slot) {
         return -1; /* taken by a different entry */
@@ -584,19 +596,54 @@ int fs_rename(const char *path, const char *new_name) {
     return dirtable_write(table_lba, entries);
 }
 
+/* /DEV is synthetic -- never a real directory-table entry. HDA is always
+ * listed (this kernel booted from the ATA master, so it's present by
+ * construction whenever code is running to ask -- no probe needed). HDB
+ * is listed only if the filesystem disk is actually readable right now,
+ * reusing the exact live check fs_init() already trusts to mount,
+ * instead of new ATA-protocol presence-detection code. */
+static void fs_list_dev(struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count) {
+    unsigned char probe[ATA_SECTOR_SIZE];
+    unsigned int count = 0;
+
+    if (count < max_entries) {
+        name_copy(out[count].name, "HDA");
+        out[count].type = FS_TYPE_FILE;
+        out[count].size_bytes = 0;
+        count++;
+    }
+
+    if (count < max_entries && ata_read_sector(ATA_DRIVE_SLAVE, FS_SUPERBLOCK_LBA, probe) == 0) {
+        name_copy(out[count].name, "HDB");
+        out[count].type = FS_TYPE_FILE;
+        out[count].size_bytes = 0;
+        count++;
+    }
+
+    *out_count = count;
+}
+
 int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count) {
     struct fs_entry entries[FS_MAX_FILES];
     unsigned int table_lba;
     unsigned int count = 0;
+    int is_root;
+    int dev_shadowed = 0;
     int i;
 
     if (!mounted) {
         fs_init();
     }
 
+    if (str_eq(path, "/DEV")) {
+        fs_list_dev(out, max_entries, out_count);
+        return 0;
+    }
+
     if (resolve_dir_lba(path, &table_lba) != 0) {
         return -1;
     }
+    is_root = str_eq(path, "/");
 
     if (dirtable_read(table_lba, entries) != 0) {
         return -1;
@@ -608,9 +655,19 @@ int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entrie
         if (count >= max_entries) {
             break; /* truncate rather than overflow the caller's buffer */
         }
+        if (is_root && str_eq(entries[i].name, "DEV")) {
+            dev_shadowed = 1; /* a real entry already claims the name; don't double-list it */
+        }
         name_copy(out[count].name, entries[i].name);
         out[count].type = entries[i].type;
         out[count].size_bytes = entries[i].size_bytes;
+        count++;
+    }
+
+    if (is_root && !dev_shadowed && count < max_entries) {
+        name_copy(out[count].name, "DEV");
+        out[count].type = FS_TYPE_DIR;
+        out[count].size_bytes = 0;
         count++;
     }
 
