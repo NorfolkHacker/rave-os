@@ -29,9 +29,15 @@ void shell_init(struct shell *sh);
  * case-insensitive (CD/cd/Cd all work, matching Forth's/RUN's own
  * case-insensitive word lookup -- this console's font can't visually
  * distinguish typed case, so a case-sensitive command word wasn't
- * discoverable), no quoting/pipes/redirection. Path arguments stay
- * case-sensitive -- they're real on-disk names, and `ls` shows you
- * the true casing. An unrecognized command writes "<word>: command not
+ * discoverable), no quoting/pipes/redirection. Path arguments are also
+ * forgiving about case (`cd home`, `cat config` resolve to the real
+ * `HOME`/`CONFIG` entries) for the identical font reason -- but only as
+ * a fallback: an exact-case match always wins first (shell.c's
+ * shell_case_correct()), so this stays consistent with fs.c's own
+ * genuinely case-sensitive storage rather than pretending it isn't
+ * case-sensitive. `mkdir`'s own new name is the one exception, created
+ * exactly as typed -- there's nothing existing yet to correct it
+ * against. An unrecognized command writes "<word>: command not
  * found", matching bash's own wording. */
 void shell_eval_line(struct shell *sh, const char *line, char *out, int out_cap);
 

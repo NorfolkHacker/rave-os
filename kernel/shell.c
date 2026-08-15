@@ -119,6 +119,141 @@ static void shell_resolve(const struct shell *sh, const char *arg, char *resolve
     }
 }
 
+static int shell_name_eq(const char *a, const char *b) {
+    while (*a && *b) {
+        if (*a != *b) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static int shell_name_eq_ci(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'a' && ca <= 'z') {
+            ca = (char)(ca - 32);
+        }
+        if (cb >= 'a' && cb <= 'z') {
+            cb = (char)(cb - 32);
+        }
+        if (ca != cb) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/* Walks `path` (absolute, e.g. "/etc/config") one component at a time,
+ * replacing each with its real on-disk casing found by scanning the
+ * parent's actual listing -- so "cd home", "cd /home", "cat config" all
+ * resolve to this OS's real, uppercase names, without fs.c's own
+ * lookups (or FILES/RUN, which call them directly) becoming any less
+ * case-sensitive. Each component tries an exact match first and only
+ * falls back to a case-insensitive one if that fails, so a real
+ * lowercase entry sharing a name with a differently-cased one (e.g.
+ * this filesystem's own reserved-vs-real /DEV precedent) still resolves
+ * to itself rather than being silently redirected to its sibling.
+ *
+ * If `correct_last` is 0, the final path component is left exactly as
+ * typed and never looked up at all -- mkdir's own target is a name
+ * being created, not one to match against something that (by
+ * definition) doesn't exist yet; only the parent portion of its path
+ * gets corrected.
+ *
+ * Leaves `path` completely untouched -- not partially rewritten -- if
+ * any component that needed correcting has no match at all, exact or
+ * case-insensitive: the caller's own fs_ call then fails with its
+ * usual, correct error against the as-typed path, same as before this
+ * function existed. */
+static void shell_case_correct(char *path, int cap, int correct_last) {
+    char resolved[FS_PATH_MAX];
+    char component[FS_NAME_MAX];
+    char tail[FS_NAME_MAX];
+    int rpos = 1;
+    int i = 1; /* path[0] is always '/' */
+    int has_tail = 0;
+
+    resolved[0] = '/';
+    resolved[1] = 0;
+    tail[0] = 0;
+
+    while (path[i]) {
+        int clen = 0;
+        int is_last;
+
+        while (path[i] && path[i] != '/' && clen < FS_NAME_MAX - 1) {
+            component[clen++] = path[i++];
+        }
+        component[clen] = 0;
+        is_last = (path[i] == 0);
+        if (path[i] == '/') {
+            i++;
+        }
+        if (clen == 0) {
+            continue;
+        }
+
+        if (is_last && !correct_last) {
+            int pos = 0;
+            shell_append(tail, &pos, (int)sizeof(tail), component);
+            has_tail = 1;
+            break;
+        }
+
+        {
+            struct fs_dirent entries[FS_LIST_MAX];
+            unsigned int count, j;
+            int matched = 0;
+            int pass;
+
+            if (fs_list_dir(resolved, entries, FS_LIST_MAX, &count) != 0) {
+                return;
+            }
+            for (pass = 0; pass < 2 && !matched; pass++) {
+                for (j = 0; j < count; j++) {
+                    int eq = (pass == 0) ? shell_name_eq(entries[j].name, component)
+                                         : shell_name_eq_ci(entries[j].name, component);
+                    if (eq) {
+                        int k;
+                        if (rpos > 1) {
+                            resolved[rpos++] = '/';
+                        }
+                        for (k = 0; entries[j].name[k] && rpos < (int)sizeof(resolved) - 1; k++) {
+                            resolved[rpos++] = entries[j].name[k];
+                        }
+                        resolved[rpos] = 0;
+                        matched = 1;
+                        break;
+                    }
+                }
+            }
+            if (!matched) {
+                return;
+            }
+        }
+    }
+
+    {
+        int pos = 0;
+        shell_append(path, &pos, cap, resolved);
+        if (has_tail) {
+            /* resolved is never empty (always at least "/"), so this
+             * only skips the separator for the root case -- the same
+             * "/" special-case fs_path_join() already needs, avoiding a
+             * doubled "//tail" that would fail to resolve. */
+            if (!(resolved[0] == '/' && resolved[1] == 0)) {
+                shell_append(path, &pos, cap, "/");
+            }
+            shell_append(path, &pos, cap, tail);
+        }
+    }
+}
+
 /* No argument resets to /HOME (matches bash's own bare-cd-goes-home
  * behavior; /HOME is already this OS's real home directory, guaranteed
  * to exist by fs_bootstrap_dirs() before any window can open). An
@@ -138,6 +273,7 @@ static void shell_cmd_cd(struct shell *sh, const char *arg, char *out, int *pos,
     }
 
     shell_resolve(sh, arg, target, (int)sizeof(target));
+    shell_case_correct(target, (int)sizeof(target), 1);
     if (fs_list_dir(target, tmp, FS_LIST_MAX, &tmp_count) != 0) {
         shell_append(out, pos, cap, "cd: no such directory");
         return;
@@ -164,6 +300,7 @@ static void shell_cmd_ls(const struct shell *sh, const char *arg, char *out, int
         shell_append(target, &p, (int)sizeof(target), sh->cwd);
     } else {
         shell_resolve(sh, arg, target, (int)sizeof(target));
+        shell_case_correct(target, (int)sizeof(target), 1);
     }
 
     if (fs_list_dir(target, entries, FS_LIST_MAX, &count) != 0) {
@@ -225,6 +362,7 @@ static void shell_cmd_cat(const struct shell *sh, const char *arg, char *out, in
         return;
     }
     shell_resolve(sh, arg, target, (int)sizeof(target));
+    shell_case_correct(target, (int)sizeof(target), 1);
 
     if (fs_read_file(target, buf, SHELL_CAT_BUF_SIZE - 1, &out_size) != 0) {
         shell_append(out, pos, cap, "cat: read failed");
@@ -250,6 +388,10 @@ static void shell_cmd_mkdir(const struct shell *sh, const char *arg, char *out, 
         return;
     }
     shell_resolve(sh, arg, target, (int)sizeof(target));
+    /* correct_last = 0: only the parent portion is corrected -- the new
+     * directory's own name is created exactly as typed, since it
+     * doesn't exist yet to match against. */
+    shell_case_correct(target, (int)sizeof(target), 0);
     if (fs_create_dir(target) != 0) {
         shell_append(out, pos, cap, "mkdir: failed");
     }
@@ -267,6 +409,7 @@ static void shell_cmd_rm(const struct shell *sh, const char *arg, char *out, int
         return;
     }
     shell_resolve(sh, arg, target, (int)sizeof(target));
+    shell_case_correct(target, (int)sizeof(target), 1);
     if (fs_delete(target) != 0) {
         shell_append(out, pos, cap, "rm: failed");
     }
