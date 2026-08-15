@@ -958,3 +958,15 @@ Immediate follow-up, on request, once the `(EMPTY)` fix made the actual root cau
 **Verified headlessly**: rebuilt (confirmed `kernel.o` correctly rebuilt too, not just `shell.o` -- the dependency-list fix from the previous SHELL stage's final review doing its job), booted, opened SHELL: `pwd` -> `/`, `ls` -> `OLD DIR/ TESTDIR/ BIN/ ETC/ HOME/ USR/ VAR/ TMP/ GAMES/ DEV/` immediately, no navigation needed first.
 
 Files: `kernel/shell.h`/`.c` (`shell_init()`'s default `cwd` and its doc comment).
+
+## 2026-08-15 -- SHELL command words go case-insensitive; the font made case-sensitivity undiscoverable
+
+Reported immediately after the `/` default-start fix: `cd home` failing looked like a bug (it wasn't -- `HOME` is uppercase on disk, and the shell's path arguments are deliberately case-sensitive, same as every real on-disk name). Asked to also test `CD HOME` specifically -- root-caused via `superpowers:systematic-debugging`, reproduced headlessly both ways before touching code.
+
+**The real problem, confirmed live**: `CD HOME` (uppercase command word) fails with `command not found`; `cd HOME` (lowercase command, uppercase path -- the only form that was ever correct) succeeds. Both render *identically* in the console, because `font.c`'s glyphs are uppercase-style regardless of the actual typed case -- there is no way to visually tell, from anything on screen, whether a command word was typed upper or lower case. The shell's original design deliberately made command words case-sensitive (unlike Forth's/RUN's case-insensitive matching) to feel more like real bash -- reasonable in the abstract, actively misleading with a font that erases the one signal that would let a user self-correct.
+
+**Fix, scoped narrowly**: `shell_token_is()` (`shell.c`) now folds the typed line's letters to lowercase before comparing against each command word, so `CD`/`cd`/`Cd` all dispatch identically -- same case-insensitive-word-lookup shape Forth's own dispatch and `match_run_command()` (kernel.c) already use, for the same reason (this font problem isn't new, RUN was made case-insensitive from day one). Path *arguments* are deliberately untouched -- `shell_resolve()` still requires exact on-disk casing, since those are real filesystem names, not this OS's own vocabulary, and `ls` already shows the true casing if a user needs to check it. The unrecognized-command error path (`shell_first_word()`) still echoes whatever was actually typed, unmodified -- only the dispatch comparison folds case, not what gets shown back.
+
+**Verified headlessly**: rebuilt, booted, opened SHELL: `CD HOME` (fully uppercase) -> `pwd` confirmed `/HOME`, correctly resolved despite the uppercase command word. Confirmed the unrecognized-command path still fires correctly for a real typo (not accidentally swallowed by the new case-folding).
+
+Files: `kernel/shell.h`/`.c` (`shell_token_is()`'s comparison, and doc comments in both files describing command-word case handling).

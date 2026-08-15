@@ -43,14 +43,27 @@ static void shell_format_uint(unsigned int v, char *out) {
     out[j] = 0;
 }
 
-/* True if line starts with exactly word, followed by a space or the
- * end of the string -- a whole-token match, so "cat" doesn't match a
- * line starting "catfoo". No copying, unlike a fixed-size token buffer
- * would need. */
+/* True if line starts with word (case-insensitively -- matching
+ * Forth's/RUN's own case-insensitive word lookup, see kernel.c's
+ * match_run_command()), followed by a space or the end of the string --
+ * a whole-token match, so "cat" doesn't match a line starting "catfoo".
+ * No copying, unlike a fixed-size token buffer would need.
+ *
+ * Case-insensitive here, unlike shell_resolve()'s path arguments below
+ * (which must match a real on-disk name exactly): this console's font
+ * renders every character in uppercase-style glyphs, so "cd" and "CD"
+ * are visually indistinguishable in the scrollback -- a command word
+ * being case-sensitive here isn't discoverable, it's just confusing (a
+ * real live-testing mistake, not a hypothetical). A path argument's
+ * true casing is at least visible via `ls`, so it stays exact-match. */
 static int shell_token_is(const char *line, const char *word) {
     int i;
     for (i = 0; word[i]; i++) {
-        if (line[i] != word[i]) {
+        char c = line[i];
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c + 32);
+        }
+        if (c != word[i]) {
             return 0;
         }
     }

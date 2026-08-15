@@ -25,9 +25,13 @@ void shell_init(struct shell *sh);
  * same way it already does for Forth and RUN. An empty line produces
  * empty output (a silent no-op, same as pressing Enter at an empty bash
  * prompt). Commands: pwd, cd [path], ls [path], cat <path>,
- * mkdir <path>, rm <path>, echo <text> -- lowercase, case-sensitive
- * (unlike Forth's/RUN's case-insensitive matching), no quoting/pipes/
- * redirection. An unrecognized command writes "<word>: command not
+ * mkdir <path>, rm <path>, echo <text> -- the command word itself is
+ * case-insensitive (CD/cd/Cd all work, matching Forth's/RUN's own
+ * case-insensitive word lookup -- this console's font can't visually
+ * distinguish typed case, so a case-sensitive command word wasn't
+ * discoverable), no quoting/pipes/redirection. Path arguments stay
+ * case-sensitive -- they're real on-disk names, and `ls` shows you
+ * the true casing. An unrecognized command writes "<word>: command not
  * found", matching bash's own wording. */
 void shell_eval_line(struct shell *sh, const char *line, char *out, int out_cap);
 
