@@ -798,6 +798,52 @@ int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entrie
     return 0;
 }
 
+/* Bounded append with a running cursor, same shape as kernel.c's own
+ * str_append() -- duplicated here rather than shared (see this file's
+ * "each file owns its small string primitives" convention). Truncates
+ * rather than overflows dst if src would run past cap. */
+static void path_append(char *dst, int *pos, int cap, const char *src) {
+    if (cap <= 0) {
+        return;
+    }
+    while (*src && *pos < cap - 1) {
+        dst[(*pos)++] = *src++;
+    }
+    dst[*pos] = 0;
+}
+
+void fs_path_join(char *dst, int cap, const char *cwd, const char *name) {
+    int pos = 0;
+    /* Deliberately not this file's own str_eq(): that comparison is
+     * bounded to FS_NAME_MAX (16) and meant for directory-entry names,
+     * not arbitrary-length paths -- comparing a long cwd against the
+     * short literal "/" happens to be safe with it too (the short
+     * operand's own nul always ends the loop first), but a direct
+     * check here avoids needing that reasoning at all. */
+    int cwd_is_root = (cwd[0] == '/' && cwd[1] == 0);
+    if (!cwd_is_root) {
+        path_append(dst, &pos, cap, cwd);
+    }
+    path_append(dst, &pos, cap, "/");
+    path_append(dst, &pos, cap, name);
+}
+
+void fs_path_parent(char *cwd) {
+    int i;
+    int last_slash = -1;
+    for (i = 0; cwd[i]; i++) {
+        if (cwd[i] == '/') {
+            last_slash = i;
+        }
+    }
+    if (last_slash <= 0) {
+        cwd[0] = '/';
+        cwd[1] = 0;
+    } else {
+        cwd[last_slash] = 0;
+    }
+}
+
 #define FS_NUM_STANDARD_DIRS 7
 static const char *const fs_standard_dirs[FS_NUM_STANDARD_DIRS] = {
     "/BIN", "/ETC", "/HOME", "/USR", "/VAR", "/TMP", "/GAMES",

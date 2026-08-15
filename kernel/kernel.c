@@ -339,9 +339,11 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
     console_input_draw(ci);
 }
 
-/* Room for FS_MAX_PATH_DEPTH (4) components at up to FS_NAME_MAX - 1 (15)
- * chars each, plus separating slashes and the terminator -- generous. */
-#define FILES_PATH_MAX 80
+/* fs.h's own constant, kept under this file's existing local name (no
+ * call site here needs to change) -- same "the old name survives a
+ * refactor" precedent VIEWER_BUF_SIZE already set when the VIEWER
+ * window was removed. */
+#define FILES_PATH_MAX FS_PATH_MAX
 #define FILES_ROW_HEIGHT 20
 #define FILES_LIST_Y_OFFSET 12
 
@@ -358,41 +360,6 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
  * rather than renamed, since RUN's read really is the same "read a whole
  * small file into one buffer" shape the VIEWER used. */
 #define VIEWER_BUF_SIZE 512
-
-/* Appends name onto cwd ("/" gets name appended directly, without a
- * doubled leading slash; anything else gets a separating '/' first).
- * cap is dst's real size (callers pass FILES_PATH_MAX, not a guess) --
- * cwd is only ever built by this same bounded machinery, but name comes
- * straight from an on-disk directory entry (fs_dirent.name), which fs.c
- * only guarantees fits FS_NAME_MAX, not that cwd+"/"+name fits in
- * FILES_PATH_MAX. A corrupted/crafted directory entry deep enough in the
- * tree must truncate here, not overflow dst. */
-static void path_join(char *dst, int cap, const char *cwd, const char *name) {
-    int pos = 0;
-    if (!str_eq(cwd, "/")) {
-        str_append(dst, &pos, cap, cwd);
-    }
-    str_append(dst, &pos, cap, "/");
-    str_append(dst, &pos, cap, name);
-}
-
-/* In place: truncates cwd at its last '/', or resets to "/" if that was
- * the leading slash (going up from a top-level directory). */
-static void path_parent(char *cwd) {
-    int i;
-    int last_slash = -1;
-    for (i = 0; cwd[i]; i++) {
-        if (cwd[i] == '/') {
-            last_slash = i;
-        }
-    }
-    if (last_slash <= 0) {
-        cwd[0] = '/';
-        cwd[1] = 0;
-    } else {
-        cwd[last_slash] = 0;
-    }
-}
 
 /* Case-insensitive match for a leading "RUN " token (mirrors forth.c's
  * own case-insensitive word lookup, so RUN behaves the same regardless
@@ -1308,14 +1275,14 @@ void kmain(void) {
                     int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy);
 
                     if (hit == FILES_HIT_UP) {
-                        path_parent(cwd);
+                        fs_path_parent(cwd);
                         files_selected = FILES_HIT_NONE; /* stale relative to the new listing */
                         if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
                     } else if (hit >= 0 && file_entries[hit].type == FS_TYPE_DIR) {
                         char new_cwd[FILES_PATH_MAX];
-                        path_join(new_cwd, (int)sizeof(new_cwd), cwd, file_entries[hit].name);
+                        fs_path_join(new_cwd, (int)sizeof(new_cwd), cwd, file_entries[hit].name);
                         {
                             int ci2;
                             for (ci2 = 0; new_cwd[ci2] && ci2 < (int)sizeof(cwd) - 1; ci2++) {
@@ -1351,7 +1318,7 @@ void kmain(void) {
                 delete_btn.hovered = files_is_topmost && button_hit_test(&delete_btn, cx, cy);
                 if (delete_btn.hovered && click_edge && files_selected >= 0) {
                     char del_path[FILES_PATH_MAX];
-                    path_join(del_path, (int)sizeof(del_path), cwd, file_entries[files_selected].name);
+                    fs_path_join(del_path, (int)sizeof(del_path), cwd, file_entries[files_selected].name);
                     if (fs_delete(del_path) == 0) {
                         files_selected = FILES_HIT_NONE;
                         if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
@@ -1372,7 +1339,7 @@ void kmain(void) {
                 new_dir_btn.hovered = files_is_topmost && button_hit_test(&new_dir_btn, cx, cy);
                 if (new_dir_btn.hovered && click_edge && name_input.text[0] != 0) {
                     char new_path[FILES_PATH_MAX];
-                    path_join(new_path, (int)sizeof(new_path), cwd, name_input.text);
+                    fs_path_join(new_path, (int)sizeof(new_path), cwd, name_input.text);
                     if (fs_create_dir(new_path) == 0) {
                         console_input_clear(&name_input);
                         if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
@@ -1469,11 +1436,11 @@ void kmain(void) {
                     int ok;
                     if (files_selected >= 0) {
                         char old_path[FILES_PATH_MAX];
-                        path_join(old_path, (int)sizeof(old_path), cwd, file_entries[files_selected].name);
+                        fs_path_join(old_path, (int)sizeof(old_path), cwd, file_entries[files_selected].name);
                         ok = fs_rename(old_path, name_input.text) == 0;
                     } else {
                         char new_path[FILES_PATH_MAX];
-                        path_join(new_path, (int)sizeof(new_path), cwd, name_input.text);
+                        fs_path_join(new_path, (int)sizeof(new_path), cwd, name_input.text);
                         ok = fs_create_file(new_path, 0, 0) == 0;
                     }
                     if (ok) {

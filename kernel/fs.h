@@ -13,6 +13,13 @@
  * not FS_MAX_FILES, or the synthetic row can be silently dropped. */
 #define FS_LIST_MAX (FS_MAX_FILES + 1)
 
+/* Longest absolute path this filesystem's own path-walking logic can
+ * ever produce or accept: 4 components at up to FS_NAME_MAX - 1 (15)
+ * characters each, plus a separating '/' before each and a terminating
+ * nul -- generous, not a tight bound. Callers building a path buffer
+ * (e.g. via fs_path_join()) should size it to this. */
+#define FS_PATH_MAX 80
+
 #define FS_TYPE_FILE 0
 #define FS_TYPE_DIR 1
 
@@ -104,6 +111,19 @@ int fs_rename(const char *path, const char *new_name);
  * "/DEV", and nothing can be created/renamed to shadow the name "DEV" at
  * root -- fs_create_dir()/fs_create_file()/fs_rename() all reject it. */
 int fs_list_dir(const char *path, struct fs_dirent *out, unsigned int max_entries, unsigned int *out_count);
+
+/* Appends name onto cwd ("/" gets name appended directly, without a
+ * doubled leading slash; anything else gets a separating '/' first).
+ * cap is dst's real size (callers should pass FS_PATH_MAX, not a guess)
+ * -- name may come from an on-disk directory entry (fs_dirent.name),
+ * which is only guaranteed to fit FS_NAME_MAX, not that cwd+"/"+name
+ * fits in cap; truncates rather than overflows dst if it would run
+ * past cap. */
+void fs_path_join(char *dst, int cap, const char *cwd, const char *name);
+
+/* In place: truncates cwd at its last '/', or resets it to "/" if that
+ * was the leading slash (going up from a top-level directory). */
+void fs_path_parent(char *cwd);
 
 /* Mounts (formatting if needed), then proves it end-to-end against a
  * fixed nested path: reads it first -- if it's already there (every boot
