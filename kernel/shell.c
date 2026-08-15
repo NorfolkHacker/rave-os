@@ -158,6 +158,20 @@ static void shell_cmd_ls(const struct shell *sh, const char *arg, char *out, int
         return;
     }
 
+    /* Real bash's ls prints nothing at all for an empty directory, but
+     * that reads as indistinguishable from a hung or silently-failed
+     * command in a brand-new shell nobody has built trust in yet --
+     * confirmed by live confusion, not a hypothetical. Says so
+     * explicitly instead, same "(EMPTY)" wording the FILES window's
+     * own listing already uses for the identical situation
+     * (draw_files_group(), kernel.c) -- one consistent way this OS
+     * shows "nothing here" everywhere, not a new convention invented
+     * just for the shell. */
+    if (count == 0) {
+        shell_append(out, pos, cap, "(EMPTY)");
+        return;
+    }
+
     for (i = 0; i < count; i++) {
         if (i > 0) {
             shell_append(out, pos, cap, "\n");
@@ -201,6 +215,14 @@ static void shell_cmd_cat(const struct shell *sh, const char *arg, char *out, in
 
     if (fs_read_file(target, buf, SHELL_CAT_BUF_SIZE - 1, &out_size) != 0) {
         shell_append(out, pos, cap, "cat: read failed");
+        return;
+    }
+    /* A genuinely empty (0-byte) file -- e.g. one FILES' own Enter-to-
+     * create-a-file flow makes by default -- reads back as silent,
+     * blank output, same "looks identical to a hang" ambiguity ls just
+     * got fixed for. Says so explicitly for the same reason. */
+    if (out_size == 0) {
+        shell_append(out, pos, cap, "(EMPTY FILE)");
         return;
     }
     buf[out_size] = 0;
