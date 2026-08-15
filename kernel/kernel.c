@@ -154,6 +154,26 @@ static int str_eq(const char *a, const char *b) {
     return *a == *b;
 }
 
+/* Splits buf on '\n' and appends each segment as its own console line,
+ * in place (buf is mutated -- '\n' bytes become nul terminators). The
+ * shared idiom fs_read_file() output (the viewer) and forth_eval_line()
+ * output (the Forth console, and now RUN's per-script-line output) both
+ * need, since forth.c/fs.c never touch console_output.h themselves. */
+static void append_split_lines(struct console_output *co, char *buf) {
+    int oi = 0, line_start = 0;
+    while (buf[oi]) {
+        if (buf[oi] == '\n') {
+            buf[oi] = 0;
+            console_output_append_line(co, &buf[line_start]);
+            line_start = oi + 1;
+        }
+        oi++;
+    }
+    if (line_start < oi) {
+        console_output_append_line(co, &buf[line_start]);
+    }
+}
+
 #define GLYPH_HEIGHT 7 /* font.c's glyphs are 7 rows tall at scale 1 */
 #define TITLE_TEXT "RAVE-OS"
 #define TITLE_Y 40
@@ -420,6 +440,80 @@ static void path_parent(char *cwd) {
         cwd[1] = 0;
     } else {
         cwd[last_slash] = 0;
+    }
+}
+
+/* Case-insensitive match for a leading "RUN " token (mirrors forth.c's
+ * own case-insensitive word lookup, so RUN behaves the same regardless
+ * of typed case) followed by at least one non-space character. Returns
+ * a pointer to the trimmed start of the argument within text (borrowed,
+ * not copied), or 0 if text isn't a RUN command. */
+static const char *match_run_command(const char *text) {
+    char c0 = text[0], c1 = text[1], c2 = text[2];
+    int i;
+
+    if (c0 >= 'a' && c0 <= 'z') {
+        c0 = (char)(c0 - 32);
+    }
+    if (c1 >= 'a' && c1 <= 'z') {
+        c1 = (char)(c1 - 32);
+    }
+    if (c2 >= 'a' && c2 <= 'z') {
+        c2 = (char)(c2 - 32);
+    }
+    if (c0 != 'R' || c1 != 'U' || c2 != 'N' || text[3] != ' ') {
+        return 0;
+    }
+
+    i = 3;
+    while (text[i] == ' ') {
+        i++;
+    }
+    return text[i] ? &text[i] : 0;
+}
+
+/* RUN <name>, typed at the Forth console: a shell-like convenience, not
+ * a real Forth word -- resolved and executed entirely here rather than
+ * inside forth.c, which stays completely free of filesystem/GUI
+ * dependencies (see forth.h). A bare name (no leading '/') resolves
+ * against /BIN, giving that directory real purpose; an absolute path
+ * (leading '/') is used as-is for a script living elsewhere. Reads the
+ * file, splits it into lines, and feeds each one through
+ * forth_eval_line() exactly as if it had been typed and Entered
+ * individually -- multi-line colon definitions inside a script work for
+ * free, since compile-mode state already persists across separate
+ * forth_eval_line() calls (forth.h). */
+static void forth_run_command(struct forth_vm *vm, struct console_output *co, const char *arg) {
+    char path[FILES_PATH_MAX];
+    char buf[VIEWER_BUF_SIZE];
+    unsigned int out_size;
+    int pos = 0;
+    int oi, line_start;
+
+    if (arg[0] == '/') {
+        str_append(path, &pos, (int)sizeof(path), arg);
+    } else {
+        str_append(path, &pos, (int)sizeof(path), "/BIN/");
+        str_append(path, &pos, (int)sizeof(path), arg);
+    }
+
+    if (fs_read_file(path, buf, VIEWER_BUF_SIZE - 1, &out_size) != 0) {
+        console_output_append_line(co, "(RUN FAILED)");
+        return;
+    }
+    buf[out_size] = 0;
+
+    line_start = 0;
+    for (oi = 0; oi <= (int)out_size; oi++) {
+        if (oi == (int)out_size || buf[oi] == '\n') {
+            char eval_out[128];
+            char saved = buf[oi];
+            buf[oi] = 0;
+            forth_eval_line(vm, &buf[line_start], eval_out, sizeof(eval_out));
+            append_split_lines(co, eval_out);
+            buf[oi] = saved;
+            line_start = oi + 1;
+        }
     }
 }
 
@@ -1045,6 +1139,16 @@ void kmain(void) {
     fs_status = fs_selftest();
     fs_bootstrap_dirs();
 
+    /* Seeds one real script into /BIN so RUN has something to actually
+     * run -- there's no in-OS text editor yet, so this is the only way
+     * a script with real content ends up on disk, same reasoning as
+     * fs_selftest()'s own NESTED.TXT. fs_create_file() is write-once,
+     * so this is a silent no-op every boot after the first. */
+    {
+        static const char demo_script[] = ": GREET 42 . CR ;\nGREET\n";
+        fs_create_file("/BIN/HELLO", demo_script, (unsigned int)(sizeof(demo_script) - 1));
+    }
+
     /* Read once here (and again only when a navigation click actually
      * changes cwd, below), not on every redraw -- this kernel's event loop
      * redraws on essentially any mouse movement, and re-reading the
@@ -1332,25 +1436,12 @@ void kmain(void) {
                         if (fs_read_file(file_path, buf, VIEWER_BUF_SIZE - 1, &out_size) != 0) {
                             console_output_append_line(&viewer_co, "(READ FAILED)");
                         } else {
-                            /* Same '\n'-splitting idiom already used below
-                             * for forth_eval_line()'s output -- fs_read_file()
-                             * doesn't nul-terminate (it copies exactly
-                             * out_size raw bytes), so that's done here first,
-                             * guaranteed to fit within VIEWER_BUF_SIZE. */
-                            int oi = 0, line_start = 0;
-
+                            /* fs_read_file() doesn't nul-terminate (it copies
+                             * exactly out_size raw bytes), so that's done
+                             * here first, guaranteed to fit within
+                             * VIEWER_BUF_SIZE. */
                             buf[out_size] = 0;
-                            while (buf[oi]) {
-                                if (buf[oi] == '\n') {
-                                    buf[oi] = 0;
-                                    console_output_append_line(&viewer_co, &buf[line_start]);
-                                    line_start = oi + 1;
-                                }
-                                oi++;
-                            }
-                            if (line_start < oi) {
-                                console_output_append_line(&viewer_co, &buf[line_start]);
-                            }
+                            append_split_lines(&viewer_co, buf);
                         }
 
                         raise_window(z_order, WIN_KIND_VIEWER);
@@ -1442,29 +1533,31 @@ void kmain(void) {
                 console_history_reset_browse(&hist);
                 if (console_input_feed_char(&ci, c)) {
                     char echoed[CONSOLE_INPUT_MAX + 4];
-                    char out[128];
-                    int pos = 0, oi = 0, line_start = 0;
+                    const char *run_arg;
+                    int pos = 0;
 
                     str_append(echoed, &pos, (int)sizeof(echoed), "> ");
                     str_append(echoed, &pos, (int)sizeof(echoed), ci.text);
                     console_output_append_line(&co, echoed);
 
-                    /* forth_eval_line() never touches console_output.h
-                     * itself (see forth.h) -- it writes '\n'-separated
-                     * output into out[], and splitting that into
-                     * separate console lines is kernel.c's job, done
-                     * here rather than inside forth.c. */
-                    forth_eval_line(&vm, ci.text, out, sizeof(out));
-                    while (out[oi]) {
-                        if (out[oi] == '\n') {
-                            out[oi] = 0;
-                            console_output_append_line(&co, &out[line_start]);
-                            line_start = oi + 1;
-                        }
-                        oi++;
-                    }
-                    if (line_start < oi) {
-                        console_output_append_line(&co, &out[line_start]);
+                    /* RUN is a console-level convenience, not real Forth
+                     * syntax -- only intercepted outside compile mode, so
+                     * a stray "RUN" token typed inside a ':'/';' body
+                     * falls through to the compiler as normal (where it
+                     * just errors UNKNOWN, same as any other undefined
+                     * word). */
+                    run_arg = vm.compiling ? 0 : match_run_command(ci.text);
+                    if (run_arg) {
+                        forth_run_command(&vm, &co, run_arg);
+                    } else {
+                        char out[128];
+                        /* forth_eval_line() never touches console_output.h
+                         * itself (see forth.h) -- it writes '\n'-separated
+                         * output into out[], and splitting that into
+                         * separate console lines is kernel.c's job, done
+                         * here rather than inside forth.c. */
+                        forth_eval_line(&vm, ci.text, out, sizeof(out));
+                        append_split_lines(&co, out);
                     }
 
                     console_history_push(&hist, ci.text);
