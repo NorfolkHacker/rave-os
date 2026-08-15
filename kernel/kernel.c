@@ -1514,11 +1514,20 @@ void kmain(void) {
             } else if (shell_ci.focused) {
                 console_history_reset_browse(&shell_hist);
                 if (console_input_feed_char(&shell_ci, c)) {
-                    char echoed[CONSOLE_INPUT_MAX + 4];
+                    /* "<cwd> > <command>" -- unlike FORTH's bare "> "
+                     * (Forth has no notion of a current location), the
+                     * shell's whole state includes cwd, so it's worth
+                     * always showing without a separate pwd. Sized for
+                     * the worst case (a full FS_PATH_MAX cwd plus a full
+                     * CONSOLE_INPUT_MAX line); console_output_append_line()
+                     * still truncates to CONSOLE_LINE_MAX for display,
+                     * same as any other long line in this console. */
+                    char echoed[FS_PATH_MAX + CONSOLE_INPUT_MAX + 8];
                     char shell_out[VIEWER_BUF_SIZE];
                     int pos = 0;
 
-                    str_append(echoed, &pos, (int)sizeof(echoed), "> ");
+                    str_append(echoed, &pos, (int)sizeof(echoed), sh.cwd);
+                    str_append(echoed, &pos, (int)sizeof(echoed), " > ");
                     str_append(echoed, &pos, (int)sizeof(echoed), shell_ci.text);
                     console_output_append_line(&shell_co, echoed);
 

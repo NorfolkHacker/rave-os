@@ -984,3 +984,13 @@ Reported minutes after the command-word fix landed: `cd home` still failed. Root
 **Verified headlessly, including direct on-disk confirmation** (same fs.img byte-parsing technique used throughout this project, stronger evidence than a screendump alone): `cd home` (lowercase, from `/`) -> `pwd` confirmed `/HOME`. `mkdir test` (lowercase, from `/`, after the doubled-slash fix) -> `ls` showed a new entry, and parsing `fs.img`'s root table directly confirmed the real on-disk name is `test` (lowercase, exactly as typed -- `mkdir`'s `correct_last=0` behaving as designed, not silently forcing uppercase). `rm TEST` (uppercase, case-insensitive fallback) correctly removed the real lowercase `test` entry -- confirmed both via `ls` and a second direct disk parse showing zero trace left.
 
 Files: `kernel/shell.h`/`.c` (`shell_case_correct()`, `shell_name_eq()`, `shell_name_eq_ci()`, new; called from `shell_cmd_cd()`/`shell_cmd_ls()`/`shell_cmd_cat()`/`shell_cmd_mkdir()`/`shell_cmd_rm()`; doc comments updated in both files).
+
+## 2026-08-15 -- SHELL prompt shows the current directory
+
+Picked up next, on request: closes the last of the final code review's Minor recommendations for this stage (the other two -- FILES not auto-refreshing after a shell-driven filesystem change, and a `help` command -- remain open, deliberately not bundled in without being asked for). The prompt echoed by the Enter-key handler (`kernel.c`) was a bare `"> "`, no location -- unlike FORTH (which has no notion of a current directory at all), the shell's whole state includes `cwd`, so always showing it costs nothing and saves a `pwd` round-trip to answer "where am I."
+
+**One-line-shaped change**: the echo line becomes `"<cwd> > <command>"` -- `sh.cwd` read *before* `shell_eval_line()` runs, so a `cd` command's own echoed line shows where it was typed *from*, not where it just landed (matching how a real shell's prompt always reflects the directory a command was issued in). The `echoed` buffer grew from `CONSOLE_INPUT_MAX + 4` to `FS_PATH_MAX + CONSOLE_INPUT_MAX + 8` to fit the worst case; `console_output_append_line()`'s existing `CONSOLE_LINE_MAX` (64) truncation still applies for display, same as any other long line in this console -- no new wrapping logic needed or added.
+
+**Verified headlessly**: booted, opened SHELL, typed `ls` at boot -> echoed as `/ > LS`; typed `cd home` -> echoed `/ > CD HOME`; typed `ls` again -> echoed `/HOME > LS`, confirming the prompt tracks `cwd` correctly across a real directory change, not just showing a static value from boot.
+
+Files: `kernel/kernel.c` only (the shell's Enter-key handler's `echoed` construction).
