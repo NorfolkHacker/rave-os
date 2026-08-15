@@ -16,6 +16,7 @@
 #include "console_history.h"
 #include "console_output.h"
 #include "forth.h"
+#include "shell.h"
 #include "io.h"
 #include "ata.h"
 #include "fs.h"
@@ -27,24 +28,29 @@
 
 #define CURSOR_SIZE 8
 
-/* Two windows exist now (the Forth console and a navigable file manager
- * that can delete, create, and rename entries too), tracked as a real
- * array/z-order list rather than named locals so every window is treated
- * uniformly regardless of what's inside it. The original two demo
- * windows (PANEL, INFO) are gone -- their one piece of real content each
- * (the EXIT/FX controls, ATA/FS status text) either moved into the
- * bottom-left start menu (startmenu.h) or was dropped as boot-only
- * diagnostic noise nothing was actually reading off-screen. The
- * read-only file VIEWER window is gone too, on request -- clicking a
- * file in FILES is now a no-op, same as clicking anything else this
- * project doesn't have a use for yet. Content still differs per window,
- * so each window's content is drawn via a kind-indexed dispatch
- * (draw_window_by_index()) rather than a generic widget framework --
- * there are exactly two content kinds, not an open-ended number, so a
- * small switch is simpler than a real polymorphic app system. */
-#define MAX_WINDOWS 2
+/* Three windows exist now: the Forth console, a navigable file manager
+ * that can delete, create, and rename entries too, and a bash-like
+ * shell (shell.h) for typed Unix-style commands (ls/cd/cat/...) against
+ * the same real filesystem FILES already browses with the mouse.
+ * Tracked as a real array/z-order list rather than named locals so
+ * every window is treated uniformly regardless of what's inside it. The
+ * original two demo windows (PANEL, INFO) are gone -- their one piece
+ * of real content each (the EXIT/FX controls, ATA/FS status text)
+ * either moved into the bottom-left start menu (startmenu.h) or was
+ * dropped as boot-only diagnostic noise nothing was actually reading
+ * off-screen. The read-only file VIEWER window is gone too, on request
+ * -- clicking a file in FILES is now a no-op, same as clicking anything
+ * else this project doesn't have a use for yet (cat in the new SHELL
+ * window does what VIEWER used to, typed instead of clicked). Content
+ * still differs per window, so each window's content is drawn via a
+ * kind-indexed dispatch (draw_window_by_index()) rather than a generic
+ * widget framework -- there are exactly three content kinds, not an
+ * open-ended number, so a small switch is simpler than a real
+ * polymorphic app system. */
+#define MAX_WINDOWS 3
 #define WIN_KIND_FORTH 0
 #define WIN_KIND_FILES 1
+#define WIN_KIND_SHELL 2
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -315,7 +321,8 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
  * every call site that moves the window. */
 static void move_window_content(int kind, struct console_output *co, struct console_input *ci,
                                 struct console_input *name_input, struct button *new_dir_btn,
-                                struct button *delete_btn, int applied_dx, int applied_dy) {
+                                struct button *delete_btn, struct console_output *shell_co,
+                                struct console_input *shell_ci, int applied_dx, int applied_dy) {
     if (kind == WIN_KIND_FORTH) {
         co->x += applied_dx;
         co->y += applied_dy;
@@ -328,6 +335,11 @@ static void move_window_content(int kind, struct console_output *co, struct cons
         new_dir_btn->y += applied_dy;
         delete_btn->x += applied_dx;
         delete_btn->y += applied_dy;
+    } else if (kind == WIN_KIND_SHELL) {
+        shell_co->x += applied_dx;
+        shell_co->y += applied_dy;
+        shell_ci->x += applied_dx;
+        shell_ci->y += applied_dy;
     }
 }
 
@@ -337,6 +349,16 @@ static void draw_forth_group(const struct window *forth, const struct console_ou
     window_draw(forth);
     console_output_draw(co);
     console_input_draw(ci);
+}
+
+/* The third window: a bash-like shell (shell.h) -- same console pane
+ * shape draw_forth_group() uses, just backed by shell_eval_line()
+ * instead of forth_eval_line(). */
+static void draw_shell_group(const struct window *shell, const struct console_output *shell_co,
+                             const struct console_input *shell_ci) {
+    window_draw(shell);
+    console_output_draw(shell_co);
+    console_input_draw(shell_ci);
 }
 
 /* fs.h's own constant, kept under this file's existing local name (no
@@ -593,15 +615,18 @@ static void open_files_at(char *cwd, int cwd_cap, const char *target, struct win
  * idx" -- both draw_scene() and update_and_present() go through this
  * instead of each hand-rolling their own kind check. */
 static void draw_window_by_index(int idx, const struct window *windows, const struct console_output *co,
-                                 const struct console_input *ci, const char *cwd,
+                                 const struct console_input *ci, const struct console_output *shell_co,
+                                 const struct console_input *shell_ci, const char *cwd,
                                  const struct fs_dirent *file_entries, unsigned int file_entry_count,
                                  int files_selected, const struct console_input *name_input,
                                  const struct button *new_dir_btn, const struct button *delete_btn) {
     if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
-    } else {
+    } else if (idx == WIN_KIND_FILES) {
         draw_files_group(&windows[idx], cwd, file_entries, file_entry_count, files_selected, name_input, new_dir_btn,
                          delete_btn);
+    } else {
+        draw_shell_group(&windows[idx], shell_co, shell_ci);
     }
 }
 
@@ -612,7 +637,8 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
  * be redrawn this way every frame before damage tracking (see
  * update_and_present() below). */
 static void draw_scene(int w, int h, const struct window *windows, int fx_enabled, const struct console_output *co,
-                       const struct console_input *ci, const int *z_order, const struct taskbar *bar,
+                       const struct console_input *ci, const struct console_output *shell_co,
+                       const struct console_input *shell_ci, const int *z_order, const struct taskbar *bar,
                        int hovered_entry, const struct startmenu *menu, int menu_hovered_item, int mx, int my,
                        uint32_t cursor_color, const char *cwd, const struct fs_dirent *file_entries,
                        unsigned int file_entry_count, int files_selected, const struct console_input *name_input,
@@ -630,8 +656,8 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
-            draw_window_by_index(idx, windows, co, ci, cwd, file_entries, file_entry_count, files_selected,
-                                 name_input, new_dir_btn, delete_btn);
+            draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
+                                 files_selected, name_input, new_dir_btn, delete_btn);
         }
     }
 
@@ -680,10 +706,11 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
  * painted back-to-front in z-order so the topmost window correctly wins
  * wherever two windows overlap. */
 static void update_and_present(int w, int h, const struct window *windows, int fx_enabled,
-                               const struct console_output *co, const struct console_input *ci, const int *z_order,
-                               const int *old_z, int old_mx, int old_my, int mx, int my, uint32_t cursor_color,
-                               const int *old_x, const int *old_y, const int *touched, int fx_changed,
-                               const struct taskbar *bar, int hovered_entry, int old_hovered_entry,
+                               const struct console_output *co, const struct console_input *ci,
+                               const struct console_output *shell_co, const struct console_input *shell_ci,
+                               const int *z_order, const int *old_z, int old_mx, int old_my, int mx, int my,
+                               uint32_t cursor_color, const int *old_x, const int *old_y, const int *touched,
+                               int fx_changed, const struct taskbar *bar, int hovered_entry, int old_hovered_entry,
                                const struct startmenu *menu, int menu_hovered_item, int menu_touched, const char *cwd,
                                const struct fs_dirent *file_entries, unsigned int file_entry_count,
                                int files_selected, const struct console_input *name_input,
@@ -805,8 +832,8 @@ static void update_and_present(int w, int h, const struct window *windows, int f
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
-            draw_window_by_index(idx, windows, co, ci, cwd, file_entries, file_entry_count, files_selected,
-                                 name_input, new_dir_btn, delete_btn);
+            draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
+                                 files_selected, name_input, new_dir_btn, delete_btn);
         }
     }
 
@@ -836,6 +863,10 @@ void kmain(void) {
     struct console_input ci;
     struct console_history hist;
     struct forth_vm vm;
+    struct console_output shell_co;
+    struct console_input shell_ci;
+    struct console_history shell_hist;
+    struct shell sh;
     struct window windows[MAX_WINDOWS];
     int z_order[MAX_WINDOWS];
     struct taskbar bar;
@@ -923,6 +954,21 @@ void kmain(void) {
     name_input.cursor = 0;
     name_input.focused = 0;
 
+    /* Same console-pane shape FORTH uses, at a different position so the
+     * two don't land exactly on top of each other at boot (overlap
+     * itself is harmless and expected -- every window here is
+     * draggable). */
+    windows[WIN_KIND_SHELL].x = 200;
+    windows[WIN_KIND_SHELL].y = 260;
+    windows[WIN_KIND_SHELL].w = 400;
+    windows[WIN_KIND_SHELL].h = 180;
+    windows[WIN_KIND_SHELL].title = "RAVE-OS SHELL";
+    /* Closed at boot, same as FORTH/FILES -- opened via the start
+     * menu's SHELL item. */
+    windows[WIN_KIND_SHELL].state = WINDOW_CLOSED;
+    windows[WIN_KIND_SHELL].minimize_hovered = 0;
+    windows[WIN_KIND_SHELL].close_hovered = 0;
+
     /* z_order still needs a valid starting permutation even though every
      * window opens closed now -- topmost_window_at()/raise_window() both
      * assume it's always a full ordering of every window index, not just
@@ -930,6 +976,7 @@ void kmain(void) {
      * user opens something. */
     z_order[0] = WIN_KIND_FORTH;
     z_order[1] = WIN_KIND_FILES;
+    z_order[2] = WIN_KIND_SHELL;
 
     /* Narrowed to leave room for the start menu's button at the same y,
      * so the two together read as one continuous bottom bar. */
@@ -969,6 +1016,31 @@ void kmain(void) {
         console_output_append_line(&co, "RAVE-OS FORTH");
     }
     forth_init(&vm);
+
+    /* Console input line sits along the bottom of the Shell window's
+     * body, same layout FORTH's own block above already uses. */
+    {
+        int body_x = windows[WIN_KIND_SHELL].x;
+        int body_y = windows[WIN_KIND_SHELL].y;
+        int body_w = windows[WIN_KIND_SHELL].w;
+        int body_h = windows[WIN_KIND_SHELL].h;
+        int input_h = 20;
+        int input_margin = 10;
+
+        shell_ci.h = input_h;
+        shell_ci.y = body_y + body_h - input_margin - input_h;
+        shell_ci.x = body_x + 8;
+        shell_ci.w = body_w - 16;
+        shell_ci.text[0] = 0;
+        shell_ci.len = 0;
+        shell_ci.cursor = 0;
+        shell_ci.focused = 0;
+        console_history_init(&shell_hist);
+
+        console_output_init(&shell_co, body_x + 4, body_y + 6, body_w - 8, shell_ci.y - (body_y + 6) - 8);
+        console_output_append_line(&shell_co, "RAVE-OS SHELL");
+    }
+    shell_init(&sh);
 
     mx = w / 2;
     my = h - 100; /* clear of the taskbar/start menu strip below it */
@@ -1038,9 +1110,9 @@ void kmain(void) {
         file_entry_count = 0;
     }
 
-    draw_scene(w, h, windows, fx_enabled, &co, &ci, z_order, &bar, taskbar_hovered, &menu, menu_hovered_item, mx, my,
-              cursor_color, cwd, file_entries, file_entry_count, files_selected, &name_input, &new_dir_btn,
-              &delete_btn);
+    draw_scene(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, &bar, taskbar_hovered, &menu,
+              menu_hovered_item, mx, my, cursor_color, cwd, file_entries, file_entry_count, files_selected,
+              &name_input, &new_dir_btn, &delete_btn);
     gfx_present();
 
     for (;;) {
@@ -1060,6 +1132,11 @@ void kmain(void) {
         int old_ci_cursor = ci.cursor;
         int old_ci_focused = ci.focused;
         char old_ci_text[CONSOLE_INPUT_MAX + 1];
+        int old_shell_co_generation = shell_co.generation;
+        int old_shell_ci_len = shell_ci.len;
+        int old_shell_ci_cursor = shell_ci.cursor;
+        int old_shell_ci_focused = shell_ci.focused;
+        char old_shell_ci_text[CONSOLE_INPUT_MAX + 1];
         char old_cwd[FILES_PATH_MAX];
         int old_files_selected = files_selected;
         int old_delete_btn_hovered = delete_btn.hovered;
@@ -1076,6 +1153,11 @@ void kmain(void) {
             old_ci_text[i] = ci.text[i];
         }
         old_ci_text[i] = 0;
+
+        for (i = 0; shell_ci.text[i]; i++) {
+            old_shell_ci_text[i] = shell_ci.text[i];
+        }
+        old_shell_ci_text[i] = 0;
 
         for (i = 0; name_input.text[i]; i++) {
             old_name_input_text[i] = name_input.text[i];
@@ -1156,8 +1238,8 @@ void kmain(void) {
 
                     applied_dx = windows[dragging_window].x - drag_start_x;
                     applied_dy = windows[dragging_window].y - drag_start_y;
-                    move_window_content(dragging_window, &co, &ci, &name_input, &new_dir_btn, &delete_btn,
-                                        applied_dx, applied_dy);
+                    move_window_content(dragging_window, &co, &ci, &name_input, &new_dir_btn, &delete_btn, &shell_co,
+                                        &shell_ci, applied_dx, applied_dy);
                 } else {
                     dragging_window = -1;
                 }
@@ -1174,6 +1256,9 @@ void kmain(void) {
                 } else if (item == STARTMENU_ITEM_FILES) {
                     windows[WIN_KIND_FILES].state = WINDOW_OPEN;
                     raise_window(z_order, WIN_KIND_FILES);
+                } else if (item == STARTMENU_ITEM_SHELL) {
+                    windows[WIN_KIND_SHELL].state = WINDOW_OPEN;
+                    raise_window(z_order, WIN_KIND_SHELL);
                 } else if (item == STARTMENU_ITEM_CONFIG) {
                     open_files_at(cwd, (int)sizeof(cwd), "/ETC", windows, z_order, file_entries, &file_entry_count,
                                  &files_selected);
@@ -1251,6 +1336,7 @@ void kmain(void) {
                 int topmost = topmost_window_at(windows, z_order, cx, cy);
                 int forth_is_topmost = topmost == WIN_KIND_FORTH;
                 int files_is_topmost = topmost == WIN_KIND_FILES;
+                int shell_is_topmost = topmost == WIN_KIND_SHELL;
                 int click_edge = left_held && !prev_left_held;
 
                 /* Any click edge sets focus: hitting the field itself
@@ -1261,6 +1347,7 @@ void kmain(void) {
                 if (click_edge) {
                     ci.focused = forth_is_topmost && console_input_hit_test(&ci, cx, cy);
                     name_input.focused = files_is_topmost && console_input_hit_test(&name_input, cx, cy);
+                    shell_ci.focused = shell_is_topmost && console_input_hit_test(&shell_ci, cx, cy);
                 }
 
                 /* Clicking ".." or a directory row navigates and re-lists
@@ -1410,6 +1497,37 @@ void kmain(void) {
                     console_history_push(&hist, ci.text);
                     console_input_clear(&ci);
                 }
+            } else if (shell_ci.focused && c == KEY_UP) {
+                char recalled[CONSOLE_INPUT_MAX + 1];
+                if (console_history_prev(&shell_hist, recalled)) {
+                    console_input_set_text(&shell_ci, recalled);
+                }
+            } else if (shell_ci.focused && c == KEY_DOWN) {
+                char recalled[CONSOLE_INPUT_MAX + 1];
+                if (console_history_next(&shell_hist, recalled)) {
+                    console_input_set_text(&shell_ci, recalled);
+                }
+            } else if (shell_ci.focused && c == KEY_LEFT) {
+                console_input_move_cursor(&shell_ci, -1);
+            } else if (shell_ci.focused && c == KEY_RIGHT) {
+                console_input_move_cursor(&shell_ci, 1);
+            } else if (shell_ci.focused) {
+                console_history_reset_browse(&shell_hist);
+                if (console_input_feed_char(&shell_ci, c)) {
+                    char echoed[CONSOLE_INPUT_MAX + 4];
+                    char shell_out[VIEWER_BUF_SIZE];
+                    int pos = 0;
+
+                    str_append(echoed, &pos, (int)sizeof(echoed), "> ");
+                    str_append(echoed, &pos, (int)sizeof(echoed), shell_ci.text);
+                    console_output_append_line(&shell_co, echoed);
+
+                    shell_eval_line(&sh, shell_ci.text, shell_out, (int)sizeof(shell_out));
+                    append_split_lines(&shell_co, shell_out);
+
+                    console_history_push(&shell_hist, shell_ci.text);
+                    console_input_clear(&shell_ci);
+                }
             } else if (name_input.focused && c == KEY_LEFT) {
                 console_input_move_cursor(&name_input, -1);
             } else if (name_input.focused && c == KEY_RIGHT) {
@@ -1480,11 +1598,16 @@ void kmain(void) {
                                       (name_input.cursor != old_name_input_cursor) ||
                                       (name_input.focused != old_name_input_focused) ||
                                       !str_eq(name_input.text, old_name_input_text);
-            update_and_present(w, h, windows, fx_enabled, &co, &ci, z_order, old_z, old_mx, old_my, mx, my,
-                               cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled, &bar,
-                               taskbar_hovered, old_taskbar_hovered, &menu,
-                               menu_hovered_item, menu_touched, cwd, file_entries, file_entry_count, files_selected,
-                               &name_input, &new_dir_btn, &delete_btn);
+            touched[WIN_KIND_SHELL] = touched[WIN_KIND_SHELL] || (shell_co.generation != old_shell_co_generation) ||
+                                      (shell_ci.len != old_shell_ci_len) ||
+                                      (shell_ci.cursor != old_shell_ci_cursor) ||
+                                      (shell_ci.focused != old_shell_ci_focused) ||
+                                      !str_eq(shell_ci.text, old_shell_ci_text);
+            update_and_present(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, old_z, old_mx,
+                               old_my, mx, my, cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled,
+                               &bar, taskbar_hovered, old_taskbar_hovered, &menu, menu_hovered_item, menu_touched,
+                               cwd, file_entries, file_entry_count, files_selected, &name_input, &new_dir_btn,
+                               &delete_btn);
         } else {
             __asm__ volatile("hlt");
         }
