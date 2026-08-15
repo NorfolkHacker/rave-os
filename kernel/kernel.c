@@ -1206,8 +1206,15 @@ void kmain(void) {
      * redraws on essentially any mouse movement, and re-reading the
      * directory sector that often would mean a PIO polling round-trip on
      * nearly every frame once this window exists. */
-    cwd[0] = '/';
-    cwd[1] = 0;
+    /* /HOME, not root -- makes /HOME real in the way a Unix home
+     * directory is, not just a name that exists (fs_bootstrap_dirs()
+     * already guarantees it exists by this point in boot). ".."
+     * navigation still reaches real root normally; this only changes
+     * where the window starts. */
+    {
+        int pos = 0;
+        str_append(cwd, &pos, (int)sizeof(cwd), "/HOME");
+    }
     if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
         file_entry_count = 0;
     }

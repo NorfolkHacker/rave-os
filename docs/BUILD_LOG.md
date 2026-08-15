@@ -868,3 +868,15 @@ Picked up next, the last of the three "functional system folders" pieces. Needed
 Files: `kernel/fs.h`/`.c` (`fs_append_file()`, new); `kernel/kernel.c` (one `fs_append_file()` call building and appending the boot log line, right after `fs_bootstrap_dirs()`).
 
 This closes out the three-piece "functional system folders" request from earlier today: `/BIN` (RUN, executing real scripts), `/ETC` (real config the kernel reads back), `/VAR` (real logging that grows on its own). `/HOME` and `/USR` remain untouched scaffolding -- nothing has asked for them yet.
+
+## 2026-08-15 -- /HOME as the file manager's real starting point
+
+Picked up last, closing out the "system folders" line of work for now. `/USR` deliberately stays scaffolding -- no real Unix-equivalent function exists in this kernel yet (no package manager, no user-installed-program concept beyond what `/BIN`'s RUN already covers), and forcing a purpose onto it would be the opposite of this project's own "don't build what nothing asks for" discipline. `/HOME` got one: the FILES window now opens at `/HOME` on boot instead of root.
+
+**One-line change in `kmain()`** -- the boot-time `cwd` initialization (previously `cwd[0]='/'; cwd[1]=0;`) now builds `/HOME` via the existing `str_append()` helper instead. `fs_bootstrap_dirs()` already guarantees `/HOME` exists by this point in boot (it runs earlier, and this line was already downstream of it). `path_parent()` itself is untouched, so `..` navigation from inside `/HOME` still correctly reaches real root, not some new synthetic "home root" concept -- this only changes where the window starts, nothing about how navigation works.
+
+**Verified directly on the persistent `fs.img`**, no scratch-image needed (no filesystem-layer change at all, just a different boot-time string): booted, raised the FILES window with no navigation clicks -- header read `/HOME`, listing showed `..` and `(EMPTY)`. Clicked `..` and confirmed it reached real root, showing the full existing listing (`OLD DIR/`, `TESTDIR/`, `BIN/`, `ETC/`, `HOME/`, `USR/`, `VAR/`, `TMP/`) -- no regression to `..`'s behavior.
+
+Files: `kernel/kernel.c` only.
+
+This closes out the "system folders" work started earlier today: all six standard directories exist, three (`/BIN`, `/ETC`, `/VAR`) have real functional content, `/HOME` is now the file manager's real starting point, and `/USR` stays honest scaffolding. `/DEV` (from the very first stage of this line of work) remains synthetic, reflecting live hardware presence.
