@@ -517,6 +517,35 @@ static void forth_run_command(struct forth_vm *vm, struct console_output *co, co
     }
 }
 
+#define ETC_CONFIG_PATH "/ETC/CONFIG"
+
+/* Seeds /ETC/CONFIG with today's default if missing (same idempotent
+ * fs_create_file() write-once shape as /BIN/HELLO), then reads it back
+ * to decide the FX checkbox's initial state -- real config the kernel
+ * acts on, not just a name on disk. Plain KEY=VALUE lines, even with a
+ * single key today, so the format doesn't need retrofitting once a
+ * second setting exists; no generic parser, just enough to find one key. */
+static int fx_default_from_config(void) {
+    static const char etc_config_default[] = "FX=0\n";
+    char buf[64];
+    unsigned int out_size;
+    unsigned int i;
+
+    fs_create_file(ETC_CONFIG_PATH, etc_config_default, (unsigned int)(sizeof(etc_config_default) - 1));
+
+    if (fs_read_file(ETC_CONFIG_PATH, buf, sizeof(buf) - 1, &out_size) != 0) {
+        return 0;
+    }
+    buf[out_size] = 0;
+
+    for (i = 0; i + 3 <= out_size; i++) {
+        if (buf[i] == 'F' && buf[i + 1] == 'X' && buf[i + 2] == '=') {
+            return buf[i + 3] == '1';
+        }
+    }
+    return 0;
+}
+
 /* The fourth window: a listing of the current directory (cwd), navigable
  * -- Stage B of the file manager, plus (Stage D) a right-click-selected
  * entry and a DELETE button, plus (Stage E) a name-entry field and a NEW
@@ -1138,6 +1167,13 @@ void kmain(void) {
     ata_status = ata_selftest();
     fs_status = fs_selftest();
     fs_bootstrap_dirs();
+
+    /* Real config, not just a name on disk: cb.checked was set to a
+     * hardcoded 0 above, before the filesystem was even mounted --
+     * overwritten here now that /ETC/CONFIG can actually be read.
+     * Nothing reads cb.checked before draw_scene() further down, so
+     * this reassignment is safe. */
+    cb.checked = fx_default_from_config();
 
     /* Seeds one real script into /BIN so RUN has something to actually
      * run -- there's no in-OS text editor yet, so this is the only way
