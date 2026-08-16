@@ -748,6 +748,9 @@ int fs_move(const char *path, const char *dest_dir) {
     if (resolve_dir_lba(dest_dir, &dest_table_lba) != 0) {
         return -1;
     }
+    if (dest_table_lba == FS_ROOT_LBA && str_eq(leaf, FS_DEV_NAME)) {
+        return -1; /* reserved: /DEV is synthetic (see fs_list_dir()), never a real directory */
+    }
     if (dirtable_read(dest_table_lba, dest_entries) != 0) {
         return -1;
     }
@@ -804,6 +807,9 @@ int fs_copy_file(const char *path, const char *dest_dir) {
 
     if (resolve_dir_lba(dest_dir, &dest_table_lba) != 0) {
         return -1;
+    }
+    if (dest_table_lba == FS_ROOT_LBA && str_eq(leaf, FS_DEV_NAME)) {
+        return -1; /* reserved: /DEV is synthetic (see fs_list_dir()), never a real directory */
     }
     if (dirtable_read(dest_table_lba, dest_entries) != 0) {
         return -1;

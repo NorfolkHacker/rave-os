@@ -493,16 +493,6 @@ static int fx_default_from_config(void) {
     return 0;
 }
 
-/* A listing of the current directory (cwd), navigable -- Stage B of the
- * file manager, plus (Stage D) a right-click-selected entry and a
- * DELETE button, plus (Stage E) a name-entry field and a NEW DIR button.
- * Row 0 is always the path itself (not clickable); row 1 is ".." if cwd
- * isn't root; real entries follow. files_list_hit_test() below mirrors
- * this exact row numbering so the two can never disagree about what a
- * given pixel row means. files_selected is an index into file_entries
- * (FILES_HIT_NONE for "nothing selected") -- the row it names, if any,
- * is drawn with a highlight background. */
-
 /* Holds files cut/copied from the FILES window, independent of the
  * current listing/selection so it survives navigating to a different
  * directory before pasting -- the whole point of "select, then navigate,
@@ -545,6 +535,15 @@ static void files_clipboard_stage(struct files_clipboard *clip, const char *cwd,
     clip->is_cut = is_cut;
 }
 
+/* A listing of the current directory (cwd), navigable -- Stage B of the
+ * file manager, plus (Stage D) a right-click-selected entry and a
+ * DELETE button, plus (Stage E) a name-entry field and a NEW DIR button.
+ * Row 0 is always the path itself (not clickable); row 1 is ".." if cwd
+ * isn't root; real entries follow. files_list_hit_test() below mirrors
+ * this exact row numbering so the two can never disagree about what a
+ * given pixel row means. A bit in files_selected_mask names a selected
+ * row (its index into file_entries) -- several bits can be set at once,
+ * and every row whose bit is set is drawn with a highlight background. */
 static void draw_files_group(const struct window *files, const char *cwd, const struct fs_dirent *file_entries,
                              unsigned int file_entry_count, uint32_t files_selected_mask, const struct console_input *name_input,
                              const struct button *new_dir_btn, const struct button *delete_btn,
@@ -577,9 +576,12 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
          * start of the footer chrome, not the window's own bottom edge --
          * Stage E added a name field and button row below the list)
          * instead of walking gfx_fill_rect/text_puts over them -- rows
-         * this far down are already unreachable by
-         * files_list_hit_test()'s own py bounds check, so nothing here
-         * needs to become clickable, just stop being drawn. */
+         * this far down are unreachable by files_list_hit_test() too, as
+         * long as callers pass it this same name_input->y as
+         * list_bottom_y (which every call site in this file does): it
+         * mirrors this exact row_y + FILES_ROW_HEIGHT > list_bottom_y
+         * check, so nothing here needs to become clickable, just stop
+         * being drawn. */
         if (row_y + FILES_ROW_HEIGHT > name_input->y) {
             break;
         }
@@ -617,12 +619,18 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
 
 /* Converts a click position into the same row numbering
  * draw_files_group() just drew -- FILES_HIT_NONE for the path header (row
- * 0) or outside the window, FILES_HIT_UP for "..", otherwise an index
- * into file_entries[]. */
+ * 0), outside the window, or at/past a row draw_files_group() stopped
+ * short of drawing (pass name_input->y as list_bottom_y, the same "stop
+ * drawing" line draw_files_group() itself uses -- see its row_y +
+ * FILES_ROW_HEIGHT > name_input->y check, mirrored below using the same
+ * row_y formula and row counter, so the two can never disagree about
+ * where the drawn list actually ends, down to the pixel); FILES_HIT_UP
+ * for "..", otherwise an index into file_entries[]. */
 static int files_list_hit_test(const struct window *files, const char *cwd, unsigned int file_entry_count, int px,
-                               int py) {
+                               int py, int list_bottom_y) {
     int up_present = !str_eq(cwd, "/");
     int rel_row;
+    int row_y;
 
     if (px < files->x || px >= files->x + files->w || py < files->y || py >= files->y + files->h) {
         return FILES_HIT_NONE;
@@ -631,6 +639,11 @@ static int files_list_hit_test(const struct window *files, const char *cwd, unsi
     rel_row = (py - (files->y + FILES_LIST_Y_OFFSET)) / FILES_ROW_HEIGHT;
     if (rel_row <= 0) {
         return FILES_HIT_NONE; /* the path header row, or above it */
+    }
+
+    row_y = files->y + FILES_LIST_Y_OFFSET + rel_row * FILES_ROW_HEIGHT;
+    if (row_y + FILES_ROW_HEIGHT > list_bottom_y) {
+        return FILES_HIT_NONE; /* draw_files_group() stopped drawing before this row */
     }
 
     if (up_present) {
@@ -1475,7 +1488,7 @@ void kmain(void) {
                  * every other not-yet-supported click in this window
                  * (e.g. the path header row). */
                 if (files_is_topmost && click_edge) {
-                    int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy);
+                    int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy, name_input.y);
 
                     if (hit == FILES_HIT_UP) {
                         fs_path_parent(cwd);
@@ -1506,7 +1519,7 @@ void kmain(void) {
                  * be selected at once now (needed for CUT/COPY/DELETE to
                  * act on more than one file per click). */
                 if (files_is_topmost && right_held && !prev_right_held) {
-                    int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy);
+                    int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy, name_input.y);
                     if (hit >= 0) {
                         files_selected_mask ^= (1u << hit);
                     }
@@ -1543,8 +1556,8 @@ void kmain(void) {
                  * An empty name or an already-existing/full-table failure
                  * from fs_create_dir() is a silent no-op, same as DELETE
                  * above -- but unlike a successful delete (which clears
-                 * files_selected), a failed create leaves the typed name
-                 * in place so the user can see and fix it. Creating a
+                 * files_selected_mask), a failed create leaves the typed
+                 * name in place so the user can see and fix it. Creating a
                  * plain file has no button of its own -- see Enter
                  * handling in the keyboard block below. */
                 new_dir_btn.hovered = files_is_topmost && button_hit_test(&new_dir_btn, cx, cy);
@@ -1583,25 +1596,33 @@ void kmain(void) {
                  * to paste. Each name is attempted independently; one
                  * failing (e.g. a name collision at the destination)
                  * doesn't stop the rest. A successful CUT's clipboard
-                 * clears after paste (the originals are gone, so it only
-                 * makes sense once); a COPY's clipboard is left intact so
-                 * the same files can be pasted into several directories
-                 * in a row. */
+                 * clears after paste, but only if at least one fs_move()
+                 * in the batch actually succeeded -- if every one failed
+                 * (e.g. every name collides at the destination), the
+                 * originals are all still sitting at source_dir, so
+                 * throwing away the cut selection would leave the user no
+                 * way to retry it elsewhere. A COPY's clipboard is always
+                 * left intact so the same files can be pasted into
+                 * several directories in a row. */
                 paste_btn.hovered = files_is_topmost && button_hit_test(&paste_btn, cx, cy);
                 if (paste_btn.hovered && click_edge && clipboard.count > 0) {
                     unsigned int pi;
+                    int any_succeeded = 0;
                     for (pi = 0; pi < clipboard.count; pi++) {
                         char paste_src[FILES_PATH_MAX];
                         fs_path_join(paste_src, (int)sizeof(paste_src), clipboard.source_dir, clipboard.names[pi]);
                         if (clipboard.is_cut) {
-                            fs_move(paste_src, cwd);
+                            if (fs_move(paste_src, cwd) == 0) {
+                                any_succeeded = 1;
+                            }
                         } else {
                             fs_copy_file(paste_src, cwd);
                         }
                     }
-                    if (clipboard.is_cut) {
+                    if (clipboard.is_cut && any_succeeded) {
                         clipboard.count = 0;
                     }
+                    files_selected_mask = 0; /* stale relative to the re-list below (pasted entries can shift indices) */
                     if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                         file_entry_count = 0;
                     }
@@ -1715,7 +1736,7 @@ void kmain(void) {
                 console_input_move_cursor(&name_input, 1);
             } else if (name_input.focused) {
                 /* Enter's meaning depends on whether a row is selected
-                 * (Stage D's right-click selection, files_selected):
+                 * (Stage D's right-click selection, files_selected_mask):
                  * with a selection, it renames that entry to the typed
                  * name; with none, it creates a plain file with that
                  * name, same as before -- NEW DIR (the click handler
@@ -1728,7 +1749,7 @@ void kmain(void) {
                  * nonzero -- not found, name taken, too long, ...) is a
                  * silent no-op that leaves the typed name in place, same
                  * as NEW DIR's failure case. A successful rename leaves
-                 * files_selected as-is: renaming is in place, so the
+                 * files_selected_mask as-is: renaming is in place, so the
                  * same table slot -- and thus the same listing index --
                  * still names the (now renamed) entry. */
                 if (console_input_feed_char(&name_input, c) && name_input.text[0] != 0) {
@@ -1744,14 +1765,22 @@ void kmain(void) {
                          * same meaning the old files_selected >= 0
                          * branch had before multi-select existed. */
                         unsigned int idx;
-                        char old_path[FILES_PATH_MAX];
                         for (idx = 0; idx < file_entry_count; idx++) {
                             if (files_selected_mask & (1u << idx)) {
                                 break;
                             }
                         }
-                        fs_path_join(old_path, (int)sizeof(old_path), cwd, file_entries[idx].name);
-                        ok = fs_rename(old_path, name_input.text) == 0;
+                        /* idx can reach file_entry_count without matching
+                         * only if file_entry_count shrank out from under
+                         * a stale mask (e.g. a prior fs_list_dir()
+                         * failure) -- guard against reading
+                         * file_entries[idx] out of the currently-valid
+                         * range; ok stays 0, a silent no-op. */
+                        if (idx < file_entry_count) {
+                            char old_path[FILES_PATH_MAX];
+                            fs_path_join(old_path, (int)sizeof(old_path), cwd, file_entries[idx].name);
+                            ok = fs_rename(old_path, name_input.text) == 0;
+                        }
                     }
                     /* else: more than one row selected -- a single typed
                      * name can't unambiguously rename several entries,

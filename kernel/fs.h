@@ -104,13 +104,20 @@ int fs_rename(const char *path, const char *new_name);
  * from its current parent's table into dest_dir's. This matters because
  * the allocator never reclaims sectors -- implementing move as
  * copy-then-delete would permanently leak the original data's space on
- * every call. Fails (-1), leaving both path and dest_dir untouched, if
- * path doesn't exist or isn't a file, dest_dir doesn't exist or isn't a
- * directory, dest_dir's table is full, or dest_dir already has an entry
- * named the same as path's leaf name (this also covers "moving" a file
- * into the directory it's already in -- a guaranteed name collision with
- * itself, so it correctly fails without needing a special case). Returns
- * 0 on success. */
+ * every call. Fails (-1) if path doesn't exist or isn't a file, dest_dir
+ * doesn't exist or isn't a directory, dest_dir's table is full, dest_dir
+ * already has an entry named the same as path's leaf name (this also
+ * covers "moving" a file into the directory it's already in -- a
+ * guaranteed name collision with itself, so it correctly fails without
+ * needing a special case), or the destination name is reserved (see
+ * fs_list_dir()'s comment). Every one of those checks happens before any
+ * write, so a failure there truly leaves both tables untouched -- except
+ * one edge case that can't be checked for in advance: the destination
+ * table is written first (to avoid ever losing the entry if the *source*
+ * write then failed), so if that first write succeeds but the follow-up
+ * write to the source table then fails (e.g. an ATA write failure), the
+ * entry ends up present in both tables, aliased to the same start_lba,
+ * rather than cleanly moved or cleanly unmoved. Returns 0 on success. */
 int fs_move(const char *path, const char *dest_dir);
 
 /* Duplicates the file at path into dest_dir under the same leaf name --

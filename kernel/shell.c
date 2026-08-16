@@ -445,7 +445,7 @@ static void shell_two_args(const char *arg, char *first, int first_cap, const ch
  * arguments get full case correction (correct_last = 1). fs_move() is
  * itself files-only (directories out of scope for v1), so that
  * restriction applies here for free, no extra check needed. */
-static void shell_cmd_mv(struct shell *sh, const char *arg, char *out, int *pos, int cap) {
+static void shell_cmd_mv(const struct shell *sh, const char *arg, char *out, int *pos, int cap) {
     char src_arg[FS_PATH_MAX];
     const char *dest_arg;
     char src[FS_PATH_MAX];
@@ -466,7 +466,7 @@ static void shell_cmd_mv(struct shell *sh, const char *arg, char *out, int *pos,
 }
 
 /* Same argument handling as mv -- see its comment. */
-static void shell_cmd_cp(struct shell *sh, const char *arg, char *out, int *pos, int cap) {
+static void shell_cmd_cp(const struct shell *sh, const char *arg, char *out, int *pos, int cap) {
     char src_arg[FS_PATH_MAX];
     const char *dest_arg;
     char src[FS_PATH_MAX];
