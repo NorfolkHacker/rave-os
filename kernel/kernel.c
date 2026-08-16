@@ -437,6 +437,118 @@ static const char *match_run_command(const char *text) {
     return text[i] ? &text[i] : 0;
 }
 
+/* Case-insensitive match for a leading "EDIT " token, same shape
+ * match_run_command() already uses for "RUN ". Returns a pointer to the
+ * trimmed start of the argument within text (borrowed, not copied), or
+ * 0 if text isn't an EDIT command. */
+static const char *match_edit_command(const char *text) {
+    char c0 = text[0], c1 = text[1], c2 = text[2], c3 = text[3];
+    int i;
+
+    if (c0 >= 'a' && c0 <= 'z') {
+        c0 = (char)(c0 - 32);
+    }
+    if (c1 >= 'a' && c1 <= 'z') {
+        c1 = (char)(c1 - 32);
+    }
+    if (c2 >= 'a' && c2 <= 'z') {
+        c2 = (char)(c2 - 32);
+    }
+    if (c3 >= 'a' && c3 <= 'z') {
+        c3 = (char)(c3 - 32);
+    }
+    if (c0 != 'E' || c1 != 'D' || c2 != 'I' || c3 != 'T' || text[4] != ' ') {
+        return 0;
+    }
+
+    i = 4;
+    while (text[i] == ' ') {
+        i++;
+    }
+    return text[i] ? &text[i] : 0;
+}
+
+/* EDIT <path>, typed at the SHELL console: resolves arg, figures out
+ * whether it names an existing file, an existing directory, or nothing
+ * yet (fs_read_file()'s own -1 can't distinguish "not found" from "too
+ * big for the buffer" from "is a directory" -- see fs.h -- so this
+ * checks the parent's own listing first rather than trusting that
+ * single failure code), and on success opens+raises the EDITOR window
+ * loaded with whatever it found (or empty, for a genuinely new path).
+ * Writes "edit: failed" into shell_co on any failure, matching
+ * shell.c's own "<cmd>: failed" wording, and leaves any already-open
+ * EDITOR window completely untouched. */
+static void handle_edit_command(struct shell *sh, struct editor *ed, char *editor_path, int editor_path_cap,
+                                char *editor_title, int editor_title_cap, struct window *windows, int *z_order,
+                                struct console_output *shell_co, const char *arg) {
+    char resolved[FS_PATH_MAX];
+    char parent[FS_PATH_MAX];
+    char leaf[FS_NAME_MAX];
+    struct fs_dirent entries[FS_LIST_MAX];
+    unsigned int count, ei;
+    int found_type = -1;
+    int last_slash = 0, li, k;
+
+    shell_resolve_path(sh, arg, resolved, (int)sizeof(resolved));
+
+    {
+        int p = 0;
+        str_append(parent, &p, (int)sizeof(parent), resolved);
+    }
+    fs_path_parent(parent);
+
+    for (k = 0; resolved[k]; k++) {
+        if (resolved[k] == '/') {
+            last_slash = k;
+        }
+    }
+    li = 0;
+    for (k = last_slash + 1; resolved[k] && li < (int)sizeof(leaf) - 1; k++) {
+        leaf[li++] = resolved[k];
+    }
+    leaf[li] = 0;
+
+    if (fs_list_dir(parent, entries, FS_LIST_MAX, &count) == 0) {
+        for (ei = 0; ei < count; ei++) {
+            if (str_eq(entries[ei].name, leaf)) {
+                found_type = entries[ei].type;
+                break;
+            }
+        }
+    }
+
+    if (found_type == FS_TYPE_DIR) {
+        console_output_append_line(shell_co, "edit: failed");
+        return;
+    }
+
+    if (found_type == FS_TYPE_FILE) {
+        char tmp[EDITOR_BUF_SIZE];
+        unsigned int out_size;
+        if (fs_read_file(resolved, tmp, EDITOR_BUF_SIZE, &out_size) != 0) {
+            console_output_append_line(shell_co, "edit: failed");
+            return;
+        }
+        editor_set_text(ed, tmp, out_size);
+    } else {
+        editor_clear(ed);
+    }
+    ed->cursor = ed->len;
+
+    {
+        int p = 0;
+        str_append(editor_path, &p, editor_path_cap, resolved);
+    }
+    {
+        int p = 0;
+        str_append(editor_title, &p, editor_title_cap, "RAVE-OS EDIT: ");
+        str_append(editor_title, &p, editor_title_cap, resolved);
+    }
+    windows[WIN_KIND_EDITOR].title = editor_title;
+    windows[WIN_KIND_EDITOR].state = WINDOW_OPEN;
+    raise_window(z_order, WIN_KIND_EDITOR);
+}
+
 /* RUN <name>, typed at the Forth console: a shell-like convenience, not
  * a real Forth word -- resolved and executed entirely here rather than
  * inside forth.c, which stays completely free of filesystem/GUI
@@ -1232,13 +1344,6 @@ void kmain(void) {
     }
     editor_path[0] = 0;
     editor_title[0] = 0;
-    /* editor_title has no reader yet in this task -- Task 3's
-     * handle_edit_command() is the first thing that formats into it and
-     * assigns it to windows[WIN_KIND_EDITOR].title. Silences
-     * -Wunused-but-set-variable in the meantime rather than dropping the
-     * initialization or the declaration, both of which Step 5/7 call for
-     * as-is. */
-    (void)editor_title;
 
     mx = w / 2;
     my = h - 100; /* clear of the taskbar/start menu strip below it */
@@ -1817,7 +1922,7 @@ void kmain(void) {
                      * still truncates to CONSOLE_LINE_MAX for display,
                      * same as any other long line in this console. */
                     char echoed[FS_PATH_MAX + CONSOLE_INPUT_MAX + 8];
-                    char shell_out[VIEWER_BUF_SIZE];
+                    const char *edit_arg;
                     int pos = 0;
 
                     str_append(echoed, &pos, (int)sizeof(echoed), sh.cwd);
@@ -1825,8 +1930,19 @@ void kmain(void) {
                     str_append(echoed, &pos, (int)sizeof(echoed), shell_ci.text);
                     console_output_append_line(&shell_co, echoed);
 
-                    shell_eval_line(&sh, shell_ci.text, shell_out, (int)sizeof(shell_out));
-                    append_split_lines(&shell_co, shell_out);
+                    /* EDIT is a console-level convenience like RUN, not
+                     * a real shell_eval_line() command -- intercepted
+                     * before falling through, same precedent RUN
+                     * already set for FORTH. */
+                    edit_arg = match_edit_command(shell_ci.text);
+                    if (edit_arg) {
+                        handle_edit_command(&sh, &ed, editor_path, (int)sizeof(editor_path), editor_title,
+                                            (int)sizeof(editor_title), windows, z_order, &shell_co, edit_arg);
+                    } else {
+                        char shell_out[VIEWER_BUF_SIZE];
+                        shell_eval_line(&sh, shell_ci.text, shell_out, (int)sizeof(shell_out));
+                        append_split_lines(&shell_co, shell_out);
+                    }
 
                     console_history_push(&shell_hist, shell_ci.text);
                     console_input_clear(&shell_ci);

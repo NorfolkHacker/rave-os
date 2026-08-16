@@ -44,4 +44,12 @@ void shell_init(struct shell *sh);
  * found", matching bash's own wording. */
 void shell_eval_line(struct shell *sh, const char *line, char *out, int out_cap);
 
+/* Resolves arg against sh->cwd, case-corrected against real on-disk
+ * names (see shell_case_correct()'s own doc comment in shell.c) -- the
+ * one public entry point into this file's path resolution, for callers
+ * outside shell.c that need to resolve a path themselves rather than
+ * going through a full command line (kernel.c's EDIT interception is
+ * the only current caller). cap should be FS_PATH_MAX. */
+void shell_resolve_path(const struct shell *sh, const char *arg, char *resolved, int cap);
+
 #endif

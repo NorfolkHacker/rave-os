@@ -261,6 +261,20 @@ static void shell_case_correct(char *path, int cap, int correct_last) {
     }
 }
 
+/* The one public entry point into this file's otherwise-private path
+ * resolution -- shell_resolve()/shell_case_correct() themselves stay
+ * static, same "one shared boundary, not several newly-exported
+ * privates" shape fs_path_join()/fs_path_parent() already established
+ * between FILES and SHELL. correct_last is always 1 here: every caller
+ * of this function is resolving something that's expected to already
+ * exist (SHELL's own commands all use correct_last=1 except mkdir's
+ * brand-new name), so a single fixed choice is simpler than exposing
+ * the flag. cap should be FS_PATH_MAX. */
+void shell_resolve_path(const struct shell *sh, const char *arg, char *resolved, int cap) {
+    shell_resolve(sh, arg, resolved, cap);
+    shell_case_correct(resolved, cap, 1);
+}
+
 /* No argument resets to /HOME (matches bash's own bare-cd-goes-home
  * behavior; /HOME is already this OS's real home directory, guaranteed
  * to exist by fs_bootstrap_dirs() before any window can open). An
