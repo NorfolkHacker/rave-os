@@ -3,7 +3,28 @@
     "allow": [
       "Bash(spectacle --help)",
       "Bash(DISPLAY=:0 xdotool getdisplaygeometry *)",
-      "Bash(distrobox enter *)"
+      "Bash(distrobox enter *)",
+      "Bash(git push *)",
+      "WebFetch(domain:grokipedia.com)",
+      "WebFetch(domain:symbos.org)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(pkill -f \"qemu-system-i386.*disk.img\")",
+      "Bash(gcc -m32 --version)",
+      "Bash(git checkout *)",
+      "Bash(pkill -f \"fs_smoketest\")",
+      "Bash(git commit *)",
+      "Bash(command -v qemu-system-i386)",
+      "Bash(distrobox-enter forth-os *)",
+      "Bash(python3 *)",
+      "Bash(SCRIPTS=/home/deck/.claude/plugins/cache/superpowers-marketplace/superpowers/6.3.0/skills/subagent-driven-development/scripts\nbash \"$SCRIPTS/task-brief\" docs/superpowers/plans/2026-08-15-unix-like-system-folders.md 1)",
+      "Bash(pkill -f 'qemu-system-i386.*disk.img')",
+      "Bash(git check-ignore *)",
+      "Bash(qemu-system-i386 -accel kvm -drive file=disk.img,format=raw -display none -monitor unix:/tmp/rave_qemu.sock,server,nowait -no-reboot)",
+      "Bash(cp /home/deck/os/boot/fs.img /tmp/rave_scratch_fs.img)",
+      "Bash(dd if=/dev/zero of=/tmp/rave_scratch_fs.img bs=512 count=1 conv=notrunc)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(git -C /home/deck/os log --oneline 5451997..HEAD)"
     ]
   }
 }
