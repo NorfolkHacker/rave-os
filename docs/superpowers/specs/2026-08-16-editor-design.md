@@ -16,17 +16,25 @@ goal is a real, editable, multi-line text buffer, opened by typing
 
 **In scope**: a new `kernel/editor.c`/`editor.h` module owning a
 fixed-size, multi-line text buffer with real cursor movement (arrow
-keys, Home/End, Backspace/Delete, Enter-inserts-a-newline-at-cursor); a
-new `WIN_KIND_EDITOR` window in `kernel.c` that renders it and owns a
-`SAVE` button; SHELL's `edit <path>` opening that window loaded with the
-target file's content (or empty, if the path doesn't exist yet); saving
-via `fs_delete()` + `fs_create_file()` (no new `fs.c` write primitive).
+keys, Backspace, Enter-inserts-a-newline-at-cursor); a new
+`WIN_KIND_EDITOR` window in `kernel.c` that renders it and owns a `SAVE`
+button; SHELL's `edit <path>` opening that window loaded with the target
+file's content (or empty, if the path doesn't exist yet); saving via
+`fs_delete()` + `fs_create_file()` (no new `fs.c` write primitive).
 
 **Out of scope, deliberately**: opening the editor from FILES (click or
 otherwise) — `edit` is SHELL-only for v1, the same way `mv`/`cp` reach
 only SHELL and not FILES' clipboard in this codebase's prior stage;
-FILES itself is untouched by this spec. Files larger than the fixed
-buffer (`EDITOR_BUF_SIZE`, 512 bytes) fail to open with one generic
+FILES itself is untouched by this spec. Home/End/Delete key support —
+`keyboard.h` only decodes Up/Down/Left/Right as extended keys today;
+adding Home/End/Delete scancode decoding would be real new scope in
+`keyboard.c` with unverified headless-QEMU support (this project has a
+documented history of specific keys not registering over the monitor
+socket), so v1 supports only what's already decodable: Left/Right/Up/
+Down/Backspace/Enter/printable characters. A future stage can add the
+three missing keys to `keyboard.c` and wire them in without changing
+`editor.c`'s own structure. Files larger than the fixed buffer
+(`EDITOR_BUF_SIZE`, 512 bytes) fail to open with one generic
 `edit: failed`, matching `cat`'s existing collapse of every read failure
 into one message — no paging, no streaming a larger file through a
 smaller buffer. No undo/redo. No syntax highlighting. No search/replace.
@@ -80,12 +88,13 @@ offset"):
   and `len`. Removing a `\n` merges the two lines it separated, which
   falls out naturally from this being a plain byte removal — no special
   case needed.
-- **Delete**: same shape as Backspace, removing the byte at `cursor`
-  instead of `cursor - 1`, cursor unchanged.
 - **Left/Right**: `cursor -= 1` / `cursor += 1`, clamped to `[0, len]`.
   ASCII-only text, so no multi-byte-character stepping is needed.
-- **Home/End**: scan backward/forward from `cursor` for the nearest
-  `\n` (or buffer start/end), set `cursor` there.
+- **Delete, Home, End**: out of scope for v1 (see Scope) — `keyboard.h`
+  doesn't decode these as distinct keys yet, so there's nothing for
+  `editor.c` to receive for them. Backspace and Left/Right already cover
+  every edit and cursor move a Delete/Home/End keypress would otherwise
+  shortcut.
 - **Up/Down**: derive the cursor's current row and column (column =
   distance back to the nearest preceding `\n` or buffer start), find the
   target line (previous/next `\n`-delimited span), and set `cursor` to
