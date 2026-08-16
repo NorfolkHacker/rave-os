@@ -17,6 +17,7 @@
 #include "console_output.h"
 #include "forth.h"
 #include "shell.h"
+#include "editor.h"
 #include "io.h"
 #include "ata.h"
 #include "fs.h"
@@ -47,10 +48,11 @@
  * widget framework -- there are exactly three content kinds, not an
  * open-ended number, so a small switch is simpler than a real
  * polymorphic app system. */
-#define MAX_WINDOWS 3
+#define MAX_WINDOWS 4
 #define WIN_KIND_FORTH 0
 #define WIN_KIND_FILES 1
 #define WIN_KIND_SHELL 2
+#define WIN_KIND_EDITOR 3
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -323,7 +325,8 @@ static void move_window_content(int kind, struct console_output *co, struct cons
                                 struct console_input *name_input, struct button *new_dir_btn,
                                 struct button *delete_btn, struct button *cut_btn, struct button *copy_btn,
                                 struct button *paste_btn, struct console_output *shell_co,
-                                struct console_input *shell_ci, int applied_dx, int applied_dy) {
+                                struct console_input *shell_ci, struct editor *ed, struct button *save_btn,
+                                int applied_dx, int applied_dy) {
     if (kind == WIN_KIND_FORTH) {
         co->x += applied_dx;
         co->y += applied_dy;
@@ -347,6 +350,11 @@ static void move_window_content(int kind, struct console_output *co, struct cons
         shell_co->y += applied_dy;
         shell_ci->x += applied_dx;
         shell_ci->y += applied_dy;
+    } else if (kind == WIN_KIND_EDITOR) {
+        ed->x += applied_dx;
+        ed->y += applied_dy;
+        save_btn->x += applied_dx;
+        save_btn->y += applied_dy;
     }
 }
 
@@ -366,6 +374,16 @@ static void draw_shell_group(const struct window *shell, const struct console_ou
     window_draw(shell);
     console_output_draw(shell_co);
     console_input_draw(shell_ci);
+}
+
+/* The fourth window: a full-window multi-line text buffer (editor.h),
+ * opened only via SHELL's EDIT command -- same window+widget shape
+ * draw_forth_group()/draw_shell_group() use, with a SAVE button in
+ * place of a second widget. */
+static void draw_editor_group(const struct window *ed_win, const struct editor *ed, const struct button *save_btn) {
+    window_draw(ed_win);
+    editor_draw(ed);
+    button_draw(save_btn);
 }
 
 /* fs.h's own constant, kept under this file's existing local name (no
@@ -688,14 +706,16 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
                                  uint32_t files_selected_mask, const struct console_input *name_input,
                                  const struct button *new_dir_btn, const struct button *delete_btn,
                                  const struct button *cut_btn, const struct button *copy_btn,
-                                 const struct button *paste_btn) {
+                                 const struct button *paste_btn, const struct editor *ed, const struct button *save_btn) {
     if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
     } else if (idx == WIN_KIND_FILES) {
         draw_files_group(&windows[idx], cwd, file_entries, file_entry_count, files_selected_mask, name_input, new_dir_btn,
                          delete_btn, cut_btn, copy_btn, paste_btn);
-    } else {
+    } else if (idx == WIN_KIND_SHELL) {
         draw_shell_group(&windows[idx], shell_co, shell_ci);
+    } else {
+        draw_editor_group(&windows[idx], ed, save_btn);
     }
 }
 
@@ -713,7 +733,7 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
                        unsigned int file_entry_count, uint32_t files_selected_mask, const struct console_input *name_input,
                        const struct button *new_dir_btn, const struct button *delete_btn,
                        const struct button *cut_btn, const struct button *copy_btn,
-                       const struct button *paste_btn) {
+                       const struct button *paste_btn, const struct editor *ed, const struct button *save_btn) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -729,7 +749,7 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
         if (windows[idx].state == WINDOW_OPEN) {
             draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
                                  files_selected_mask, name_input, new_dir_btn, delete_btn, cut_btn, copy_btn,
-                                 paste_btn);
+                                 paste_btn, ed, save_btn);
         }
     }
 
@@ -788,7 +808,7 @@ static void update_and_present(int w, int h, const struct window *windows, int f
                                uint32_t files_selected_mask, const struct console_input *name_input,
                                const struct button *new_dir_btn, const struct button *delete_btn,
                                const struct button *cut_btn, const struct button *copy_btn,
-                               const struct button *paste_btn) {
+                               const struct button *paste_btn, const struct editor *ed, const struct button *save_btn) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
     int redraw[DAMAGE_REGIONS];
@@ -908,7 +928,7 @@ static void update_and_present(int w, int h, const struct window *windows, int f
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
             draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
                                  files_selected_mask, name_input, new_dir_btn, delete_btn, cut_btn, copy_btn,
-                                 paste_btn);
+                                 paste_btn, ed, save_btn);
         }
     }
 
@@ -953,6 +973,10 @@ void kmain(void) {
     struct button paste_btn;
     struct files_clipboard clipboard;
     struct console_input name_input;
+    struct editor ed;
+    struct button save_btn;
+    char editor_path[FS_PATH_MAX];
+    char editor_title[FS_PATH_MAX + 16];
     const char *ata_status;
     const char *fs_status;
     char cwd[FILES_PATH_MAX];
@@ -1092,6 +1116,24 @@ void kmain(void) {
     windows[WIN_KIND_SHELL].minimize_hovered = 0;
     windows[WIN_KIND_SHELL].close_hovered = 0;
 
+    /* Same 400x180 footprint FORTH/SHELL's own console panes already
+     * use -- this is a single-region editable pane, not a
+     * windowed-list-plus-footer shape like FILES. */
+    windows[WIN_KIND_EDITOR].x = 240;
+    windows[WIN_KIND_EDITOR].y = 300;
+    windows[WIN_KIND_EDITOR].w = 400;
+    windows[WIN_KIND_EDITOR].h = 180;
+    windows[WIN_KIND_EDITOR].title = "RAVE-OS EDIT";
+    /* Closed at boot, same as every other window -- opened only via
+     * SHELL's EDIT command (see handle_edit_command(), added in the
+     * next task), no start-menu launcher (EDIT is deliberately
+     * SHELL-only for v1). This literal string is never actually shown
+     * on screen: the window stays closed until EDIT has already
+     * overwritten .title with the real, dynamically-formatted one. */
+    windows[WIN_KIND_EDITOR].state = WINDOW_CLOSED;
+    windows[WIN_KIND_EDITOR].minimize_hovered = 0;
+    windows[WIN_KIND_EDITOR].close_hovered = 0;
+
     /* z_order still needs a valid starting permutation even though every
      * window opens closed now -- topmost_window_at()/raise_window() both
      * assume it's always a full ordering of every window index, not just
@@ -1100,6 +1142,7 @@ void kmain(void) {
     z_order[0] = WIN_KIND_FORTH;
     z_order[1] = WIN_KIND_FILES;
     z_order[2] = WIN_KIND_SHELL;
+    z_order[3] = WIN_KIND_EDITOR;
 
     /* Narrowed to leave room for the start menu's button at the same y,
      * so the two together read as one continuous bottom bar. */
@@ -1164,6 +1207,38 @@ void kmain(void) {
         console_output_append_line(&shell_co, "RAVE-OS SHELL");
     }
     shell_init(&sh);
+
+    /* Full-window editable text region with a SAVE button along the
+     * bottom -- same margin/gap formula FILES' own footer row already
+     * uses (button.y = win.y + win.h - 30, 8px side margins), not
+     * FORTH/SHELL's single-input-line-at-the-bottom shape, since
+     * there's no separate command line here: the whole body is the
+     * buffer. */
+    {
+        int body_x = windows[WIN_KIND_EDITOR].x;
+        int body_y = windows[WIN_KIND_EDITOR].y;
+        int body_w = windows[WIN_KIND_EDITOR].w;
+        int body_h = windows[WIN_KIND_EDITOR].h;
+
+        save_btn.x = body_x + 8;
+        save_btn.y = body_y + body_h - 30;
+        save_btn.w = body_w - 16;
+        save_btn.h = 22;
+        save_btn.label = "SAVE";
+        save_btn.hovered = 0;
+        save_btn.pressed = 0;
+
+        editor_init(&ed, body_x + 4, body_y + 6, body_w - 8, save_btn.y - 6 - (body_y + 6));
+    }
+    editor_path[0] = 0;
+    editor_title[0] = 0;
+    /* editor_title has no reader yet in this task -- Task 3's
+     * handle_edit_command() is the first thing that formats into it and
+     * assigns it to windows[WIN_KIND_EDITOR].title. Silences
+     * -Wunused-but-set-variable in the meantime rather than dropping the
+     * initialization or the declaration, both of which Step 5/7 call for
+     * as-is. */
+    (void)editor_title;
 
     mx = w / 2;
     my = h - 100; /* clear of the taskbar/start menu strip below it */
@@ -1235,7 +1310,7 @@ void kmain(void) {
 
     draw_scene(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, &bar, taskbar_hovered, &menu,
               menu_hovered_item, mx, my, cursor_color, cwd, file_entries, file_entry_count, files_selected_mask,
-              &name_input, &new_dir_btn, &delete_btn, &cut_btn, &copy_btn, &paste_btn);
+              &name_input, &new_dir_btn, &delete_btn, &cut_btn, &copy_btn, &paste_btn, &ed, &save_btn);
     gfx_present();
 
     for (;;) {
@@ -1276,6 +1351,11 @@ void kmain(void) {
         int old_name_input_cursor = name_input.cursor;
         int old_name_input_focused = name_input.focused;
         char old_name_input_text[CONSOLE_INPUT_MAX + 1];
+        unsigned int old_ed_len = ed.len;
+        unsigned int old_ed_cursor = ed.cursor;
+        int old_ed_focused = ed.focused;
+        int old_save_btn_hovered = save_btn.hovered;
+        int old_save_btn_pressed = save_btn.pressed;
         int i;
 
         for (i = 0; ci.text[i]; i++) {
@@ -1368,7 +1448,8 @@ void kmain(void) {
                     applied_dx = windows[dragging_window].x - drag_start_x;
                     applied_dy = windows[dragging_window].y - drag_start_y;
                     move_window_content(dragging_window, &co, &ci, &name_input, &new_dir_btn, &delete_btn, &cut_btn,
-                                        &copy_btn, &paste_btn, &shell_co, &shell_ci, applied_dx, applied_dy);
+                                        &copy_btn, &paste_btn, &shell_co, &shell_ci, &ed, &save_btn, applied_dx,
+                                        applied_dy);
                 } else {
                     dragging_window = -1;
                 }
@@ -1466,6 +1547,7 @@ void kmain(void) {
                 int forth_is_topmost = topmost == WIN_KIND_FORTH;
                 int files_is_topmost = topmost == WIN_KIND_FILES;
                 int shell_is_topmost = topmost == WIN_KIND_SHELL;
+                int editor_is_topmost = topmost == WIN_KIND_EDITOR;
                 int click_edge = left_held && !prev_left_held;
 
                 /* Any click edge sets focus: hitting the field itself
@@ -1477,6 +1559,7 @@ void kmain(void) {
                     ci.focused = forth_is_topmost && console_input_hit_test(&ci, cx, cy);
                     name_input.focused = files_is_topmost && console_input_hit_test(&name_input, cx, cy);
                     shell_ci.focused = shell_is_topmost && console_input_hit_test(&shell_ci, cx, cy);
+                    ed.focused = editor_is_topmost && editor_hit_test(&ed, cx, cy);
                 }
 
                 /* Clicking ".." or a directory row navigates and re-lists
@@ -1628,6 +1711,24 @@ void kmain(void) {
                     }
                 }
                 paste_btn.pressed = paste_btn.hovered && left_held;
+
+                /* Writes the buffer back to disk: fs_delete() first
+                 * (return value ignored -- "doesn't exist yet" is
+                 * expected and fine, not an error), then
+                 * fs_create_file() with the buffer's current content.
+                 * Unifies "this file doesn't exist yet" and "overwrite
+                 * this file's existing content" into one path, since
+                 * after an unconditional delete attempt both cases look
+                 * identical to fs_create_file(). A failure (parent
+                 * directory disappeared, disk full, ...) is a silent
+                 * no-op, same no-error-UI convention every other
+                 * filesystem mutation in this kernel already follows. */
+                save_btn.hovered = editor_is_topmost && button_hit_test(&save_btn, cx, cy);
+                if (save_btn.hovered && click_edge && editor_path[0] != 0) {
+                    fs_delete(editor_path);
+                    fs_create_file(editor_path, ed.buf, ed.len);
+                }
+                save_btn.pressed = save_btn.hovered && left_held;
             }
 
             prev_left_held = left_held;
@@ -1793,6 +1894,16 @@ void kmain(void) {
                         }
                     }
                 }
+            } else if (ed.focused && c == KEY_UP) {
+                editor_move_line(&ed, -1);
+            } else if (ed.focused && c == KEY_DOWN) {
+                editor_move_line(&ed, 1);
+            } else if (ed.focused && c == KEY_LEFT) {
+                editor_move_cursor(&ed, -1);
+            } else if (ed.focused && c == KEY_RIGHT) {
+                editor_move_cursor(&ed, 1);
+            } else if (ed.focused) {
+                editor_feed_char(&ed, c);
             }
             had_event = 1;
         }
@@ -1834,11 +1945,25 @@ void kmain(void) {
                                       (shell_ci.cursor != old_shell_ci_cursor) ||
                                       (shell_ci.focused != old_shell_ci_focused) ||
                                       !str_eq(shell_ci.text, old_shell_ci_text);
+            /* ed.len alone is a reliable proxy for "content changed" --
+             * every edit (insert or backspace) changes len by exactly
+             * one, and unlike console_input's history recall
+             * (console_input_set_text(), which can replace a whole
+             * field with a same-length different string in one call),
+             * nothing in this widget can change buf's content while
+             * leaving len identical -- editor_set_text()/editor_clear()
+             * are only ever called from handle_edit_command() at
+             * window-open time, already caught by the generic
+             * per-window state-transition check above. */
+            touched[WIN_KIND_EDITOR] = touched[WIN_KIND_EDITOR] || (ed.len != old_ed_len) ||
+                                      (ed.cursor != old_ed_cursor) || (ed.focused != old_ed_focused) ||
+                                      (save_btn.hovered != old_save_btn_hovered) ||
+                                      (save_btn.pressed != old_save_btn_pressed);
             update_and_present(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, old_z, old_mx,
                                old_my, mx, my, cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled,
                                &bar, taskbar_hovered, old_taskbar_hovered, &menu, menu_hovered_item, menu_touched,
                                cwd, file_entries, file_entry_count, files_selected_mask, &name_input, &new_dir_btn,
-                               &delete_btn, &cut_btn, &copy_btn, &paste_btn);
+                               &delete_btn, &cut_btn, &copy_btn, &paste_btn, &ed, &save_btn);
         } else {
             __asm__ volatile("hlt");
         }
