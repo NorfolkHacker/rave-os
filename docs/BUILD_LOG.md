@@ -1188,3 +1188,10 @@ Files: `kernel/editor.h`/`.c` (new); `kernel/Makefile` (`editor.o` added);
 `draw_window_by_index()`, `draw_scene()`, `update_and_present()`, window
 init, widget init, click-to-focus, keyboard routing, damage tracking all
 updated; SHELL's Enter-key handler gained the EDIT interception).
+
+One characteristic worth flagging for anyone saving the same file
+repeatedly: since `fs.c`'s allocator is one-way (bump, never reclaims
+sectors), `SAVE`'s `fs_delete()`+`fs_create_file()` pair leaks that
+file's previous on-disk allocation on every single save -- it's
+repeated saves of the *same* path, not one-time file creation, that
+will eventually exhaust the disk.

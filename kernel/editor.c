@@ -145,6 +145,11 @@ void editor_draw(const struct editor *ed) {
     unsigned int i = 0;
     unsigned int line_start = 0;
     int caret_drawn = 0;
+    /* Same 6-pixels-per-character advance text.c's own text_width()/
+     * text_puts() already use internally (see text.c) -- how many
+     * characters actually fit inside the widget's own width before a
+     * line runs past its right edge onto whatever's behind the window. */
+    unsigned int max_visible_chars = (unsigned int)(ed->w / (6 * EDITOR_SCALE));
 
     gfx_fill_rect(ed->x, ed->y, ed->w, ed->h, EDITOR_BG_COLOR);
 
@@ -152,13 +157,24 @@ void editor_draw(const struct editor *ed) {
         if (i == ed->len || ed->buf[i] == '\n') {
             char line[EDITOR_BUF_SIZE + 1];
             unsigned int line_len = i - line_start;
+            unsigned int draw_len = line_len;
             unsigned int j;
             int row_y = ed->y + TEXT_PAD_Y + row * LINE_HEIGHT;
 
-            for (j = 0; j < line_len; j++) {
+            /* Clamp what's actually drawn to the widget's own width --
+             * the buffer keeps holding the line's full, real content
+             * either way, this only truncates what gets painted on
+             * screen (same silent-truncation-past-the-widget's-bounds
+             * convention draw_files_group()'s own row clip already
+             * uses in kernel.c). */
+            if (draw_len > max_visible_chars) {
+                draw_len = max_visible_chars;
+            }
+
+            for (j = 0; j < draw_len; j++) {
                 line[j] = ed->buf[line_start + j];
             }
-            line[line_len] = 0;
+            line[draw_len] = 0;
 
             /* Rows past the widget's own height are simply not drawn --
              * same silent-truncation convention draw_files_group()'s
@@ -172,6 +188,15 @@ void editor_draw(const struct editor *ed) {
                     unsigned int k;
                     unsigned int prefix_len = ed->cursor - line_start;
                     int caret_x;
+
+                    /* Same clamp as the line's own draw above -- without
+                     * it, a cursor sitting past max_visible_chars into a
+                     * long line could still measure a prefix wider than
+                     * the widget and place the caret out of bounds even
+                     * though the line's drawn text was already clamped. */
+                    if (prefix_len > max_visible_chars) {
+                        prefix_len = max_visible_chars;
+                    }
 
                     for (k = 0; k < prefix_len; k++) {
                         prefix[k] = ed->buf[line_start + k];

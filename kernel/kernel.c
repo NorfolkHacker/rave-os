@@ -508,12 +508,30 @@ static void handle_edit_command(struct shell *sh, struct editor *ed, char *edito
     }
     leaf[li] = 0;
 
-    if (fs_list_dir(parent, entries, FS_LIST_MAX, &count) == 0) {
-        for (ei = 0; ei < count; ei++) {
-            if (str_eq(entries[ei].name, leaf)) {
-                found_type = entries[ei].type;
-                break;
-            }
+    /* An empty leaf (e.g. "edit /", root has no leaf name of its own)
+     * can never name a real file to load or a valid path to SAVE back
+     * to -- fail outright rather than falling through to "not found,
+     * open empty" and handing back an editor that can never save. */
+    if (leaf[0] == 0) {
+        console_output_append_line(shell_co, "edit: failed");
+        return;
+    }
+
+    /* fs_list_dir() failing here means parent itself doesn't exist or
+     * isn't listable -- a bogus path, not "a genuinely new file in a
+     * real directory" (whose parent DOES exist and list successfully).
+     * Treat it as any other edit failure instead of falling through to
+     * "not found, open empty": that fallthrough would hand back a
+     * working-looking empty editor whose SAVE can only ever fail later,
+     * silently, per fs_create_file()'s own walk_to_parent() check. */
+    if (fs_list_dir(parent, entries, FS_LIST_MAX, &count) != 0) {
+        console_output_append_line(shell_co, "edit: failed");
+        return;
+    }
+    for (ei = 0; ei < count; ei++) {
+        if (str_eq(entries[ei].name, leaf)) {
+            found_type = entries[ei].type;
+            break;
         }
     }
 
@@ -1232,7 +1250,7 @@ void kmain(void) {
      * use -- this is a single-region editable pane, not a
      * windowed-list-plus-footer shape like FILES. */
     windows[WIN_KIND_EDITOR].x = 240;
-    windows[WIN_KIND_EDITOR].y = 300;
+    windows[WIN_KIND_EDITOR].y = 240;
     windows[WIN_KIND_EDITOR].w = 400;
     windows[WIN_KIND_EDITOR].h = 180;
     windows[WIN_KIND_EDITOR].title = "RAVE-OS EDIT";
@@ -1830,6 +1848,14 @@ void kmain(void) {
                  * filesystem mutation in this kernel already follows. */
                 save_btn.hovered = editor_is_topmost && button_hit_test(&save_btn, cx, cy);
                 if (save_btn.hovered && click_edge && editor_path[0] != 0) {
+                    /* fs.c's allocator is one-way (bump, never reclaims),
+                     * so this fs_delete()+fs_create_file() pair leaks
+                     * editor_path's previous on-disk allocation on every
+                     * single SAVE -- unlike every other fs_create_file()
+                     * caller in this kernel, which only ever creates a
+                     * file once. Repeatedly saving the same path is what
+                     * actually exhausts the disk over time, not one-time
+                     * file creation elsewhere. */
                     fs_delete(editor_path);
                     fs_create_file(editor_path, ed.buf, ed.len);
                 }
