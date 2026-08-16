@@ -422,6 +422,70 @@ static void shell_cmd_rm(const struct shell *sh, const char *arg, char *out, int
     }
 }
 
+/* Splits arg (everything after the command word) into its first
+ * whitespace-delimited token (copied, bounded, into first) and
+ * everything after that token, trimmed of leading spaces (borrowed, not
+ * copied -- same shape shell_arg() already uses for the single-argument
+ * commands). mv/cp are the only two commands needing a source and a
+ * destination rather than one path. */
+static void shell_two_args(const char *arg, char *first, int first_cap, const char **second) {
+    int i = 0, pos = 0;
+    while (arg[i] && arg[i] != ' ' && pos < first_cap - 1) {
+        first[pos++] = arg[i++];
+    }
+    first[pos] = 0;
+    while (arg[i] == ' ') {
+        i++;
+    }
+    *second = &arg[i];
+}
+
+/* Both the source file and the destination directory must already exist
+ * -- unlike mkdir's own new name, mv doesn't invent anything, so both
+ * arguments get full case correction (correct_last = 1). fs_move() is
+ * itself files-only (directories out of scope for v1), so that
+ * restriction applies here for free, no extra check needed. */
+static void shell_cmd_mv(struct shell *sh, const char *arg, char *out, int *pos, int cap) {
+    char src_arg[FS_PATH_MAX];
+    const char *dest_arg;
+    char src[FS_PATH_MAX];
+    char dest[FS_PATH_MAX];
+
+    shell_two_args(arg, src_arg, (int)sizeof(src_arg), &dest_arg);
+    if (src_arg[0] == 0 || dest_arg[0] == 0) {
+        shell_append(out, pos, cap, "mv: failed");
+        return;
+    }
+    shell_resolve(sh, src_arg, src, (int)sizeof(src));
+    shell_case_correct(src, (int)sizeof(src), 1);
+    shell_resolve(sh, dest_arg, dest, (int)sizeof(dest));
+    shell_case_correct(dest, (int)sizeof(dest), 1);
+    if (fs_move(src, dest) != 0) {
+        shell_append(out, pos, cap, "mv: failed");
+    }
+}
+
+/* Same argument handling as mv -- see its comment. */
+static void shell_cmd_cp(struct shell *sh, const char *arg, char *out, int *pos, int cap) {
+    char src_arg[FS_PATH_MAX];
+    const char *dest_arg;
+    char src[FS_PATH_MAX];
+    char dest[FS_PATH_MAX];
+
+    shell_two_args(arg, src_arg, (int)sizeof(src_arg), &dest_arg);
+    if (src_arg[0] == 0 || dest_arg[0] == 0) {
+        shell_append(out, pos, cap, "cp: failed");
+        return;
+    }
+    shell_resolve(sh, src_arg, src, (int)sizeof(src));
+    shell_case_correct(src, (int)sizeof(src), 1);
+    shell_resolve(sh, dest_arg, dest, (int)sizeof(dest));
+    shell_case_correct(dest, (int)sizeof(dest), 1);
+    if (fs_copy_file(src, dest) != 0) {
+        shell_append(out, pos, cap, "cp: failed");
+    }
+}
+
 /* Starts at root, not /HOME (unlike the FILES window's own cwd, and
  * unlike shell_cmd_cd()'s own bare-cd-goes-home behavior below) -- on
  * request, so the very first `ls` a user types shows the standard
@@ -448,6 +512,10 @@ void shell_eval_line(struct shell *sh, const char *line, char *out, int out_cap)
             shell_cmd_mkdir(sh, shell_arg(line, "mkdir"), out, &pos, out_cap);
         } else if (shell_token_is(line, "rm")) {
             shell_cmd_rm(sh, shell_arg(line, "rm"), out, &pos, out_cap);
+        } else if (shell_token_is(line, "mv")) {
+            shell_cmd_mv(sh, shell_arg(line, "mv"), out, &pos, out_cap);
+        } else if (shell_token_is(line, "cp")) {
+            shell_cmd_cp(sh, shell_arg(line, "cp"), out, &pos, out_cap);
         } else if (shell_token_is(line, "echo")) {
             shell_append(out, &pos, out_cap, shell_arg(line, "echo"));
         } else {
