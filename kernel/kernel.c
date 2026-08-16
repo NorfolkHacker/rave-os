@@ -287,6 +287,50 @@ static void raise_window(int *z_order, int idx) {
     z_order[0] = idx;
 }
 
+/* File-scope, not kmain()-local: forth_hook_mouse_x()/mouse_y()/
+ * mouse_down()/mouse_right_down() (added for the PAINT Forth words,
+ * see docs/superpowers/specs/2026-08-16-paint-design.md) need to read
+ * genuinely live mouse state from deep inside forth_eval_line()'s own
+ * call stack, with no path back to kmain()'s locals -- kmain()'s own
+ * event loop uses these exactly as it always has, only their storage
+ * moved. */
+static int mx, my;
+static int mouse_buttons_live = 0;
+
+/* Drains every mouse packet currently queued, updating the live mx/my/
+ * mouse_buttons_live state above -- the same accumulate-and-clamp math
+ * kmain()'s own per-packet event-loop block already does, but
+ * self-contained and callable from anywhere in this file (specifically:
+ * the PAINT mouse-reading hooks, called from deep inside
+ * forth_eval_line()'s call stack while kmain()'s own loop isn't
+ * running at all). Packets this function drains are gone from
+ * mouse.c's ring buffer -- if kmain()'s own loop runs again afterward
+ * expecting to see them, it won't, which is correct: nothing else in
+ * the OS should react to clicks a Forth script already consumed for
+ * painting. */
+/* No caller yet -- Task 3 adds the real one and this attribute goes away. */
+static void poll_mouse_state(void) __attribute__((unused));
+static void poll_mouse_state(void) {
+    int dx, dy, buttons;
+    while (mouse_poll_packet(&dx, &dy, &buttons)) {
+        mx += dx;
+        my += dy;
+        if (mx < 0) {
+            mx = 0;
+        }
+        if (my < 0) {
+            my = 0;
+        }
+        if (mx > gfx_width() - CURSOR_SIZE) {
+            mx = gfx_width() - CURSOR_SIZE;
+        }
+        if (my > gfx_height() - CURSOR_SIZE) {
+            my = gfx_height() - CURSOR_SIZE;
+        }
+        mouse_buttons_live = buttons;
+    }
+}
+
 /* Clamps a window's position so its full outer bounds (border included)
  * stay on-screen. Shared by every draggable window since the bounds math
  * is identical regardless of what's inside -- dragging didn't enforce
@@ -1076,7 +1120,6 @@ static void update_and_present(int w, int h, const struct window *windows, int f
 
 void kmain(void) {
     int w, h;
-    int mx, my;
     int prev_left_held = 0;
     int prev_right_held = 0;
     int dragging_window = -1;
