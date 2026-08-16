@@ -124,6 +124,21 @@ struct paint {
 };
 ```
 
+**Storage note, same reasoning as the mouse-state fix above**: every
+other window's own state (`struct editor ed`, FILES' `file_entries`,
+etc.) is a plain `kmain()`-local, since only `kmain()`'s own loop ever
+touches it. `struct paint` can't follow that convention -- `PIXEL`
+and `PAINT` are hook functions defined elsewhere in `kernel.c`, called
+from inside `forth_eval_line()`'s own call stack, with no path back to
+`kmain()`'s locals. `paint`, along with `windows[MAX_WINDOWS]` and
+`z_order[MAX_WINDOWS]` (both of which `forth_hook_paint_open()` needs
+to reach, to open+raise the window the same way every other launcher
+already does), all move from `kmain()`-locals to file-scope `static`
+in `kernel.c`. This changes nothing about how `kmain()` itself uses
+them -- a file-scope `static` is used exactly like a local from inside
+the function that declares it -- it only makes them reachable from the
+new hook functions sitting alongside `kmain()` in the same file.
+
 **Layout**: canvas 256x256px (16px per cell -- chunky enough to click
 precisely, matching the editor's own reasoning for picking sizes
 against this project's documented mouse-precision quirks), an 8-swatch
