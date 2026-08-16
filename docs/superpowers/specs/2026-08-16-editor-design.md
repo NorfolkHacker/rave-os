@@ -165,14 +165,37 @@ case; a genuinely new path still resolves correctly since
 as-typed). Same shape as `fs_path_join()`/`fs_path_parent()` already
 being the one shared boundary between FILES and SHELL from the prior
 stage — one new public function, not two newly-exported private ones.
-Then attempts `fs_read_file()` into the
-editor buffer (a failure here is treated as "start empty," not an error
-— `edit` on a path that doesn't exist yet is exactly how a new file gets
+Then checks what the resolved path actually names before touching
+`fs_read_file()` at all — `fs_read_file()`'s own -1 collapses "not
+found," "is a directory," and "too big for the buffer" into one
+indistinguishable failure code (documented on `fs_read_file()` itself),
+but `edit` needs to react to those three cases differently: a
+not-found path should open an empty buffer (that's how a new file gets
 created, mirroring FILES' own Enter-with-no-selection-creates-a-file
-convention), sets `editor.cursor = editor.len` (start editing at the end
-of whatever loaded, or at 0 for a fresh empty buffer), stores the
-resolved path as the window's current file, sets the window title, and
-opens+raises `WIN_KIND_EDITOR` — the same open+raise pattern `FORTH`/
+convention); a directory should fail outright, not silently open empty
+(opening it anyway would be harmless in isolation — `fs_delete()` on a
+non-empty directory already refuses, so a later `SAVE` would just fail
+too — but it's a confusing, silently-wrong-feeling experience compared
+to a real `edit: failed` FILES/SHELL users already expect from other
+commands); and a real file that's simply too large for
+`EDITOR_BUF_SIZE` must ALSO fail outright rather than silently opening
+empty — opening it empty and later saving would destroy that file's
+real, already-larger-than-editable content, replacing it with whatever
+tiny amount the user typed into what they thought was a blank page.
+Resolving this needs no new `fs.c` primitive: `fs_list_dir()` on the
+resolved path's own parent directory (computed via the already-public
+`fs_path_parent()`, run on a copy of the resolved path) is scanned for
+an entry matching the resolved path's leaf name. Not found in that
+listing → open empty. Found with `type == FS_TYPE_DIR` → fail
+(`edit: failed`), no window opens. Found with `type == FS_TYPE_FILE` →
+call `fs_read_file()`; if that now fails despite the entry being
+confirmed to exist and be a real file, the only remaining explanation is
+"too big for `EDITOR_BUF_SIZE`" → fail (`edit: failed`), no window
+opens; if it succeeds, load the content normally. Either way, on
+success the handler sets `editor.cursor = editor.len` (start editing at
+the end of whatever loaded, or at 0 for a fresh empty buffer), stores
+the resolved path as the window's current file, sets the window title,
+and opens+raises `WIN_KIND_EDITOR` — the same open+raise pattern `FORTH`/
 `FILES`/`SHELL`'s own start-menu launchers already use. No separate
 `shell_cmd_edit()` in `shell.c` — unlike `RUN` (which still calls into
 `forth_run_command()` for the actual script execution after its own
