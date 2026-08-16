@@ -774,6 +774,78 @@ int fs_move(const char *path, const char *dest_dir) {
     return dirtable_write(src_table_lba, src_entries);
 }
 
+int fs_copy_file(const char *path, const char *dest_dir) {
+    struct fs_entry src_entries[FS_MAX_FILES];
+    struct fs_entry dest_entries[FS_MAX_FILES];
+    unsigned char sector_buf[ATA_SECTOR_SIZE];
+    char leaf[FS_NAME_MAX];
+    unsigned int src_table_lba;
+    unsigned int dest_table_lba;
+    unsigned int sectors;
+    unsigned int new_lba;
+    unsigned int s;
+    int src_slot;
+    int dest_slot;
+
+    if (!mounted) {
+        fs_init();
+    }
+
+    if (walk_to_parent(path, leaf, &src_table_lba) != 0) {
+        return -1;
+    }
+    if (dirtable_read(src_table_lba, src_entries) != 0) {
+        return -1;
+    }
+    src_slot = dirtable_find(src_entries, leaf);
+    if (src_slot < 0 || src_entries[src_slot].type != FS_TYPE_FILE) {
+        return -1; /* not found, or a directory (out of scope for v1) */
+    }
+
+    if (resolve_dir_lba(dest_dir, &dest_table_lba) != 0) {
+        return -1;
+    }
+    if (dirtable_read(dest_table_lba, dest_entries) != 0) {
+        return -1;
+    }
+    if (dirtable_find(dest_entries, leaf) >= 0) {
+        return -1; /* name already taken at destination */
+    }
+    dest_slot = dirtable_find_free(dest_entries);
+    if (dest_slot < 0) {
+        return -1; /* destination table full */
+    }
+
+    sectors = src_entries[src_slot].size_bytes / ATA_SECTOR_SIZE +
+              (src_entries[src_slot].size_bytes % ATA_SECTOR_SIZE != 0 ? 1 : 0);
+    if (sectors == 0) {
+        sectors = 1;
+    }
+    if (!lba_span_valid(src_entries[src_slot].start_lba, sectors)) {
+        return -1;
+    }
+
+    new_lba = alloc_sectors(sectors);
+    if (new_lba == 0xFFFFFFFFu) {
+        return -1;
+    }
+
+    for (s = 0; s < sectors; s++) {
+        if (ata_read_sector(ATA_DRIVE_SLAVE, src_entries[src_slot].start_lba + s, sector_buf) != 0) {
+            return -1;
+        }
+        if (ata_write_sector(ATA_DRIVE_SLAVE, new_lba + s, sector_buf) != 0) {
+            return -1;
+        }
+    }
+
+    name_copy(dest_entries[dest_slot].name, leaf);
+    dest_entries[dest_slot].start_lba = new_lba;
+    dest_entries[dest_slot].size_bytes = src_entries[src_slot].size_bytes;
+    dest_entries[dest_slot].type = FS_TYPE_FILE;
+    return dirtable_write(dest_table_lba, dest_entries);
+}
+
 /* /DEV is synthetic -- never a real directory-table entry. HDA is always
  * listed (this kernel booted from the ATA master, so it's present by
  * construction whenever code is running to ask -- no probe needed). HDB

@@ -113,6 +113,15 @@ int fs_rename(const char *path, const char *new_name);
  * 0 on success. */
 int fs_move(const char *path, const char *dest_dir);
 
+/* Duplicates the file at path into dest_dir under the same leaf name --
+ * unlike fs_move(), a real second copy of the data is allocated and
+ * written (there's no way around that for a genuine copy). Fails (-1)
+ * under the same conditions as fs_move() (path must be an existing file;
+ * dest_dir must exist, be a directory, have table space, and not already
+ * have an entry with that name), plus running out of disk space for the
+ * new copy. Returns 0 on success. */
+int fs_copy_file(const char *path, const char *dest_dir);
+
 /* Lists path's direct entries (not recursive) into out[], up to
  * max_entries (callers should size their buffer to FS_LIST_MAX to never
  * truncate). path must name a directory -- "/" for root. Returns 0 and
