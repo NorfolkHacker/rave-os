@@ -496,7 +496,7 @@ static int fx_default_from_config(void) {
  * (FILES_HIT_NONE for "nothing selected") -- the row it names, if any,
  * is drawn with a highlight background. */
 static void draw_files_group(const struct window *files, const char *cwd, const struct fs_dirent *file_entries,
-                             unsigned int file_entry_count, int files_selected, const struct console_input *name_input,
+                             unsigned int file_entry_count, uint32_t files_selected_mask, const struct console_input *name_input,
                              const struct button *new_dir_btn, const struct button *delete_btn) {
     unsigned int i;
     int row = 1;
@@ -544,7 +544,7 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
             str_append(line, &pos, (int)sizeof(line), "B");
         }
 
-        if ((int)i == files_selected) {
+        if (files_selected_mask & (1u << i)) {
             gfx_fill_rect(files->x + 4, row_y - 2, files->w - 8, FILES_ROW_HEIGHT - 2, FILES_SELECTED_BG_COLOR);
             text_color = TEXT_ACCENT_COLOR;
         }
@@ -600,10 +600,10 @@ static int files_list_hit_test(const struct window *files, const char *cwd, unsi
  * re-list, clear selection, open, raise" sequence twice. Same re-listing
  * call every other cwd change in this file already uses. */
 static void open_files_at(char *cwd, int cwd_cap, const char *target, struct window *windows, int *z_order,
-                          struct fs_dirent *file_entries, unsigned int *file_entry_count, int *files_selected) {
+                          struct fs_dirent *file_entries, unsigned int *file_entry_count, uint32_t *files_selected_mask) {
     int pos = 0;
     str_append(cwd, &pos, cwd_cap, target);
-    *files_selected = FILES_HIT_NONE;
+    *files_selected_mask = 0;
     if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, file_entry_count) != 0) {
         *file_entry_count = 0;
     }
@@ -618,12 +618,12 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
                                  const struct console_input *ci, const struct console_output *shell_co,
                                  const struct console_input *shell_ci, const char *cwd,
                                  const struct fs_dirent *file_entries, unsigned int file_entry_count,
-                                 int files_selected, const struct console_input *name_input,
+                                 uint32_t files_selected_mask, const struct console_input *name_input,
                                  const struct button *new_dir_btn, const struct button *delete_btn) {
     if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
     } else if (idx == WIN_KIND_FILES) {
-        draw_files_group(&windows[idx], cwd, file_entries, file_entry_count, files_selected, name_input, new_dir_btn,
+        draw_files_group(&windows[idx], cwd, file_entries, file_entry_count, files_selected_mask, name_input, new_dir_btn,
                          delete_btn);
     } else {
         draw_shell_group(&windows[idx], shell_co, shell_ci);
@@ -641,7 +641,7 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
                        const struct console_input *shell_ci, const int *z_order, const struct taskbar *bar,
                        int hovered_entry, const struct startmenu *menu, int menu_hovered_item, int mx, int my,
                        uint32_t cursor_color, const char *cwd, const struct fs_dirent *file_entries,
-                       unsigned int file_entry_count, int files_selected, const struct console_input *name_input,
+                       unsigned int file_entry_count, uint32_t files_selected_mask, const struct console_input *name_input,
                        const struct button *new_dir_btn, const struct button *delete_btn) {
     int x, y, i;
 
@@ -657,7 +657,7 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
             draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
-                                 files_selected, name_input, new_dir_btn, delete_btn);
+                                 files_selected_mask, name_input, new_dir_btn, delete_btn);
         }
     }
 
@@ -713,7 +713,7 @@ static void update_and_present(int w, int h, const struct window *windows, int f
                                int fx_changed, const struct taskbar *bar, int hovered_entry, int old_hovered_entry,
                                const struct startmenu *menu, int menu_hovered_item, int menu_touched, const char *cwd,
                                const struct fs_dirent *file_entries, unsigned int file_entry_count,
-                               int files_selected, const struct console_input *name_input,
+                               uint32_t files_selected_mask, const struct console_input *name_input,
                                const struct button *new_dir_btn, const struct button *delete_btn) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
@@ -833,7 +833,7 @@ static void update_and_present(int w, int h, const struct window *windows, int f
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
             draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
-                                 files_selected, name_input, new_dir_btn, delete_btn);
+                                 files_selected_mask, name_input, new_dir_btn, delete_btn);
         }
     }
 
@@ -879,7 +879,7 @@ void kmain(void) {
     char cwd[FILES_PATH_MAX];
     struct fs_dirent file_entries[FS_LIST_MAX];
     unsigned int file_entry_count;
-    int files_selected = FILES_HIT_NONE;
+    uint32_t files_selected_mask = 0;
 
     gfx_init();
     w = gfx_width();
@@ -1111,7 +1111,7 @@ void kmain(void) {
     }
 
     draw_scene(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, &bar, taskbar_hovered, &menu,
-              menu_hovered_item, mx, my, cursor_color, cwd, file_entries, file_entry_count, files_selected,
+              menu_hovered_item, mx, my, cursor_color, cwd, file_entries, file_entry_count, files_selected_mask,
               &name_input, &new_dir_btn, &delete_btn);
     gfx_present();
 
@@ -1138,7 +1138,7 @@ void kmain(void) {
         int old_shell_ci_focused = shell_ci.focused;
         char old_shell_ci_text[CONSOLE_INPUT_MAX + 1];
         char old_cwd[FILES_PATH_MAX];
-        int old_files_selected = files_selected;
+        uint32_t old_files_selected_mask = files_selected_mask;
         int old_delete_btn_hovered = delete_btn.hovered;
         int old_delete_btn_pressed = delete_btn.pressed;
         int old_new_dir_btn_hovered = new_dir_btn.hovered;
@@ -1261,10 +1261,10 @@ void kmain(void) {
                     raise_window(z_order, WIN_KIND_SHELL);
                 } else if (item == STARTMENU_ITEM_CONFIG) {
                     open_files_at(cwd, (int)sizeof(cwd), "/ETC", windows, z_order, file_entries, &file_entry_count,
-                                 &files_selected);
+                                 &files_selected_mask);
                 } else if (item == STARTMENU_ITEM_GAMES) {
                     open_files_at(cwd, (int)sizeof(cwd), "/GAMES", windows, z_order, file_entries, &file_entry_count,
-                                 &files_selected);
+                                 &files_selected_mask);
                 }
                 menu.open = 0;
             } else if (left_held && !prev_left_held && startmenu_hit_button(&menu, cx, cy)) {
@@ -1363,7 +1363,7 @@ void kmain(void) {
 
                     if (hit == FILES_HIT_UP) {
                         fs_path_parent(cwd);
-                        files_selected = FILES_HIT_NONE; /* stale relative to the new listing */
+                        files_selected_mask = 0; /* stale relative to the new listing */
                         if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
@@ -1377,40 +1377,48 @@ void kmain(void) {
                             }
                             cwd[ci2] = 0;
                         }
-                        files_selected = FILES_HIT_NONE; /* stale relative to the new listing */
+                        files_selected_mask = 0; /* stale relative to the new listing */
                         if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
                             file_entry_count = 0;
                         }
                     }
                 }
 
-                /* Right-click selects a row for deletion without
-                 * triggering the left-click navigate/open behavior above
-                 * -- the mouse driver already decodes this bit
-                 * (mouse.h's buttons bitmask), just unused until now.
-                 * Right-clicking the already-selected row deselects it. */
+                /* Multi-select: right-click toggles that row's own bit,
+                 * leaving every other row's selection state alone --
+                 * unlike the old single-index version, several rows can
+                 * be selected at once now (needed for CUT/COPY/DELETE to
+                 * act on more than one file per click). */
                 if (files_is_topmost && right_held && !prev_right_held) {
                     int hit = files_list_hit_test(&windows[WIN_KIND_FILES], cwd, file_entry_count, cx, cy);
                     if (hit >= 0) {
-                        files_selected = (files_selected == hit) ? FILES_HIT_NONE : hit;
+                        files_selected_mask ^= (1u << hit);
                     }
                 }
 
-                /* Deletes whatever files_selected names. A non-empty
-                 * directory or an already-stale selection just makes
-                 * fs_delete() fail, left as a silent no-op -- no
-                 * error-message UI in the FILES window yet, same
-                 * deferred-for-now choice as this window's other no-ops
-                 * (e.g. clicking the header row). */
+                /* Deletes every row named by a set bit in
+                 * files_selected_mask -- a generalization of the old
+                 * single-index delete, not a behavior change when only
+                 * one bit is ever set. Each row is attempted
+                 * independently (a non-empty directory or an
+                 * already-stale entry just makes that one fs_delete()
+                 * fail, silently, same as before); the mask always resets
+                 * and the listing always re-reads afterward regardless of
+                 * any individual failure, since row indices are stale
+                 * either way once anything might have changed. */
                 delete_btn.hovered = files_is_topmost && button_hit_test(&delete_btn, cx, cy);
-                if (delete_btn.hovered && click_edge && files_selected >= 0) {
-                    char del_path[FILES_PATH_MAX];
-                    fs_path_join(del_path, (int)sizeof(del_path), cwd, file_entries[files_selected].name);
-                    if (fs_delete(del_path) == 0) {
-                        files_selected = FILES_HIT_NONE;
-                        if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
-                            file_entry_count = 0;
+                if (delete_btn.hovered && click_edge && files_selected_mask != 0) {
+                    unsigned int di;
+                    for (di = 0; di < file_entry_count; di++) {
+                        if (files_selected_mask & (1u << di)) {
+                            char del_path[FILES_PATH_MAX];
+                            fs_path_join(del_path, (int)sizeof(del_path), cwd, file_entries[di].name);
+                            fs_delete(del_path);
                         }
+                    }
+                    files_selected_mask = 0;
+                    if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
+                        file_entry_count = 0;
                     }
                 }
                 delete_btn.pressed = delete_btn.hovered && left_held;
@@ -1560,16 +1568,31 @@ void kmain(void) {
                  * same table slot -- and thus the same listing index --
                  * still names the (now renamed) entry. */
                 if (console_input_feed_char(&name_input, c) && name_input.text[0] != 0) {
-                    int ok;
-                    if (files_selected >= 0) {
-                        char old_path[FILES_PATH_MAX];
-                        fs_path_join(old_path, (int)sizeof(old_path), cwd, file_entries[files_selected].name);
-                        ok = fs_rename(old_path, name_input.text) == 0;
-                    } else {
+                    int ok = 0;
+                    if (files_selected_mask == 0) {
                         char new_path[FILES_PATH_MAX];
                         fs_path_join(new_path, (int)sizeof(new_path), cwd, name_input.text);
                         ok = fs_create_file(new_path, 0, 0) == 0;
+                    } else if ((files_selected_mask & (files_selected_mask - 1)) == 0) {
+                        /* Exactly one bit set (a power of two, including
+                         * this check itself being the standard
+                         * single-bit test) -- rename that one entry,
+                         * same meaning the old files_selected >= 0
+                         * branch had before multi-select existed. */
+                        unsigned int idx;
+                        char old_path[FILES_PATH_MAX];
+                        for (idx = 0; idx < file_entry_count; idx++) {
+                            if (files_selected_mask & (1u << idx)) {
+                                break;
+                            }
+                        }
+                        fs_path_join(old_path, (int)sizeof(old_path), cwd, file_entries[idx].name);
+                        ok = fs_rename(old_path, name_input.text) == 0;
                     }
+                    /* else: more than one row selected -- a single typed
+                     * name can't unambiguously rename several entries,
+                     * so Enter is a silent no-op here, same convention
+                     * as every other unsupported action in this window. */
                     if (ok) {
                         console_input_clear(&name_input);
                         if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
@@ -1598,7 +1621,7 @@ void kmain(void) {
                                       (ci.len != old_ci_len) || (ci.cursor != old_ci_cursor) ||
                                       (ci.focused != old_ci_focused) || !str_eq(ci.text, old_ci_text);
             touched[WIN_KIND_FILES] = touched[WIN_KIND_FILES] || !str_eq(cwd, old_cwd) ||
-                                      (files_selected != old_files_selected) ||
+                                      (files_selected_mask != old_files_selected_mask) ||
                                       (delete_btn.hovered != old_delete_btn_hovered) ||
                                       (delete_btn.pressed != old_delete_btn_pressed) ||
                                       (new_dir_btn.hovered != old_new_dir_btn_hovered) ||
@@ -1615,7 +1638,7 @@ void kmain(void) {
             update_and_present(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, old_z, old_mx,
                                old_my, mx, my, cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled,
                                &bar, taskbar_hovered, old_taskbar_hovered, &menu, menu_hovered_item, menu_touched,
-                               cwd, file_entries, file_entry_count, files_selected, &name_input, &new_dir_btn,
+                               cwd, file_entries, file_entry_count, files_selected_mask, &name_input, &new_dir_btn,
                                &delete_btn);
         } else {
             __asm__ volatile("hlt");
