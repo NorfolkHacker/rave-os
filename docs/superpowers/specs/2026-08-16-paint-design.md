@@ -76,6 +76,27 @@ int forth_hook_current_color(void); /* the natively-selected palette index, 0..7
 void forth_hook_refresh(void);
 ```
 
+**The live-state subtlety**: `kernel.c`'s current mouse position/button
+tracking (`mx`, `my`, and the per-packet `left_held`/`right_held`
+booleans) are all local to `kmain()`'s own event loop, refreshed only
+once per outer loop iteration -- and that outer iteration does not
+advance while a Forth `BEGIN ... UNTIL` loop is running inside one
+`forth_eval_line()` call. If `forth_hook_mouse_x()` simply read those
+locals, the mouse position would appear frozen at whatever it was the
+instant the script started, for the entire loop -- breaking live
+painting outright. The fix: the pure "drain any pending
+`mouse_poll_packet()` results and update the current absolute
+position/button state" logic (a small, self-contained piece of what
+`kmain()`'s loop already does, separate from that loop's own click-
+dispatch/window-dragging logic, which does *not* need to run during a
+paint session) moves into its own function operating on persistent
+(file-scope `static`) state instead of `kmain()`-local variables.
+`kmain()`'s own loop calls it once per iteration exactly as before
+(no behavior change there); the four mouse-reading hooks each call it
+too, immediately before reading the resulting state, so a Forth loop
+polling `MOUSE-X`/`MOUSE-DOWN?` on every pass genuinely sees fresh
+positions and button transitions each time, not a stale snapshot.
+
 Each new primitive in `forth.c`'s `primitives[]` table (the existing
 `{name, fn}` array `OP_CALL_PRIMITIVE` indexes into) is a thin wrapper
 matching every existing primitive's own shape (pop/push
