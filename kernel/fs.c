@@ -719,6 +719,61 @@ int fs_rename(const char *path, const char *new_name) {
     return dirtable_write(table_lba, entries);
 }
 
+int fs_move(const char *path, const char *dest_dir) {
+    struct fs_entry src_entries[FS_MAX_FILES];
+    struct fs_entry dest_entries[FS_MAX_FILES];
+    struct fs_entry moved;
+    char leaf[FS_NAME_MAX];
+    unsigned int src_table_lba;
+    unsigned int dest_table_lba;
+    int src_slot;
+    int dest_slot;
+    int i;
+
+    if (!mounted) {
+        fs_init();
+    }
+
+    if (walk_to_parent(path, leaf, &src_table_lba) != 0) {
+        return -1;
+    }
+    if (dirtable_read(src_table_lba, src_entries) != 0) {
+        return -1;
+    }
+    src_slot = dirtable_find(src_entries, leaf);
+    if (src_slot < 0 || src_entries[src_slot].type != FS_TYPE_FILE) {
+        return -1; /* not found, or a directory (out of scope for v1) */
+    }
+
+    if (resolve_dir_lba(dest_dir, &dest_table_lba) != 0) {
+        return -1;
+    }
+    if (dirtable_read(dest_table_lba, dest_entries) != 0) {
+        return -1;
+    }
+    if (dirtable_find(dest_entries, leaf) >= 0) {
+        return -1; /* name already taken at destination (self-move included) */
+    }
+    dest_slot = dirtable_find_free(dest_entries);
+    if (dest_slot < 0) {
+        return -1; /* destination table full */
+    }
+
+    moved = src_entries[src_slot];
+    dest_entries[dest_slot] = moved;
+    if (dirtable_write(dest_table_lba, dest_entries) != 0) {
+        return -1;
+    }
+
+    for (i = 0; i < FS_NAME_MAX; i++) {
+        src_entries[src_slot].name[i] = 0;
+    }
+    src_entries[src_slot].start_lba = 0;
+    src_entries[src_slot].size_bytes = 0;
+    src_entries[src_slot].type = 0;
+    return dirtable_write(src_table_lba, src_entries);
+}
+
 /* /DEV is synthetic -- never a real directory-table entry. HDA is always
  * listed (this kernel booted from the ATA master, so it's present by
  * construction whenever code is running to ask -- no probe needed). HDB

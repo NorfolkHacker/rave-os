@@ -98,6 +98,21 @@ int fs_delete(const char *path);
  * 0 on success. */
 int fs_rename(const char *path, const char *new_name);
 
+/* Relocates path (must name an existing file -- directories are out of
+ * scope for v1) into dest_dir, a metadata-only operation: no file data
+ * is read, written, or reallocated, only the directory-table entry moves
+ * from its current parent's table into dest_dir's. This matters because
+ * the allocator never reclaims sectors -- implementing move as
+ * copy-then-delete would permanently leak the original data's space on
+ * every call. Fails (-1), leaving both path and dest_dir untouched, if
+ * path doesn't exist or isn't a file, dest_dir doesn't exist or isn't a
+ * directory, dest_dir's table is full, or dest_dir already has an entry
+ * named the same as path's leaf name (this also covers "moving" a file
+ * into the directory it's already in -- a guaranteed name collision with
+ * itself, so it correctly fails without needing a special case). Returns
+ * 0 on success. */
+int fs_move(const char *path, const char *dest_dir);
+
 /* Lists path's direct entries (not recursive) into out[], up to
  * max_entries (callers should size their buffer to FS_LIST_MAX to never
  * truncate). path must name a directory -- "/" for root. Returns 0 and
