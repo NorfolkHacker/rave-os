@@ -11,14 +11,14 @@ OBJCOPY := objcopy
 # switching at all yet.
 CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra
 
-C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o desktop_icon.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o fs.o
+C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o desktop_icon.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o fs.o editor.o
 
 all: kernel.bin
 
 kernel_entry.o: kernel_entry.asm
 	$(AS) -f elf32 kernel_entry.asm -o kernel_entry.o
 
-kernel.o: kernel.c graphics.h text.h mouse.h keyboard.h interrupts.h window.h button.h taskbar.h startmenu.h console_input.h console_history.h console_output.h forth.h shell.h io.h ata.h fs.h
+kernel.o: kernel.c graphics.h text.h mouse.h keyboard.h interrupts.h window.h button.h taskbar.h startmenu.h console_input.h console_history.h console_output.h forth.h shell.h io.h ata.h fs.h editor.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 keyboard.o: keyboard.c keyboard.h
@@ -77,6 +77,9 @@ console_history.o: console_history.c console_history.h console_input.h
 
 console_output.o: console_output.c console_output.h text.h
 	$(CC) $(CFLAGS) -c console_output.c -o console_output.o
+
+editor.o: editor.c editor.h graphics.h text.h
+	$(CC) $(CFLAGS) -c editor.c -o editor.o
 
 forth.o: forth.c forth.h
 	$(CC) $(CFLAGS) -c forth.c -o forth.o
