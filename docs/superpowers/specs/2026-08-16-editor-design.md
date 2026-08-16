@@ -151,11 +151,21 @@ established the precedent for a typed command needing to do something
 `kernel.c`'s own Enter-key handler recognizes the special line *before*
 falling through to the normal `shell_eval_line()` call. `edit <path>`
 follows the identical shape: the handler checks for a leading `edit `
-token, resolves the argument via `shell_resolve()`/`shell_case_correct()`
-(`correct_last = 1` — the target is expected to already exist for the
-common "edit an existing file" case; a genuinely new path still resolves
-correctly since `shell_case_correct()` already degrades to leaving
-unmatched components as-typed), attempts `fs_read_file()` into the
+token, then resolves the argument via a new public
+`shell_resolve_path(const struct shell *sh, const char *arg, char *resolved, int cap)`
+in `shell.c`/`shell.h` — `shell_resolve()` and `shell_case_correct()`
+themselves stay `static` (private to `shell.c`, as they already are;
+`kernel.c` cannot call them directly), and this one new function is
+the shared boundary, calling both internally
+(`shell_resolve(sh, arg, resolved, cap)` then
+`shell_case_correct(resolved, cap, 1)`, `correct_last = 1` — the target
+is expected to already exist for the common "edit an existing file"
+case; a genuinely new path still resolves correctly since
+`shell_case_correct()` already degrades to leaving unmatched components
+as-typed). Same shape as `fs_path_join()`/`fs_path_parent()` already
+being the one shared boundary between FILES and SHELL from the prior
+stage — one new public function, not two newly-exported private ones.
+Then attempts `fs_read_file()` into the
 editor buffer (a failure here is treated as "start empty," not an error
 — `edit` on a path that doesn't exist yet is exactly how a new file gets
 created, mirroring FILES' own Enter-with-no-selection-creates-a-file
