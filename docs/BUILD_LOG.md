@@ -1004,3 +1004,92 @@ Picked up next, on request: `..` (one level up) already had its own special case
 **Verified headlessly**: `cd home` -> `pwd`-equivalent confirmed via the prompt (`/HOME >`); `cd .` -> next prompt still `/HOME >`, confirming no change; `cd ..` -> `pwd` confirmed `/`, confirming the sibling case still works correctly alongside the new one.
 
 Files: `kernel/shell.c` only (`shell_resolve()`'s new `.` branch, doc comment updated).
+
+## 2026-08-16 -- FILES multi-select, CUT/COPY/PASTE, and SHELL mv/cp
+
+Picked up from `docs/IDEAS.md`'s "upgrade the FILES window" entry, brainstormed
+into a design spec (`docs/superpowers/specs/2026-08-16-files-multiselect-move-copy-design.md`)
+and implementation plan first. FILES had no way to relocate or duplicate a
+file at all before this -- only DELETE/rename/create -- and only ever
+selected one row at a time.
+
+**Two new fs.c primitives, both files-only (directories stay out of scope,
+flagged as a follow-up in IDEAS.md).** `fs_move(path, dest_dir)` relocates a
+file's directory-table entry between parents' tables with no data read,
+write, or reallocation at all -- deliberately, since the allocator's
+one-way bump design (no free list, documented on `fs_delete()` since Stage
+D) means a copy-then-delete implementation would permanently leak the
+original's sectors on every single move. `fs_copy_file(path, dest_dir)`
+does need a genuine second allocation (there's no way around two copies
+needing two allocations) -- streams the source sector-by-sector through
+the same `ata_read_sector`/`ata_write_sector` primitives `fs_read_file`/
+`fs_create_file` already use internally, rather than requiring a whole-file
+buffer this malloc-less kernel has no safe way to size.
+
+**FILES: `files_selected` (a single row index) becomes
+`files_selected_mask` (a `uint32_t` bitmask)** -- right-click now toggles
+one row's own bit instead of overwriting the whole selection, so several
+rows can be selected simultaneously. DELETE generalizes to iterate every
+set bit. Enter-to-rename only fires when exactly one bit is set (a typed
+name can't unambiguously rename several entries at once) -- with more than
+one selected, Enter is a silent no-op, same convention as every other
+unsupported click in this window.
+
+**FILES: clipboard-style CUT/COPY/PASTE**, a new button row below NEW
+DIR/DELETE (the window grew 28px taller to fit it, with the existing list
+area's size completely unchanged). CUT/COPY snapshot every *file* in the
+current selection (a selected directory is silently skipped) into a small
+clipboard struct that survives navigating to a different directory --
+that's the whole mechanism: select, click CUT or COPY, click through
+directories using the FILES window's existing navigation, click PASTE
+wherever you land. PASTE applies `fs_move`/`fs_copy_file` per clipboard
+entry against the current directory; a cut clipboard clears after one
+successful paste (the originals are gone), a copied one persists so the
+same files can be pasted into several places in a row. Every failure here
+(a name collision at the destination, an empty clipboard, a directory in
+the selection) is a silent no-op, matching this window's existing
+DELETE/rename/create failure conventions -- no new error-message UI was
+added.
+
+**SHELL: `mv <src> <dest_dir>` and `cp <src> <dest_dir>`**, built on the
+same two primitives -- unlike FILES' clipboard, a typed command line
+already names both ends in one shot, so no clipboard state was needed
+here. Both arguments go through the existing `shell_resolve()`/
+`shell_case_correct()` pipeline (full correction on both -- unlike
+`mkdir`'s new name, neither argument here is being newly typed into
+existence). Failure prints `mv: failed`/`cp: failed`, matching
+`shell_cmd_rm()`'s existing wording.
+
+**Verified headlessly, in stages, each against a disposable scratch copy of
+fs.img (never the persistent one):** SHELL's `mv`/`cp` first, since a typed
+command is far faster to drive than FILES' mouse/clipboard flow and
+directly exercises the two new primitives -- moved `/ETC/CONFIG` into a
+fresh subdirectory, confirmed it vanished from `/ETC`'s own listing and
+reappeared with its real content (`FX=0`/`FX=1`) intact in the new
+location; copied it a second time into another subdirectory, confirmed it
+now existed in *both* places. Parsed `fs.img`'s on-disk directory tables
+directly (not just screendumps) to confirm the moved file's `start_lba`
+was byte-identical to its original allocation (proving `fs_move` really is
+metadata-only) while the copy got a distinct `start_lba` (proving
+`fs_copy_file` genuinely allocated new sectors). Then FILES: multi-select
+(two rows highlighted simultaneously, independently toggleable, DELETE
+removing both in one click), CUT/navigate/PASTE (files relocated, source
+directory empty afterward), COPY/paste-into-several-directories-in-a-row
+(clipboard persisting correctly across repeated pastes, unlike CUT's
+single-use clipboard), and the directories-are-silently-skipped case
+(a mixed file+directory selection only moved the file, leaving the
+directory in place). A full regression pass confirmed FORTH's own
+scrollback stayed untouched by SHELL's mv/cp session, and that dragging
+the FILES window by its titlebar still moves the name field and all five
+buttons (NEW DIR, DELETE, CUT, COPY, PASTE) together, and that every
+pre-existing single-select DELETE/rename/create-file/NEW DIR flow still
+works unchanged after the bitmask conversion.
+
+Files: `kernel/fs.h`/`fs.c` (`fs_move`, `fs_copy_file`, new); `kernel/shell.h`/
+`shell.c` (`shell_two_args`, `shell_cmd_mv`, `shell_cmd_cp`, new; dispatch and
+doc comment updated); `kernel/kernel.c` (`files_selected` → `files_selected_mask`
+throughout; `struct files_clipboard`, `files_clipboard_stage()`, `cut_btn`/
+`copy_btn`/`paste_btn`, new; FILES window height, `move_window_content()`,
+`draw_files_group()`, `draw_window_by_index()`, `draw_scene()`,
+`update_and_present()`, and the main event loop's click/keyboard handling
+all updated).
