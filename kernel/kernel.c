@@ -321,7 +321,8 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
  * every call site that moves the window. */
 static void move_window_content(int kind, struct console_output *co, struct console_input *ci,
                                 struct console_input *name_input, struct button *new_dir_btn,
-                                struct button *delete_btn, struct console_output *shell_co,
+                                struct button *delete_btn, struct button *cut_btn, struct button *copy_btn,
+                                struct button *paste_btn, struct console_output *shell_co,
                                 struct console_input *shell_ci, int applied_dx, int applied_dy) {
     if (kind == WIN_KIND_FORTH) {
         co->x += applied_dx;
@@ -335,6 +336,12 @@ static void move_window_content(int kind, struct console_output *co, struct cons
         new_dir_btn->y += applied_dy;
         delete_btn->x += applied_dx;
         delete_btn->y += applied_dy;
+        cut_btn->x += applied_dx;
+        cut_btn->y += applied_dy;
+        copy_btn->x += applied_dx;
+        copy_btn->y += applied_dy;
+        paste_btn->x += applied_dx;
+        paste_btn->y += applied_dy;
     } else if (kind == WIN_KIND_SHELL) {
         shell_co->x += applied_dx;
         shell_co->y += applied_dy;
@@ -495,9 +502,53 @@ static int fx_default_from_config(void) {
  * given pixel row means. files_selected is an index into file_entries
  * (FILES_HIT_NONE for "nothing selected") -- the row it names, if any,
  * is drawn with a highlight background. */
+
+/* Holds files cut/copied from the FILES window, independent of the
+ * current listing/selection so it survives navigating to a different
+ * directory before pasting -- the whole point of "select, then navigate,
+ * then paste". v1 is files-only: a selected directory is never staged
+ * here (see files_clipboard_stage() below). */
+struct files_clipboard {
+    char source_dir[FILES_PATH_MAX];
+    char names[FS_LIST_MAX][FS_NAME_MAX];
+    unsigned int count;
+    int is_cut; /* 1 = CUT (fs_move on paste), 0 = COPY (fs_copy_file on paste) */
+};
+
+/* Snapshots every currently-selected row in file_entries that's a file
+ * (a selected FS_TYPE_DIR row is silently skipped -- directories are out
+ * of scope for move/copy in v1) into clip, recording cwd as where they
+ * came from and whether this was a CUT or a COPY. If nothing file-typed
+ * ended up selected, clip is left completely untouched -- same silent-
+ * no-op convention as every other unsupported action in this window. */
+static void files_clipboard_stage(struct files_clipboard *clip, const char *cwd,
+                                  const struct fs_dirent *file_entries, unsigned int file_entry_count,
+                                  uint32_t files_selected_mask, int is_cut) {
+    unsigned int i;
+    unsigned int n = 0;
+
+    for (i = 0; i < file_entry_count; i++) {
+        if ((files_selected_mask & (1u << i)) && file_entries[i].type == FS_TYPE_FILE) {
+            int p = 0;
+            str_append(clip->names[n], &p, (int)sizeof(clip->names[n]), file_entries[i].name);
+            n++;
+        }
+    }
+    if (n == 0) {
+        return;
+    }
+    {
+        int p = 0;
+        str_append(clip->source_dir, &p, (int)sizeof(clip->source_dir), cwd);
+    }
+    clip->count = n;
+    clip->is_cut = is_cut;
+}
+
 static void draw_files_group(const struct window *files, const char *cwd, const struct fs_dirent *file_entries,
                              unsigned int file_entry_count, uint32_t files_selected_mask, const struct console_input *name_input,
-                             const struct button *new_dir_btn, const struct button *delete_btn) {
+                             const struct button *new_dir_btn, const struct button *delete_btn,
+                             const struct button *cut_btn, const struct button *copy_btn, const struct button *paste_btn) {
     unsigned int i;
     int row = 1;
 
@@ -556,6 +607,9 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
     console_input_draw(name_input);
     button_draw(new_dir_btn);
     button_draw(delete_btn);
+    button_draw(cut_btn);
+    button_draw(copy_btn);
+    button_draw(paste_btn);
 }
 
 #define FILES_HIT_NONE (-1)
@@ -619,12 +673,14 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
                                  const struct console_input *shell_ci, const char *cwd,
                                  const struct fs_dirent *file_entries, unsigned int file_entry_count,
                                  uint32_t files_selected_mask, const struct console_input *name_input,
-                                 const struct button *new_dir_btn, const struct button *delete_btn) {
+                                 const struct button *new_dir_btn, const struct button *delete_btn,
+                                 const struct button *cut_btn, const struct button *copy_btn,
+                                 const struct button *paste_btn) {
     if (idx == WIN_KIND_FORTH) {
         draw_forth_group(&windows[idx], co, ci);
     } else if (idx == WIN_KIND_FILES) {
         draw_files_group(&windows[idx], cwd, file_entries, file_entry_count, files_selected_mask, name_input, new_dir_btn,
-                         delete_btn);
+                         delete_btn, cut_btn, copy_btn, paste_btn);
     } else {
         draw_shell_group(&windows[idx], shell_co, shell_ci);
     }
@@ -642,7 +698,9 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
                        int hovered_entry, const struct startmenu *menu, int menu_hovered_item, int mx, int my,
                        uint32_t cursor_color, const char *cwd, const struct fs_dirent *file_entries,
                        unsigned int file_entry_count, uint32_t files_selected_mask, const struct console_input *name_input,
-                       const struct button *new_dir_btn, const struct button *delete_btn) {
+                       const struct button *new_dir_btn, const struct button *delete_btn,
+                       const struct button *cut_btn, const struct button *copy_btn,
+                       const struct button *paste_btn) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -657,7 +715,8 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
             draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
-                                 files_selected_mask, name_input, new_dir_btn, delete_btn);
+                                 files_selected_mask, name_input, new_dir_btn, delete_btn, cut_btn, copy_btn,
+                                 paste_btn);
         }
     }
 
@@ -714,7 +773,9 @@ static void update_and_present(int w, int h, const struct window *windows, int f
                                const struct startmenu *menu, int menu_hovered_item, int menu_touched, const char *cwd,
                                const struct fs_dirent *file_entries, unsigned int file_entry_count,
                                uint32_t files_selected_mask, const struct console_input *name_input,
-                               const struct button *new_dir_btn, const struct button *delete_btn) {
+                               const struct button *new_dir_btn, const struct button *delete_btn,
+                               const struct button *cut_btn, const struct button *copy_btn,
+                               const struct button *paste_btn) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
     int redraw[DAMAGE_REGIONS];
@@ -833,7 +894,8 @@ static void update_and_present(int w, int h, const struct window *windows, int f
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
             draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
-                                 files_selected_mask, name_input, new_dir_btn, delete_btn);
+                                 files_selected_mask, name_input, new_dir_btn, delete_btn, cut_btn, copy_btn,
+                                 paste_btn);
         }
     }
 
@@ -873,6 +935,10 @@ void kmain(void) {
     struct startmenu menu;
     struct button delete_btn;
     struct button new_dir_btn;
+    struct button cut_btn;
+    struct button copy_btn;
+    struct button paste_btn;
+    struct files_clipboard clipboard;
     struct console_input name_input;
     const char *ata_status;
     const char *fs_status;
@@ -911,7 +977,12 @@ void kmain(void) {
      * existing ~8-row capacity (draw_files_group()'s row clip stops
      * before the footer, not at the old fixed window bottom, so growing
      * the footer here doesn't eat into the list either). */
-    windows[WIN_KIND_FILES].h = 250;
+    /* 28px taller than before -- room for a second button row
+     * (CUT/COPY/PASTE) below NEW DIR/DELETE without shrinking the list's
+     * existing visible-row capacity, since name_input/new_dir_btn/
+     * delete_btn's own y positions (computed from this h below) end up
+     * completely unchanged; only the new row appends below them. */
+    windows[WIN_KIND_FILES].h = 278;
     windows[WIN_KIND_FILES].title = "RAVE-OS FILES";
     /* Closed at boot -- opened via the start menu's FILES item (a plain
      * launch) or CONFIG/GAMES (which also navigate cwd -- see
@@ -928,7 +999,12 @@ void kmain(void) {
      * a file needs no button of its own. DELETE unchanged from Stage D
      * (right-click a row to select it, then this button removes it). */
     new_dir_btn.x = windows[WIN_KIND_FILES].x + 8;
-    new_dir_btn.y = windows[WIN_KIND_FILES].y + windows[WIN_KIND_FILES].h - 30;
+    /* -58, not -30 -- the old "-30 from the bottom" position now belongs
+     * to the new CUT/COPY/PASTE row below this one (Step 2). Since h grew
+     * by exactly 28 to compensate, this still evaluates to the exact same
+     * absolute y it always has, so name_input and the list area above it
+     * are visually unchanged. */
+    new_dir_btn.y = windows[WIN_KIND_FILES].y + windows[WIN_KIND_FILES].h - 58;
     new_dir_btn.w = (windows[WIN_KIND_FILES].w - 16 - 8) / 2;
     new_dir_btn.h = 22;
     new_dir_btn.label = "NEW DIR";
@@ -942,6 +1018,40 @@ void kmain(void) {
     delete_btn.label = "DELETE";
     delete_btn.hovered = 0;
     delete_btn.pressed = 0;
+
+    /* Second footer row, CUT/COPY/PASTE, directly below NEW DIR/DELETE --
+     * three buttons instead of two, so each gets a third of the same
+     * margin/gap formula NEW DIR/DELETE already use rather than a new
+     * layout scheme. paste_btn absorbs the integer-division remainder so
+     * the row still fills edge-to-edge symmetrically (margins match on
+     * both sides). */
+    cut_btn.x = new_dir_btn.x;
+    cut_btn.y = windows[WIN_KIND_FILES].y + windows[WIN_KIND_FILES].h - 30;
+    cut_btn.w = (windows[WIN_KIND_FILES].w - 16 - 16) / 3;
+    cut_btn.h = 22;
+    cut_btn.label = "CUT";
+    cut_btn.hovered = 0;
+    cut_btn.pressed = 0;
+
+    copy_btn.x = cut_btn.x + cut_btn.w + 8;
+    copy_btn.y = cut_btn.y;
+    copy_btn.w = cut_btn.w;
+    copy_btn.h = 22;
+    copy_btn.label = "COPY";
+    copy_btn.hovered = 0;
+    copy_btn.pressed = 0;
+
+    paste_btn.x = copy_btn.x + copy_btn.w + 8;
+    paste_btn.y = cut_btn.y;
+    paste_btn.w = (windows[WIN_KIND_FILES].x + windows[WIN_KIND_FILES].w - 8) - paste_btn.x;
+    paste_btn.h = 22;
+    paste_btn.label = "PASTE";
+    paste_btn.hovered = 0;
+    paste_btn.pressed = 0;
+
+    clipboard.count = 0;
+    clipboard.is_cut = 0;
+    clipboard.source_dir[0] = 0;
 
     /* Name-entry field for both NEW DIR and Enter-creates-file, sitting
      * just above the button row. */
@@ -1112,7 +1222,7 @@ void kmain(void) {
 
     draw_scene(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, &bar, taskbar_hovered, &menu,
               menu_hovered_item, mx, my, cursor_color, cwd, file_entries, file_entry_count, files_selected_mask,
-              &name_input, &new_dir_btn, &delete_btn);
+              &name_input, &new_dir_btn, &delete_btn, &cut_btn, &copy_btn, &paste_btn);
     gfx_present();
 
     for (;;) {
@@ -1143,6 +1253,12 @@ void kmain(void) {
         int old_delete_btn_pressed = delete_btn.pressed;
         int old_new_dir_btn_hovered = new_dir_btn.hovered;
         int old_new_dir_btn_pressed = new_dir_btn.pressed;
+        int old_cut_btn_hovered = cut_btn.hovered;
+        int old_cut_btn_pressed = cut_btn.pressed;
+        int old_copy_btn_hovered = copy_btn.hovered;
+        int old_copy_btn_pressed = copy_btn.pressed;
+        int old_paste_btn_hovered = paste_btn.hovered;
+        int old_paste_btn_pressed = paste_btn.pressed;
         int old_name_input_len = name_input.len;
         int old_name_input_cursor = name_input.cursor;
         int old_name_input_focused = name_input.focused;
@@ -1238,8 +1354,8 @@ void kmain(void) {
 
                     applied_dx = windows[dragging_window].x - drag_start_x;
                     applied_dy = windows[dragging_window].y - drag_start_y;
-                    move_window_content(dragging_window, &co, &ci, &name_input, &new_dir_btn, &delete_btn, &shell_co,
-                                        &shell_ci, applied_dx, applied_dy);
+                    move_window_content(dragging_window, &co, &ci, &name_input, &new_dir_btn, &delete_btn, &cut_btn,
+                                        &copy_btn, &paste_btn, &shell_co, &shell_ci, applied_dx, applied_dy);
                 } else {
                     dragging_window = -1;
                 }
@@ -1443,6 +1559,54 @@ void kmain(void) {
                     }
                 }
                 new_dir_btn.pressed = new_dir_btn.hovered && left_held;
+
+                /* CUT/COPY stage the current selection into clipboard
+                 * (files only -- a selected directory is silently
+                 * skipped inside files_clipboard_stage()). An empty
+                 * selection, or one covering only directories, leaves
+                 * whatever the clipboard already held untouched. */
+                cut_btn.hovered = files_is_topmost && button_hit_test(&cut_btn, cx, cy);
+                if (cut_btn.hovered && click_edge && files_selected_mask != 0) {
+                    files_clipboard_stage(&clipboard, cwd, file_entries, file_entry_count, files_selected_mask, 1);
+                }
+                cut_btn.pressed = cut_btn.hovered && left_held;
+
+                copy_btn.hovered = files_is_topmost && button_hit_test(&copy_btn, cx, cy);
+                if (copy_btn.hovered && click_edge && files_selected_mask != 0) {
+                    files_clipboard_stage(&clipboard, cwd, file_entries, file_entry_count, files_selected_mask, 0);
+                }
+                copy_btn.pressed = copy_btn.hovered && left_held;
+
+                /* PASTE applies every clipboard entry against cwd --
+                 * wherever FILES has navigated to is the destination,
+                 * which is what makes navigating double as picking where
+                 * to paste. Each name is attempted independently; one
+                 * failing (e.g. a name collision at the destination)
+                 * doesn't stop the rest. A successful CUT's clipboard
+                 * clears after paste (the originals are gone, so it only
+                 * makes sense once); a COPY's clipboard is left intact so
+                 * the same files can be pasted into several directories
+                 * in a row. */
+                paste_btn.hovered = files_is_topmost && button_hit_test(&paste_btn, cx, cy);
+                if (paste_btn.hovered && click_edge && clipboard.count > 0) {
+                    unsigned int pi;
+                    for (pi = 0; pi < clipboard.count; pi++) {
+                        char paste_src[FILES_PATH_MAX];
+                        fs_path_join(paste_src, (int)sizeof(paste_src), clipboard.source_dir, clipboard.names[pi]);
+                        if (clipboard.is_cut) {
+                            fs_move(paste_src, cwd);
+                        } else {
+                            fs_copy_file(paste_src, cwd);
+                        }
+                    }
+                    if (clipboard.is_cut) {
+                        clipboard.count = 0;
+                    }
+                    if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
+                        file_entry_count = 0;
+                    }
+                }
+                paste_btn.pressed = paste_btn.hovered && left_held;
             }
 
             prev_left_held = left_held;
@@ -1626,6 +1790,12 @@ void kmain(void) {
                                       (delete_btn.pressed != old_delete_btn_pressed) ||
                                       (new_dir_btn.hovered != old_new_dir_btn_hovered) ||
                                       (new_dir_btn.pressed != old_new_dir_btn_pressed) ||
+                                      (cut_btn.hovered != old_cut_btn_hovered) ||
+                                      (cut_btn.pressed != old_cut_btn_pressed) ||
+                                      (copy_btn.hovered != old_copy_btn_hovered) ||
+                                      (copy_btn.pressed != old_copy_btn_pressed) ||
+                                      (paste_btn.hovered != old_paste_btn_hovered) ||
+                                      (paste_btn.pressed != old_paste_btn_pressed) ||
                                       (name_input.len != old_name_input_len) ||
                                       (name_input.cursor != old_name_input_cursor) ||
                                       (name_input.focused != old_name_input_focused) ||
@@ -1639,7 +1809,7 @@ void kmain(void) {
                                old_my, mx, my, cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled,
                                &bar, taskbar_hovered, old_taskbar_hovered, &menu, menu_hovered_item, menu_touched,
                                cwd, file_entries, file_entry_count, files_selected_mask, &name_input, &new_dir_btn,
-                               &delete_btn);
+                               &delete_btn, &cut_btn, &copy_btn, &paste_btn);
         } else {
             __asm__ volatile("hlt");
         }
