@@ -19,14 +19,39 @@ not a queue.
   output, nothing) -- this would be a new subsystem from scratch, not an
   extension of something existing.
 
-- **Upgrade the FILES window.** No specifics given yet -- FILES currently
-  covers Stage A-F (list/navigate, open, directories, delete, create,
-  rename) plus opening at `/HOME`; SHELL now covers the same filesystem
-  from a typed console with its own extras (case-insensitive path
-  matching, `.`/`..`). Worth a real brainstorming pass on what "upgrade"
-  means before starting -- multi-select, move/copy, a text editor so
-  `/BIN` scripts and `/ETC/CONFIG` can be authored in-OS instead of only
-  via scratch-image byte editing, something else entirely.
+- ~~**Upgrade the FILES window.**~~ Done, 2026-08-16 -- both candidates
+  this entry originally floated shipped the same day. Multi-select +
+  clipboard-style CUT/COPY/PASTE landed in FILES (plus `mv`/`cp` in
+  SHELL, both built on new `fs_move`/`fs_copy_file` primitives). Then a
+  real in-OS text editor landed separately: a new multi-line `editor.c`
+  widget, a fourth `WIN_KIND_EDITOR` window, and SHELL's `EDIT <path>`
+  command -- `/BIN` scripts and `/ETC/CONFIG` can now be authored without
+  scratch-image byte editing. See `docs/BUILD_LOG.md`'s entries for both
+  and their design specs under `docs/superpowers/specs/`.
+
+- **Home/End/Delete key support.** `keyboard.c` only decodes the 4 arrow
+  keys as extended pseudo-characters (`KEY_UP`/`KEY_DOWN`/`KEY_LEFT`/
+  `KEY_RIGHT`, `keyboard.h`) -- Home, End, and Delete aren't decoded at
+  all yet. Surfaced as a real gap while designing the text editor
+  (2026-08-16): the editor's own spec explicitly deferred these three
+  keys rather than add new scancode decoding with unverified
+  headless-QEMU support in the same stage. Would need `keyboard.c`'s
+  extended-scancode table extended, then wiring into whichever widgets
+  want them (the editor being the obvious first consumer, but
+  `console_input.c`'s fields could use Home/End too).
+
+- **A struct-based refactor of `kernel.c`'s five window-pipeline
+  functions.** `move_window_content()`, `draw_window_by_index()`,
+  `draw_scene()`, and `update_and_present()` have each been widened three
+  times now across separate stages (FILES' selection-mask type change,
+  FILES' three new clipboard buttons, then the text editor's `ed`/
+  `save_btn`) -- `update_and_present()` is up to roughly 30 parameters.
+  Flagged as worth a real cleanup (e.g. a `struct window_content` bundle
+  passed by pointer) by two separate final-branch reviews now, both of
+  which explicitly deferred it rather than bundle an unrelated
+  refactor into a feature's own fix wave. A fifth window kind would
+  widen all five signatures again -- worth doing before that happens,
+  not after.
 
 - **A real path for user-written system programs, not just Forth
   scripts.** The actual question: how would someone write and run
