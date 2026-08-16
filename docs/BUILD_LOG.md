@@ -1093,3 +1093,98 @@ throughout; `struct files_clipboard`, `files_clipboard_stage()`, `cut_btn`/
 `draw_files_group()`, `draw_window_by_index()`, `draw_scene()`,
 `update_and_present()`, and the main event loop's click/keyboard handling
 all updated).
+
+## 2026-08-16 -- An in-OS text editor: EDITOR window, editor.c, SHELL's EDIT command
+
+Picked up from `docs/IDEAS.md`'s "upgrade the FILES window" entry's second
+candidate direction (the first, multi-select/move/copy, shipped earlier the
+same day). Before this, nothing in Rave-OS could change an existing file's
+content at all -- FILES could create an empty file or delete one, SHELL
+could `cat` one, but there was no write-to-an-existing-file path anywhere.
+
+**`kernel/editor.c`/`editor.h`, a new multi-line text buffer widget.**
+Mirrors `console_input.c`'s insert-at-cursor shape (see its own
+`feed_char`/`move_cursor`), generalized from "always a single line" to "any
+number of lines, with real cursor movement" -- Enter inserts a literal `\n`
+at the cursor rather than "submitting" the way `console_input`'s Enter
+does, Backspace merges two lines when it removes the `\n` between them (no
+special case needed, it falls straight out of plain byte removal), and
+Up/Down land on the same column across lines of different length,
+clamping to end-of-line when the target line is shorter. `EDITOR_BUF_SIZE`
+is 512 bytes, matching this codebase's established "one sector's worth"
+sizing (`VIEWER_BUF_SIZE`/`SHELL_CAT_BUF_SIZE`). Home/End/Delete are
+deliberately out of scope for v1 -- `keyboard.h` doesn't decode those as
+distinct keys yet, and adding that decoding was real new scope with
+unverified headless-QEMU support, so it stayed a flagged follow-up rather
+than getting bundled in.
+
+**`WIN_KIND_EDITOR`, a fourth window**, threaded through the same
+five-function draw/move/damage pipeline (`move_window_content`,
+`draw_window_by_index`, `draw_scene`, `update_and_present`, plus
+click-to-focus and keyboard routing) every other window kind already goes
+through -- same 400x180 footprint FORTH/SHELL's own console panes use, with
+a `SAVE` button along the bottom instead of a single input line, since the
+whole body is the editable buffer rather than a scrollback-plus-typed-line
+split. Its title is set dynamically to the currently-open file's path
+(`RAVE-OS EDIT: /ETC/CONFIG`) -- the first window in this codebase whose
+title changes at runtime rather than staying a fixed string, since it's
+the first window whose whole purpose is tied to a specific, user-chosen
+file.
+
+**SHELL's `EDIT <path>`**, intercepted in `kernel.c`'s own Enter-key
+handler before falling through to `shell_eval_line()` -- the same
+precedent `RUN` already established for FORTH, since opening a window is
+something `shell_eval_line()`'s plain text-in/text-out contract can't
+express, and `shell.c` stays completely free of GUI dependencies by
+design. `shell_resolve_path()` is the one new public function `shell.c`
+exposes (`shell_resolve()`/`shell_case_correct()` themselves stay private)
+-- same "one shared boundary, not several newly-exported privates" shape
+`fs_path_join()`/`fs_path_parent()` already established between FILES and
+SHELL in the prior stage. `fs_read_file()`'s own failure code can't
+distinguish "not found" from "is a directory" from "too big for the
+buffer" (documented on the function itself), which matters here in a way
+it never did for `cat` (which just prints one generic failure regardless):
+opening a nonexistent path should start an empty buffer (that's how a new
+file gets created), but a directory or an oversized file both need to fail
+outright -- silently opening either as "empty" would either be confusingly
+wrong (a directory) or actively destructive (an oversized file's real
+content would be replaced by whatever tiny amount got typed into what
+looked like a blank page, the moment `SAVE` ran). Resolved by checking the
+parent directory's own listing (`fs_list_dir()`, already public) before
+ever calling `fs_read_file()`, rather than trusting its single collapsed
+failure code -- no new `fs.c` primitive needed. `SAVE` itself is
+`fs_delete()` (return value ignored -- "doesn't exist yet" is expected and
+fine) followed by `fs_create_file()`, unifying "this file doesn't exist
+yet" and "overwrite this file's existing content" into one path, since
+after an unconditional delete attempt both cases look identical to
+`fs_create_file()`.
+
+**Verified headlessly**, against a disposable scratch copy of `fs.img`
+throughout: opened `/ETC/CONFIG` via `edit`, confirmed the real on-disk
+content (`FX=0`/`FX=1`) loaded into the buffer; moved the cursor mid-text
+and typed a character, confirming a real mid-buffer insert rather than
+append-only; pressed Enter mid-line and watched it split into two lines
+on screen, then Backspace at the second line's start to merge them back,
+content intact on both sides; typed three differently-sized lines and
+confirmed Up/Down landed on the matching column where possible and
+clamped correctly on the shorter line; clicked `SAVE` and parsed `fs.img`
+directly to confirm the on-disk bytes matched the edited buffer exactly;
+`edit`ed a brand-new path, typed content, saved, and confirmed a real new
+on-disk entry with that exact content; confirmed `edit` on an existing
+directory and (where constructible) an oversized file both failed outright
+with `edit: failed` and no window state change; and confirmed closing the
+EDITOR window without saving left the file's on-disk content completely
+unchanged from before the discarded edit. A full regression pass confirmed
+FORTH's own scrollback stayed untouched by a SHELL EDIT/SAVE session, that
+dragging the EDITOR window moves its text buffer and SAVE button together,
+that its taskbar tab works with zero editor-specific taskbar code (already
+array-generic over every window kind), and that FORTH/FILES/SHELL's own
+keyboard focus routing is unaffected by the new fourth `.focused` target.
+
+Files: `kernel/editor.h`/`.c` (new); `kernel/Makefile` (`editor.o` added);
+`kernel/shell.h`/`.c` (`shell_resolve_path()`, new); `kernel/kernel.c`
+(`WIN_KIND_EDITOR`, `MAX_WINDOWS` 3 -> 4, `draw_editor_group()`,
+`match_edit_command()`, `handle_edit_command()`, new; `move_window_content()`,
+`draw_window_by_index()`, `draw_scene()`, `update_and_present()`, window
+init, widget init, click-to-focus, keyboard routing, damage tracking all
+updated; SHELL's Enter-key handler gained the EDIT interception).
