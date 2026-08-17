@@ -19,6 +19,7 @@
  *    linker happened to place next in .bss. */
 
 #include "forth.h"
+#include "forth_hooks.h"
 
 #define FORTH_NUM_PRIMITIVES ((int)(sizeof(primitives) / sizeof(primitives[0])))
 
@@ -281,6 +282,51 @@ static void prim_store(struct forth_vm *vm) {
     vm->mem[addr] = val;
 }
 
+static void prim_paint(struct forth_vm *vm) {
+    (void)vm;
+    forth_hook_paint_open();
+}
+
+static void prim_pixel(struct forth_vm *vm) {
+    int32_t x, y, color;
+    if (!forth_pop(vm, &color) || !forth_pop(vm, &y) || !forth_pop(vm, &x)) {
+        return;
+    }
+    if (x < 0 || x >= 16 || y < 0 || y >= 16 || color < 0 || color >= 8) {
+        forth_set_error(vm, "BAD PIXEL");
+        return;
+    }
+    forth_hook_pixel((int)x, (int)y, (int)color);
+}
+
+static void prim_mouse_x(struct forth_vm *vm) {
+    forth_push(vm, (int32_t)forth_hook_mouse_x());
+}
+
+static void prim_mouse_y(struct forth_vm *vm) {
+    forth_push(vm, (int32_t)forth_hook_mouse_y());
+}
+
+/* Forth's boolean convention here is -1 = true, 0 = false (same as
+ * prim_eq()/prim_lt()/prim_gt() above) -- the hook itself returns a
+ * plain C 0/1, converted at this boundary, not pushed raw. */
+static void prim_mouse_down(struct forth_vm *vm) {
+    forth_push(vm, forth_hook_mouse_down() ? -1 : 0);
+}
+
+static void prim_mouse_right_down(struct forth_vm *vm) {
+    forth_push(vm, forth_hook_mouse_right_down() ? -1 : 0);
+}
+
+static void prim_current_color(struct forth_vm *vm) {
+    forth_push(vm, (int32_t)forth_hook_current_color());
+}
+
+static void prim_refresh(struct forth_vm *vm) {
+    (void)vm;
+    forth_hook_refresh();
+}
+
 struct forth_word {
     const char *name;
     void (*fn)(struct forth_vm *vm);
@@ -293,6 +339,9 @@ static const struct forth_word primitives[] = {
     {"+", prim_add},   {"-", prim_sub},  {"*", prim_mul},   {"/", prim_div}, {"DUP", prim_dup},
     {"DROP", prim_drop}, {"SWAP", prim_swap}, {"OVER", prim_over}, {"=", prim_eq}, {"<", prim_lt},
     {">", prim_gt}, {".", prim_dot}, {"CR", prim_cr}, {"@", prim_fetch}, {"!", prim_store},
+    {"PAINT", prim_paint}, {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
+    {"MOUSE-DOWN?", prim_mouse_down}, {"MOUSE-RIGHT-DOWN?", prim_mouse_right_down},
+    {"CURRENT-COLOR", prim_current_color}, {"REFRESH", prim_refresh},
 };
 
 void forth_init(struct forth_vm *vm) {

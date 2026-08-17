@@ -18,7 +18,7 @@ all: kernel.bin
 kernel_entry.o: kernel_entry.asm
 	$(AS) -f elf32 kernel_entry.asm -o kernel_entry.o
 
-kernel.o: kernel.c graphics.h text.h mouse.h keyboard.h interrupts.h window.h button.h taskbar.h startmenu.h console_input.h console_history.h console_output.h forth.h shell.h io.h ata.h fs.h editor.h
+kernel.o: kernel.c graphics.h text.h mouse.h keyboard.h interrupts.h window.h button.h taskbar.h startmenu.h console_input.h console_history.h console_output.h forth.h shell.h io.h ata.h fs.h editor.h forth_hooks.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 keyboard.o: keyboard.c keyboard.h
@@ -81,7 +81,7 @@ console_output.o: console_output.c console_output.h text.h
 editor.o: editor.c editor.h graphics.h text.h
 	$(CC) $(CFLAGS) -c editor.c -o editor.o
 
-forth.o: forth.c forth.h
+forth.o: forth.c forth.h forth_hooks.h
 	$(CC) $(CFLAGS) -c forth.c -o forth.o
 
 ata.o: ata.c ata.h io.h

@@ -16,6 +16,7 @@
 #include "console_history.h"
 #include "console_output.h"
 #include "forth.h"
+#include "forth_hooks.h"
 #include "shell.h"
 #include "editor.h"
 #include "io.h"
@@ -309,8 +310,6 @@ static int mouse_buttons_live = 0;
  * expecting to see them, it won't, which is correct: nothing else in
  * the OS should react to clicks a Forth script already consumed for
  * painting. */
-/* No caller yet -- Task 3 adds the real one and this attribute goes away. */
-static void poll_mouse_state(void) __attribute__((unused));
 static void poll_mouse_state(void) {
     int dx, dy, buttons;
     while (mouse_poll_packet(&dx, &dy, &buttons)) {
@@ -509,6 +508,108 @@ static void draw_paint_group(const struct window *win, const struct paint *pt, c
     }
 
     button_draw(save_btn);
+}
+
+/* forth_hooks.h implementations -- forth.c's only window into
+ * graphics/mouse state (see docs/superpowers/specs/2026-08-16-paint-design.md).
+ * Inserted here, immediately after draw_paint_group(), rather than up
+ * near poll_mouse_state() -- forth_hook_refresh() below calls
+ * draw_paint_group(), which must already be visible (this is C, not a
+ * language with forward declarations by default) to avoid an
+ * implicit-function-declaration warning under -Wall -Wextra.
+ * poll_mouse_state() itself is defined much earlier in this file, so
+ * these hooks can call it regardless of where they themselves sit. */
+
+void forth_hook_paint_open(void) {
+    if (!paint.opened_once) {
+        int row, col;
+        for (row = 0; row < PAINT_GRID_SIZE; row++) {
+            for (col = 0; col < PAINT_GRID_SIZE; col++) {
+                paint.grid[row][col] = 0;
+            }
+        }
+        paint.opened_once = 1;
+    }
+    windows[WIN_KIND_PAINT].state = WINDOW_OPEN;
+    raise_window(z_order, WIN_KIND_PAINT);
+}
+
+void forth_hook_pixel(int x, int y, int color) {
+    paint.grid[y][x] = color;
+}
+
+/* Converts the live cursor position (poll_mouse_state()'s own mx/my,
+ * refreshed on every call so a Forth loop polling this every pass sees
+ * genuinely current state) into a canvas-relative cell index -- -1 if
+ * the window is closed, or the cursor isn't over the canvas region at
+ * all (same 8px-margin offset draw_paint_group()/
+ * paint_palette_hit_test() already use). */
+static int paint_mouse_cell(int *out_col, int *out_row) {
+    int canvas_x, canvas_y, col, row;
+
+    poll_mouse_state();
+    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN) {
+        return -1;
+    }
+    canvas_x = windows[WIN_KIND_PAINT].x + 8;
+    canvas_y = windows[WIN_KIND_PAINT].y + 8;
+    col = (mx + CURSOR_SIZE / 2 - canvas_x) / PAINT_CELL_PX;
+    row = (my + CURSOR_SIZE / 2 - canvas_y) / PAINT_CELL_PX;
+    if (col < 0 || col >= PAINT_GRID_SIZE || row < 0 || row >= PAINT_GRID_SIZE) {
+        return -1;
+    }
+    *out_col = col;
+    *out_row = row;
+    return 0;
+}
+
+int forth_hook_mouse_x(void) {
+    int col, row;
+    if (paint_mouse_cell(&col, &row) != 0) {
+        return -1;
+    }
+    return col;
+}
+
+int forth_hook_mouse_y(void) {
+    int col, row;
+    if (paint_mouse_cell(&col, &row) != 0) {
+        return -1;
+    }
+    return row;
+}
+
+int forth_hook_mouse_down(void) {
+    poll_mouse_state();
+    return mouse_buttons_live & 0x01;
+}
+
+int forth_hook_mouse_right_down(void) {
+    poll_mouse_state();
+    return (mouse_buttons_live & 0x02) != 0;
+}
+
+int forth_hook_current_color(void) {
+    return paint.current_color;
+}
+
+/* The one genuinely new piece of architecture in this feature: draws
+ * and presents PAINT's own screen region immediately, synchronously,
+ * from inside this call -- kmain()'s own event loop (the only other
+ * place gfx_present() normally gets called) isn't running at all while
+ * a Forth BEGIN...UNTIL loop is executing, so without this, nothing a
+ * script draws would appear on screen until the whole loop finishes.
+ * Bypasses the normal damage-tracked update cycle entirely for this
+ * one window, this one call -- draw_paint_group() is the same function
+ * the normal per-frame path already uses, just invoked directly here
+ * instead of through draw_window_by_index()/update_and_present(). */
+void forth_hook_refresh(void) {
+    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN) {
+        return;
+    }
+    draw_paint_group(&windows[WIN_KIND_PAINT], &paint, &paint_save_btn);
+    gfx_present_rect(windows[WIN_KIND_PAINT].x - 2, windows[WIN_KIND_PAINT].y - WINDOW_TITLEBAR_HEIGHT - 2,
+                    windows[WIN_KIND_PAINT].w + 4, windows[WIN_KIND_PAINT].h + WINDOW_TITLEBAR_HEIGHT + 4);
 }
 
 /* Converts a click position into a palette swatch index (0..7), or -1
@@ -1724,6 +1825,19 @@ void kmain(void) {
             right_held = buttons & 0x02;
             cx = mx + CURSOR_SIZE / 2;
             cy = my + CURSOR_SIZE / 2;
+
+            /* Keeps mouse_buttons_live (poll_mouse_state()'s own output,
+             * read by the PAINT Forth hooks) in sync even when kmain()'s
+             * own loop -- not poll_mouse_state() -- is the one draining
+             * this packet: without this, a button press consumed here
+             * (e.g. the very mouse_button that's held right before RUN
+             * PAINT starts a BEGIN...UNTIL loop, while kmain() is still
+             * the thing running) would never reach mouse_buttons_live at
+             * all, since poll_mouse_state() only updates it from packets
+             * *it* personally drains -- leaving MOUSE-DOWN?/
+             * MOUSE-RIGHT-DOWN? reading stale state the instant the loop
+             * starts. */
+            mouse_buttons_live = buttons;
 
             /* Dragging applies each packet's raw dx/dy to whichever window
              * is being dragged (and its content widgets, via
