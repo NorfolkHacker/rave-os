@@ -1195,3 +1195,226 @@ sectors), `SAVE`'s `fs_delete()`+`fs_create_file()` pair leaks that
 file's previous on-disk allocation on every single save -- it's
 repeated saves of the *same* path, not one-time file creation, that
 will eventually exhaust the disk.
+
+## 2026-08-17 -- A paint/sprite designer, and Forth's first graphics/mouse words
+
+Picked up from `docs/IDEAS.md`'s "richer palette use" and "a real path
+for user-written system programs" entries together (see
+`docs/superpowers/specs/2026-08-16-paint-design.md`) -- the largest
+single feature this project has shipped so far: a fifth window kind
+(`WIN_KIND_PAINT`), eight new Forth primitives giving the language its
+first graphics/mouse words, and a real interactive paint program
+bundled as an ordinary `/BIN` Forth script. Before this, Forth could
+compute and manipulate a stack but had no way to draw a pixel or read
+the mouse; `RUN` could only execute non-interactive scripts.
+
+**The `forth_hooks.h` boundary -- `forth.c` stays graphics-free.**
+`forth.c` has been deliberately isolated from every GUI/graphics
+concern since its very first stage (no `window.h`, no `graphics.h`,
+nothing `console_*`), and this feature had no reason to break that.
+Rather than having the new primitives reach into `graphics.h`/`mouse.h`
+directly, `kernel/forth_hooks.h` declares eight small `extern` hook
+functions (`forth_hook_paint_open`, `forth_hook_pixel`,
+`forth_hook_mouse_x`/`_y`, `forth_hook_mouse_down`/
+`_mouse_right_down`, `forth_hook_current_color`, `forth_hook_refresh`)
+that `forth.c` calls and `kernel.c` implements -- the same
+`kernel.c`-calls-`forth_eval_line()` relationship already running the
+other direction, just with a few new extension points added to it
+rather than a new subsystem dependency. Each new Forth primitive is a
+thin wrapper matching every existing primitive's shape: pop/push
+`vm->dstack`, call `forth_set_error()` on a bad argument, then call the
+matching hook.
+
+**Live mouse state had to move from `kmain()`-locals to file-scope
+statics, for hook reachability.** `kmain()`'s own event loop is the
+only thing that has ever advanced the live cursor position and button
+state, once per outer loop iteration -- and that loop does not run at
+all while a Forth `BEGIN...UNTIL` script is executing inside one
+`forth_eval_line()` call (this kernel has no preemption). If the hook
+functions had kept reading `kmain()`'s own locals, the mouse would
+appear frozen at whatever position it held the instant a script
+started. The fix, landed first as its own task: the pure "drain
+`mouse_poll_packet()` and update position/buttons" logic moved into
+`poll_mouse_state()`, operating on `static` `mx`/`my`/
+`mouse_buttons_live` instead of `kmain()`-locals -- `kmain()`'s own
+loop calls it exactly as before (no behavior change there), and each
+mouse-reading hook calls it too, immediately before reading the
+result, so a Forth loop polling `MOUSE-X`/`MOUSE-DOWN?` every pass sees
+genuinely fresh state. A real bug surfaced here during verification:
+`kmain()`'s own inline packet-drain (used for click-dispatch/window-
+dragging) is a *second*, independent consumer of the same
+`mouse_poll_packet()` queue, and it never wrote `mouse_buttons_live` --
+so pressing and holding the mouse button before typing `RUN PAINT`
+(exactly the test plan's own documented sequence) silently failed to
+register. Fixed by having `kmain()`'s own drain also set
+`mouse_buttons_live`, so it stays correct regardless of which of the
+two drain sites consumes a given packet.
+
+**`WIN_KIND_PAINT`: a native 16x16 canvas, an 8-swatch palette, a SAVE
+button.** Same closed-at-boot, opened-only-via-a-word pattern EDIT
+established (no start-menu entry -- reached through Forth, not a mouse
+launcher). `struct paint { grid[16][16]; current_color; opened_once; }`
+moved to file-scope `static` for the same hook-reachability reason the
+mouse state did (`PIXEL`/`PAINT` are hook functions with no path back
+to a `kmain()`-local). The canvas is 256x256px (16px/cell, chunky
+enough to click precisely), an 8-swatch palette strip sits directly
+beneath it (32px/swatch, index 5 kept as the OS's own acid-green
+accent), and a SAVE button beneath that. `PAINT` (the word) opens+
+raises the window, clearing the grid only the very first time it's
+ever opened (`opened_once`) -- reopening later, even after a close,
+preserves whatever was drawn, same "opening again just raises"
+convention every other launcher has. `SAVE`'s click handler writes the
+grid as 256 raw palette-index bytes (0..7, no encoding) to a single
+fixed path, `/HOME/SPRITE` -- Forth's data stack is `int32_t` cells
+only, with no string-literal mechanism, so there was no way for a
+script to pass a chosen path even if multiple save slots had been in
+scope (they weren't, for v1).
+
+**Eight new primitives, and Forth's `-1`/`0` boolean convention.**
+`PAINT` (opens the window), `PIXEL` (pops `color y x`, writes one
+cell, errors `"BAD PIXEL"` on an out-of-range argument -- same
+convention `!`/`@` already established for `"BAD ADDR"`), `MOUSE-X`/
+`MOUSE-Y` (canvas-relative cell 0..15, or `-1` if the cursor isn't over
+the canvas), `MOUSE-DOWN?`/`MOUSE-RIGHT-DOWN?` (this Forth's boolean
+convention, unchanged from every existing comparison primitive:
+`-1` for true, `0` for false -- not `1`/`0`), `CURRENT-COLOR` (the
+natively-selected palette index), and `REFRESH`.
+
+**`REFRESH`: a synchronous mid-script draw+present, and its accepted
+limitation.** This is the one genuinely new piece of architecture
+here. While a `BEGIN...UNTIL` loop runs inside one `forth_eval_line()`
+call, `kmain()`'s own loop -- the only thing that normally calls
+`gfx_present()` -- isn't running, so nothing on screen would update at
+all for the whole call. `forth_hook_refresh()` calls
+`draw_paint_group()` (the same function the normal per-frame path
+uses) followed by `gfx_present_rect()` scoped to just the PAINT
+window's region, bypassing the normal damage-tracked cycle entirely,
+synchronously, from inside the hook itself. **The accepted trade-off,
+stated plainly rather than hidden**: this makes the canvas update live
+while painting, but nothing else does -- the OS is unresponsive to
+everything else while a paint session runs (this kernel has no
+preemption, and giving it one was explicitly ruled out of scope), and
+the mouse cursor sprite itself does not visually move on screen during
+a running session, even though its live position is being read
+correctly every loop iteration (the PS/2 driver's interrupt-driven
+packet decode keeps running regardless; only the cursor's *drawing* is
+tied to `kmain()`'s own loop, which is stalled). A user painting sees
+their strokes appear correctly; they just don't see a cursor glyph
+tracking their hand while it happens.
+
+**`/BIN/PAINT`, bundled the same way `/ETC/CONFIG` is -- and two real
+gaps in this Forth dialect, found only by actually running it.**
+Seeded once via `fs_create_file()` at boot if it doesn't already exist,
+so a user who opens it via `edit /BIN/PAINT` and rewrites it keeps
+their changes across reboots. The design spec's own illustrative script
+didn't run as written, for two genuinely interesting reasons worth
+recording here:
+
+1. **No `>=` or `AND` primitive exists.** `forth.c`'s `primitives[]`
+   table has never had them. The natural bounds check
+   (`x >= 0 AND x < 16 AND ...`) simply can't compile. Since
+   `MOUSE-X`/`MOUSE-Y` only ever return exactly `-1` or `0..15`
+   (never anything else out of range), the fix needed no upper-bound
+   check at all: `OVER OVER SWAP -1 > SWAP -1 > *` tests both
+   coordinates against `-1` and ANDs the two `0`/`-1` flags together
+   with `*` (since `-1 * -1 = 1` is the only nonzero product), while
+   leaving the original x/y underneath for `PIXEL` to consume.
+2. **Bare top-level `BEGIN...UNTIL`/`IF...THEN` don't exist outside a
+   colon definition.** `forth.c` has two separate token dispatchers --
+   one used only while compiling a `: WORD ... ;` body (which knows
+   about `IF`/`BEGIN`/`UNTIL`), and one used for every top-level/
+   console-typed token, including everything `RUN` feeds through
+   line by line, which has no case for any of them and just errors
+   `UNKNOWN`. A bare `BEGIN` after `RUN PAINT`'s first line failed
+   immediately. The fix is the ordinary, idiomatic Forth answer, not a
+   workaround: compile the loop body into a real word (`PLOOP`) via
+   `:`/`;`, then invoke it as its own line -- `RUN`'s own line-by-line
+   feed already leaves compile-mode state correctly persisted across
+   separate `forth_eval_line()` calls (the same mechanism `/BIN/HELLO`
+   already relied on), so this is fully compatible with how scripts
+   work, not a special case for this one.
+
+**Verified headlessly**, across the four implementation tasks and this
+stage's own regression pass, all against disposable scratch copies of
+`fs.img`: `PAINT` opens a blank 16x16 grid with the documented 8-swatch
+palette; clicking a swatch changes `CURRENT-COLOR`; `PIXEL` writes a
+cell and bounds-checks (`20 0 0 PIXEL` -> `BAD PIXEL`, no crash);
+`RUN PAINT` with the left button held paints live under the cursor and
+proves `REFRESH`'s synchronous redraw fires mid-loop (the FORTH
+console's own input field visibly still showed the uncleared
+`RUN PAINT` text at the exact moment the canvas updated, direct proof
+`kmain()` was genuinely stalled and the update reached the screen via
+the hook's own out-of-band present, not the normal per-frame path);
+moving the mouse mid-loop paints a second cell, proving genuine
+per-iteration polling rather than a one-time snapshot; right-clicking
+exits the loop and hands control back to a fully responsive `kmain()`
+(`1 1 + .` evaluates correctly immediately after); `SAVE` produces a
+`/HOME/SPRITE` confirmed byte-for-byte, cell-for-cell correct by
+parsing the scratch `fs.img` directly; closing and reopening the PAINT
+window preserves the grid (`opened_once` gating correctly). This
+stage's own end-to-end regression pass (a fresh scratch `fs.img`,
+driven headlessly via the QEMU monitor, one command per round-trip)
+re-confirmed all of it plus the parts specific to a fifth window kind
+existing: FORTH, FILES (a real CUT-then-PASTE round-trip, a file
+genuinely relocated between `/HOME` and `/HOME/ARSE` and back),
+SHELL (`cd`/`edit`/`ls` against a freshly-created file, its saved
+content confirmed byte-exact on disk), and EDITOR all continue working
+unaffected by the fifth window kind and eight new primitives table
+entries; dragging PAINT by its titlebar moves the canvas, palette, and
+SAVE button together (`move_window_content()`'s new arm working);
+FORTH's own scrollback stayed completely clean through an entire
+`RUN PAINT` session with no cross-window bleed; and ordinary,
+non-graphics Forth -- a fresh colon definition (`: SQ DUP * ;`,
+`5 SQ .` -> `25`) -- compiles and runs correctly, unaffected by the
+new primitives table entries.
+
+**One real, pre-existing limitation surfaced by this regression pass,
+not introduced by any of this feature's own code**: `taskbar.c`'s
+per-window-kind slot layout (`TASKBAR_ENTRY_WIDTH` 140px + 8px gap,
+starting after the 64px start-menu button) has no reflow or
+compaction -- window kind *i* always draws at slot *i*, whether or not
+lower-index windows are open. At four window kinds this already let
+EDITOR's tab (slot 3) run a little past the 640px screen edge, still
+mostly clickable; at five, PAINT's tab (slot 4, `x` starting at 664)
+lands entirely past both the screen edge and the cursor's own clamp
+(`mx` cannot exceed `gfx_width() - CURSOR_SIZE` = 632) -- confirmed
+directly by clicking at the farthest-right position the cursor can
+physically reach, which lands on EDITOR's tab, never PAINT's. The
+taskbar's own generic mechanism (`taskbar_draw()`/`taskbar_hit_entry()`)
+is exactly as array-generic as designed, with zero paint-specific code
+anywhere in it -- this is purely a screen-width/slot-pitch ceiling that
+five window kinds happens to be the first to hit. `PAINT`'s own launcher
+word remains a fully working way to raise the window from behind
+another (confirmed: closing PAINT, raising another window over its
+former position, then retyping `PAINT` correctly re-raises it with its
+content intact), so nothing is actually unreachable -- but the specific
+"click PAINT's taskbar tab" affordance is not currently usable at this
+screen resolution. Not fixed here: a real fix (narrower slots, a
+reflow, or a wider screen) is its own scoped change, not a one-line
+patch, and is noted here rather than attempted under a regression
+task's narrower scope.
+
+**Live-hardware verification is still pending.** Every check above was
+run headlessly, against QEMU's synthetic `mouse_move`/`mouse_button`/
+`sendkey` monitor commands -- exactly the class of input this
+project's own notes already flag as unreliable for anything requiring
+precise, sustained positioning (see the mouse-drag-sensitive stages
+already in this log). No session that implemented or verified this
+feature has had access to real hardware, a real display, or a real
+mouse. Before this feature is considered fully proven, the project's
+owner still needs to do a hands-on pass on real hardware -- dragging
+the mouse across several canvas cells with the left button held during
+a real `RUN PAINT` session, confirming the painting genuinely feels
+live and strokes land where the hand actually is -- the same practice
+the FILES and EDITOR stages both followed (hands-on owner testing
+after shipping), not a shortcut being skipped here.
+
+Files: `kernel/forth_hooks.h` (new); `kernel/forth.c` (eight `prim_*`
+wrappers, `primitives[]` entries); `kernel/kernel.c` (`WIN_KIND_PAINT`,
+`struct paint`, `paint_palette[]`, `draw_paint_group()`,
+`paint_palette_hit_test()`, eight `forth_hook_*` implementations,
+`poll_mouse_state()` promoted to file scope alongside `windows[]`/
+`z_order[]`/`paint`/`paint_save_btn`, `seed_bin_paint_script()`, PAINT's
+click handling and damage tracking, `kmain()`'s drain-loop
+`mouse_buttons_live` fix); `kernel/Makefile` (`forth_hooks.h` added to
+`forth.o`/`kernel.o` dependencies).
