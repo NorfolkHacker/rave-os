@@ -888,6 +888,66 @@ static int fx_default_from_config(void) {
     return 0;
 }
 
+#define BIN_PAINT_PATH "/BIN/PAINT"
+
+/* Seeds /BIN/PAINT with the default interactive drawing loop if
+ * missing -- same idempotent fs_create_file() write-once shape
+ * fx_default_from_config() already uses for /ETC/CONFIG, so a user who
+ * opens this in EDITOR and rewrites it keeps their own version across
+ * reboots (fs_create_file() only ever succeeds the very first time a
+ * path exists). While the left button is held and the cursor is over
+ * the canvas, paints the current color at the cursor's cell and
+ * refreshes; stops when the right button is pressed. The bounds check
+ * exists because MOUSE-X/MOUSE-Y return -1 when the cursor isn't over
+ * the canvas at all (e.g. hovering the palette strip).
+ *
+ * Two real deviations from the design spec's illustrative script, both
+ * found while headlessly verifying this against the actual dialect
+ * (forth.c), not just assumed from the spec's prose:
+ *
+ * 1. The spec's script used ">=" and "AND", but this Forth's
+ *    primitives[] table has neither -- only
+ *    "+ - * / DUP DROP SWAP OVER = < > . CR @ !" plus the paint words.
+ *    MOUSE-X/MOUSE-Y already only ever return -1 (off-canvas) or 0..15
+ *    (on-canvas, see paint_mouse_cell()), so "greater than -1" alone
+ *    distinguishes valid from invalid -- no upper-bound check needed.
+ *    "OVER OVER SWAP -1 > SWAP -1 > *" duplicates x and y, tests each
+ *    against -1 with ">", and ANDs the two 0/-1 flags together with "*"
+ *    (both true multiplies to a nonzero 1; either false multiplies to
+ *    0) -- all while leaving the original x/y underneath for PIXEL's
+ *    use in the THEN branch.
+ * 2. BEGIN/IF/ELSE/THEN/UNTIL are recognized only inside a colon
+ *    definition's compile mode (handle_compile_token() in forth.c) --
+ *    handle_immediate_token(), the path every top-level/console-typed
+ *    token (and thus every line RUN feeds through forth_eval_line()
+ *    outside of compile mode) actually goes through, has no case for
+ *    any of them at all, so a bare top-level "BEGIN ... UNTIL" (as the
+ *    spec's illustrative script has it) fails with "UNKNOWN" the
+ *    instant BEGIN is reached -- caught headlessly via RUN PAINT
+ *    printing five UNKNOWNs instead of opening a live loop. The loop
+ *    body is instead compiled into a real word (PLOOP) via ":"/";",
+ *    then that word is invoked as its own top-level line -- the
+ *    ordinary, idiomatic way any Forth runs a loop from the console,
+ *    and RUN's own line-by-line feed already preserves compile-mode
+ *    state across lines for exactly this shape (see forth_run_command()
+ *    above). */
+static void seed_bin_paint_script(void) {
+    static const char bin_paint_default[] =
+        "PAINT\n"
+        ": PLOOP\n"
+        "  BEGIN\n"
+        "    MOUSE-DOWN? IF\n"
+        "      MOUSE-X MOUSE-Y\n"
+        "      OVER OVER SWAP -1 > SWAP -1 > *\n"
+        "      IF CURRENT-COLOR PIXEL REFRESH ELSE DROP DROP THEN\n"
+        "    THEN\n"
+        "    MOUSE-RIGHT-DOWN?\n"
+        "  UNTIL\n"
+        ";\n"
+        "PLOOP\n";
+    fs_create_file(BIN_PAINT_PATH, bin_paint_default, (unsigned int)(sizeof(bin_paint_default) - 1));
+}
+
 /* Holds files cut/copied from the FILES window, independent of the
  * current listing/selection so it survives navigating to a different
  * directory before pasting -- the whole point of "select, then navigate,
@@ -1682,6 +1742,8 @@ void kmain(void) {
      * actually be read. Nothing reads fx_enabled before draw_scene()
      * further down, so this reassignment is safe. */
     fx_enabled = fx_default_from_config();
+
+    seed_bin_paint_script();
 
     /* Seeds one real script into /BIN so RUN has something to actually
      * run -- there's no in-OS text editor yet, so this is the only way
