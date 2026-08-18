@@ -927,10 +927,22 @@ static int fx_default_from_config(void) {
  * opens this in EDITOR and rewrites it keeps their own version across
  * reboots (fs_create_file() only ever succeeds the very first time a
  * path exists). While the left button is held and the cursor is over
- * the canvas, paints the current color at the cursor's cell and
- * refreshes; stops when the right button is pressed. The bounds check
- * exists because MOUSE-X/MOUSE-Y return -1 when the cursor isn't over
- * the canvas at all (e.g. hovering the palette strip).
+ * the canvas, paints the current color at the cursor's cell; stops
+ * when the right button is pressed. The bounds check exists because
+ * MOUSE-X/MOUSE-Y return -1 when the cursor isn't over the canvas at
+ * all (e.g. hovering the palette strip).
+ *
+ * REFRESH runs unconditionally every loop iteration, not just inside
+ * the paint branch -- kmain()'s own per-frame draw loop isn't running
+ * at all while this BEGIN...UNTIL blocks (same reason
+ * forth_hook_paint_open() now calls REFRESH itself on open, see
+ * above), so without an every-iteration redraw the canvas would sit
+ * static between successful paints even though the mouse is being
+ * polled the whole time -- the same "screen looks frozen" flavor of gap,
+ * one level down. This still doesn't make the cursor sprite itself
+ * track on screen during the loop (that draw is tied to kmain()'s own
+ * loop, not this one -- a real, separately documented v1 limit), but
+ * every other bit of canvas state now stays live.
  *
  * Two real deviations from the design spec's illustrative script, both
  * found while headlessly verifying this against the actual dialect
@@ -970,8 +982,9 @@ static void seed_bin_paint_script(void) {
         "    MOUSE-DOWN? IF\n"
         "      MOUSE-X MOUSE-Y\n"
         "      OVER OVER SWAP -1 > SWAP -1 > *\n"
-        "      IF CURRENT-COLOR PIXEL REFRESH ELSE DROP DROP THEN\n"
+        "      IF CURRENT-COLOR PIXEL ELSE DROP DROP THEN\n"
         "    THEN\n"
+        "    REFRESH\n"
         "    MOUSE-RIGHT-DOWN?\n"
         "  UNTIL\n"
         ";\n"
