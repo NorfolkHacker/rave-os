@@ -839,6 +839,21 @@ static void forth_run_command(struct forth_vm *vm, struct console_output *co, co
         str_append(path, &pos, (int)sizeof(path), arg);
     }
 
+    /* match_run_command() only folds the "RUN " keyword itself, not the
+     * argument after it -- fs.c's directory lookups (str_eq()) are
+     * byte-exact, and every real path in this filesystem is uppercase by
+     * convention (/BIN, /BIN/PAINT, /ETC/CONFIG, ...), so "run paint"
+     * typed without Shift built "/BIN/paint" and silently failed to
+     * resolve against the real "/BIN/PAINT" entry -- the actual root
+     * cause behind PAINT's Forth loop never starting on real hardware
+     * (bare "PAINT" still worked, since forth.c's own word lookup is
+     * already case-insensitive; only this path-based lookup wasn't). */
+    for (pos = 0; path[pos]; pos++) {
+        if (path[pos] >= 'a' && path[pos] <= 'z') {
+            path[pos] = (char)(path[pos] - 32);
+        }
+    }
+
     if (fs_read_file(path, buf, VIEWER_BUF_SIZE - 1, &out_size) != 0) {
         console_output_append_line(co, "(RUN FAILED)");
         return;
