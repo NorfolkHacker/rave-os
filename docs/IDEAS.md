@@ -117,18 +117,12 @@ not a queue.
   this gets designed, not conflating them. Treat as its own full
   `superpowers:brainstorming` cycle, not a quick add-on.
 
-- **FILES' plain start-menu launcher shows stale data.** Found
-  2026-08-18 while verifying PAINT's new SAVE feature: clicking
-  `FILES` from the start menu (`STARTMENU_ITEM_FILES`'s handler,
-  `kernel.c`) just sets window state and raises -- it never calls
-  `fs_list_dir()` again, so it shows whatever was listed once at boot,
-  regardless of what's since been written to disk. `CONFIG`/`GAMES`
-  don't have this problem (both already route through
-  `open_files_at()`, which does refresh). Likely fix: make the plain
-  `FILES` launcher call `open_files_at(cwd, ..., cwd, ...)` (re-list
-  the *current* cwd) instead of just opening the window -- small,
-  bounded, not attempted here since it surfaced mid-verification of an
-  unrelated feature.
+- ~~**FILES' plain start-menu launcher shows stale data.**~~ Done,
+  2026-08-18 -- `STARTMENU_ITEM_FILES` now routes through
+  `open_files_at()` too, passing `cwd` as its own target to re-list in
+  place. Verified headlessly: a sprite saved from a live PAINT session
+  shows up immediately from the plain `FILES` item, no navigate-away-
+  and-back workaround needed.
 
 - **A boot-time config screen: CPU count / RAM for the VM.** Raised
   2026-08-18. Needs unpacking before it's actionable: CPU/RAM for a
