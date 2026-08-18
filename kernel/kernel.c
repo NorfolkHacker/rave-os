@@ -636,12 +636,41 @@ int forth_hook_current_color(void) {
  * the normal per-frame path already uses, just invoked directly here
  * instead of through draw_window_by_index()/update_and_present(). */
 void forth_hook_refresh(void) {
+    int wx0, wy0, wx1, wy1;
+
     if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN) {
         return;
     }
     draw_paint_group(&windows[WIN_KIND_PAINT], &paint, &paint_save_btn);
-    gfx_present_rect(windows[WIN_KIND_PAINT].x - 2, windows[WIN_KIND_PAINT].y - WINDOW_TITLEBAR_HEIGHT - 2,
-                    windows[WIN_KIND_PAINT].w + 4, windows[WIN_KIND_PAINT].h + WINDOW_TITLEBAR_HEIGHT + 4);
+
+    wx0 = windows[WIN_KIND_PAINT].x - 2;
+    wy0 = windows[WIN_KIND_PAINT].y - WINDOW_TITLEBAR_HEIGHT - 2;
+    wx1 = wx0 + windows[WIN_KIND_PAINT].w + 4;
+    wy1 = wy0 + windows[WIN_KIND_PAINT].h + WINDOW_TITLEBAR_HEIGHT + 4;
+
+    /* Cursor sprite, real bug reported directly from testing: without
+     * this, the cursor is invisible for the entire live paint session
+     * (only kmain()'s own per-frame loop ever drew it, and that loop
+     * isn't running), reading as "PAINT steals the mouse" even though
+     * the PS/2 driver never stopped tracking it -- there was just
+     * nothing on screen to show where it was. Only drawn when it's
+     * actually within this window's own redrawn rect (checked here,
+     * not clamped into it) -- draw_paint_group() above already
+     * repaints that whole rect fresh every single call, so a cursor
+     * drawn there this iteration is automatically erased next
+     * iteration if the cursor has moved, with no separate erase logic
+     * needed. Drawing it outside this rect would need that same
+     * erase-old-position handling update_and_present() does for the
+     * rest of the desktop (old_x/old_y/touched, further down this
+     * file) -- deliberately not reproduced here; a cursor that
+     * disappears once it leaves the PAINT window during a live
+     * session is a real, acceptable v1 gap, not silently worked
+     * around. */
+    if (mx >= wx0 && my >= wy0 && mx + CURSOR_SIZE <= wx1 && my + CURSOR_SIZE <= wy1) {
+        gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, (mouse_buttons_live & 0x01) ? CURSOR_CLICK_COLOR : CURSOR_IDLE_COLOR);
+    }
+
+    gfx_present_rect(wx0, wy0, wx1 - wx0, wy1 - wy0);
 }
 
 /* Converts a click position into a palette swatch index (0..7), or -1
@@ -986,10 +1015,11 @@ static int fx_default_from_config(void) {
  * above), so without an every-iteration redraw the canvas would sit
  * static between successful paints even though the mouse is being
  * polled the whole time -- the same "screen looks frozen" flavor of gap,
- * one level down. This still doesn't make the cursor sprite itself
- * track on screen during the loop (that draw is tied to kmain()'s own
- * loop, not this one -- a real, separately documented v1 limit), but
- * every other bit of canvas state now stays live.
+ * one level down. REFRESH also now draws the cursor sprite itself
+ * while it's within the PAINT window's own bounds (see
+ * forth_hook_refresh()'s own comment) -- it stops being visible if it
+ * leaves that area during a live session, a real, acceptable v1 gap
+ * this doesn't try to solve.
  *
  * PALETTE-PICK also runs every iteration, for the same underlying
  * reason: color selection used to be handled only by kmain()'s own
