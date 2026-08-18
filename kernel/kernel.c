@@ -2182,8 +2182,22 @@ void kmain(void) {
                     windows[WIN_KIND_FORTH].state = WINDOW_OPEN;
                     raise_window(z_order, WIN_KIND_FORTH);
                 } else if (item == STARTMENU_ITEM_FILES) {
-                    windows[WIN_KIND_FILES].state = WINDOW_OPEN;
-                    raise_window(z_order, WIN_KIND_FILES);
+                    /* Real bug, found 2026-08-18 while verifying an
+                     * unrelated feature: this used to just open+raise
+                     * without ever calling fs_list_dir() again, so it
+                     * always showed whatever was listed once at boot,
+                     * stale regardless of what's since changed on disk
+                     * -- unlike CONFIG/GAMES below, which already
+                     * route through open_files_at() and refresh.
+                     * Passing cwd as its own target re-lists the
+                     * *current* directory instead of navigating away;
+                     * safe even though cwd aliases itself as both
+                     * dst and src here, since str_append()'s copy
+                     * loop writes dst[i] = src[i] in lockstep, each
+                     * byte set to itself, never reading ahead of what
+                     * it's already written. */
+                    open_files_at(cwd, (int)sizeof(cwd), cwd, windows, z_order, file_entries, &file_entry_count,
+                                 &files_selected_mask);
                 } else if (item == STARTMENU_ITEM_SHELL) {
                     windows[WIN_KIND_SHELL].state = WINDOW_OPEN;
                     raise_window(z_order, WIN_KIND_SHELL);
