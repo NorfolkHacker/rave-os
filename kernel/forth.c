@@ -327,6 +327,11 @@ static void prim_refresh(struct forth_vm *vm) {
     forth_hook_refresh();
 }
 
+static void prim_palette_pick(struct forth_vm *vm) {
+    (void)vm;
+    forth_hook_palette_pick();
+}
+
 struct forth_word {
     const char *name;
     void (*fn)(struct forth_vm *vm);
@@ -342,6 +347,7 @@ static const struct forth_word primitives[] = {
     {"PAINT", prim_paint}, {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
     {"MOUSE-DOWN?", prim_mouse_down}, {"MOUSE-RIGHT-DOWN?", prim_mouse_right_down},
     {"CURRENT-COLOR", prim_current_color}, {"REFRESH", prim_refresh},
+    {"PALETTE-PICK", prim_palette_pick},
 };
 
 void forth_init(struct forth_vm *vm) {

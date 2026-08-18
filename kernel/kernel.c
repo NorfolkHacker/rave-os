@@ -649,6 +649,37 @@ static int paint_palette_hit_test(const struct window *win, int px, int py) {
     return idx;
 }
 
+/* Real bug, reported directly from testing: with only PIXEL/MOUSE-DOWN?
+ * available to it, /BIN/PAINT's own loop could paint but never pick a
+ * color, because paint_palette_hit_test() above was only ever called
+ * from kmain()'s own per-frame click handling (see the "Clicking a
+ * palette swatch selects it" block, further down this file) --
+ * which, like every other bit of kmain()'s loop, does not run at all
+ * while PLOOP's BEGIN...UNTIL blocks inside forth_eval_line(). So a
+ * palette click made during a live paint session was silently
+ * dropped, every time, with no way to recover except right-clicking
+ * to exit PLOOP entirely (which kills the ability to paint until
+ * /BIN/PAINT is re-run) -- swap to a new color and painting stops;
+ * paint and the color never worked at the same time. This hook gives
+ * the script the same palette-hit-test kmain() already had, so PLOOP
+ * can pick a color from inside its own loop without ever needing
+ * kmain()'s loop to run at all. Level-triggered while the button is
+ * held, same convention PIXEL's own "MOUSE-DOWN? IF ... PIXEL" already
+ * uses -- reselecting the same already-current color every iteration
+ * the button stays down over it is harmless. */
+void forth_hook_palette_pick(void) {
+    int swatch;
+
+    poll_mouse_state();
+    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN || !(mouse_buttons_live & 0x01)) {
+        return;
+    }
+    swatch = paint_palette_hit_test(&windows[WIN_KIND_PAINT], mx + CURSOR_SIZE / 2, my + CURSOR_SIZE / 2);
+    if (swatch >= 0) {
+        paint.current_color = swatch;
+    }
+}
+
 /* fs.h's own constant, kept under this file's existing local name (no
  * call site here needs to change) -- same "the old name survives a
  * refactor" precedent VIEWER_BUF_SIZE already set when the VIEWER
@@ -944,6 +975,17 @@ static int fx_default_from_config(void) {
  * loop, not this one -- a real, separately documented v1 limit), but
  * every other bit of canvas state now stays live.
  *
+ * PALETTE-PICK also runs every iteration, for the same underlying
+ * reason: color selection used to be handled only by kmain()'s own
+ * per-frame click code (the "Clicking a palette swatch selects it"
+ * block, further down this file), which -- like the redraw above --
+ * never runs while this loop blocks. Before this, a palette click
+ * during a live paint session was silently dropped every time; the
+ * only way to change color was to right-click out of the loop
+ * entirely, which also ends the ability to paint until /BIN/PAINT is
+ * re-run. See forth_hook_palette_pick()'s own comment (kernel.c, right
+ * after paint_palette_hit_test()).
+ *
  * Two real deviations from the design spec's illustrative script, both
  * found while headlessly verifying this against the actual dialect
  * (forth.c), not just assumed from the spec's prose:
@@ -979,6 +1021,7 @@ static void seed_bin_paint_script(void) {
         "PAINT\n"
         ": PLOOP\n"
         "  BEGIN\n"
+        "    PALETTE-PICK\n"
         "    MOUSE-DOWN? IF\n"
         "      MOUSE-X MOUSE-Y\n"
         "      OVER OVER SWAP -1 > SWAP -1 > *\n"

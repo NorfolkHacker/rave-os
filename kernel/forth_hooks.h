@@ -21,4 +21,11 @@ int forth_hook_mouse_right_down(void); /* 1 if the right button is currently hel
 int forth_hook_current_color(void);    /* the natively-selected palette index, 0..7 */
 void forth_hook_refresh(void);
 
+/* If the left button is currently held over a palette swatch, selects
+ * it (see forth_hook_current_color()'s comment above) -- a no-op
+ * otherwise. Needed so a script's own loop can change color without
+ * ever falling back to kmain()'s per-frame click handling, which
+ * doesn't run at all while that loop blocks. */
+void forth_hook_palette_pick(void);
+
 #endif
