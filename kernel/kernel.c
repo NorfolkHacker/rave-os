@@ -17,6 +17,7 @@
 #include "console_output.h"
 #include "forth.h"
 #include "forth_hooks.h"
+#include "serial.h"
 #include "shell.h"
 #include "editor.h"
 #include "io.h"
@@ -313,6 +314,10 @@ static int mouse_buttons_live = 0;
 static void poll_mouse_state(void) {
     int dx, dy, buttons;
     while (mouse_poll_packet(&dx, &dy, &buttons)) {
+        serial_write_str("PMS dx="); serial_write_int(dx);
+        serial_write_str(" dy="); serial_write_int(dy);
+        serial_write_str(" btn="); serial_write_int(buttons);
+        serial_write_str("\n");
         mx += dx;
         my += dy;
         if (mx < 0) {
@@ -521,6 +526,7 @@ static void draw_paint_group(const struct window *win, const struct paint *pt, c
  * these hooks can call it regardless of where they themselves sit. */
 
 void forth_hook_paint_open(void) {
+    serial_write_str("HOOK paint_open\n");
     if (!paint.opened_once) {
         int row, col;
         for (row = 0; row < PAINT_GRID_SIZE; row++) {
@@ -551,6 +557,10 @@ void forth_hook_paint_open(void) {
 }
 
 void forth_hook_pixel(int x, int y, int color) {
+    serial_write_str("HOOK pixel x="); serial_write_int(x);
+    serial_write_str(" y="); serial_write_int(y);
+    serial_write_str(" c="); serial_write_int(color);
+    serial_write_str("\n");
     paint.grid[y][x] = color;
 }
 
@@ -597,6 +607,12 @@ int forth_hook_mouse_y(void) {
 
 int forth_hook_mouse_down(void) {
     poll_mouse_state();
+    if (mouse_buttons_live != 0) {
+        serial_write_str("HOOK mouse_down mbl="); serial_write_int(mouse_buttons_live);
+        serial_write_str(" mx="); serial_write_int(mx);
+        serial_write_str(" my="); serial_write_int(my);
+        serial_write_str("\n");
+    }
     return mouse_buttons_live & 0x01;
 }
 
@@ -1797,6 +1813,7 @@ void kmain(void) {
      * handshake runs with IRQ12 still masked so it can't race the new
      * interrupt handler for the same bytes, then interrupts are actually
      * enabled once both are ready. */
+    serial_init();
     interrupts_init();
     mouse_init();
     interrupts_enable();
