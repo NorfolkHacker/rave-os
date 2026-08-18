@@ -53,18 +53,56 @@ not a queue.
   widen all five signatures again -- worth doing before that happens,
   not after.
 
-- **A real path for user-written system programs, not just Forth
-  scripts.** The actual question: how would someone write and run
-  something like a word processor or a paint program on Rave-OS, as
-  opposed to a `/BIN` Forth script (`RUN`) or the shell's own built-in
-  commands (fixed, compiled into the kernel, not user-extensible at
-  all)? This directly revisits a gap RUN's own design deliberately
-  deferred rather than solved: "a real machine-code loader for /BIN is a
-  huge, separate undertaking (no paging, no process isolation, no binary
-  format defined)" (`docs/BUILD_LOG.md`, the RUN stage). Whatever this
-  becomes -- a real loadable-binary format with process isolation, a
-  richer Forth with enough GUI/windowing words to build an app in, some
-  third thing -- it's a substantial architectural undertaking, not a
-  bounded task; treat it as its own full `superpowers:brainstorming` ->
-  spec -> plan cycle when picked up, not a quick add-on to SHELL or
-  FILES.
+- ~~**A real path for user-written system programs, not just Forth
+  scripts.**~~ Done, 2026-08-17 -- shipped as the paint/sprite designer +
+  Forth graphics words feature. Real-hardware testing (2026-08-18) then
+  found and fixed five bugs sharing one root cause -- see
+  `docs/BUILD_LOG.md`'s 2026-08-18 entry -- and added a real filename
+  field to SAVE. PAINT now opens visibly, stays live (cursor, canvas,
+  color-picking) for the whole session, and saves multiple named
+  sprites to `/HOME/<name>`, confirmed on real hardware.
+
+- **`kmain()`'s loop doesn't run at all while a Forth script's own
+  loop blocks -- a real concurrency model, not another one-off hook.**
+  The root cause behind all five bugs the 2026-08-18 PAINT pass fixed:
+  every fix so far has been giving `PLOOP` its own copy of one more
+  piece of what `kmain()`'s loop normally does (`REFRESH`,
+  `PALETTE-PICK`, `SAVE-PICK`), one at a time, as each gap was
+  discovered. That's sustainable for one script but doesn't scale --
+  the real fix is some way for a script's `BEGIN...UNTIL` to yield
+  control back to `kmain()` periodically instead of looping forever
+  inside one call. Feasible without paging or process isolation:
+  `forth.c` already compiles words into real bytecode
+  (`OP_LITERAL`/`OP_CALL_WORD`/`OP_BRANCH`/...) with a persistent
+  `struct forth_vm` holding VM state across calls -- the right shape
+  for a resumable "run N steps, return, resume" scheduler. Raised
+  separately: real *process* separation (programs living outside the
+  kernel entirely, not just cooperative stepping inside it) is a
+  further, bigger ask than this -- worth distinguishing the two when
+  this gets designed, not conflating them. Treat as its own full
+  `superpowers:brainstorming` cycle, not a quick add-on.
+
+- **FILES' plain start-menu launcher shows stale data.** Found
+  2026-08-18 while verifying PAINT's new SAVE feature: clicking
+  `FILES` from the start menu (`STARTMENU_ITEM_FILES`'s handler,
+  `kernel.c`) just sets window state and raises -- it never calls
+  `fs_list_dir()` again, so it shows whatever was listed once at boot,
+  regardless of what's since been written to disk. `CONFIG`/`GAMES`
+  don't have this problem (both already route through
+  `open_files_at()`, which does refresh). Likely fix: make the plain
+  `FILES` launcher call `open_files_at(cwd, ..., cwd, ...)` (re-list
+  the *current* cwd) instead of just opening the window -- small,
+  bounded, not attempted here since it surfaced mid-verification of an
+  unrelated feature.
+
+- **A boot-time config screen: CPU count / RAM for the VM.** Raised
+  2026-08-18. Needs unpacking before it's actionable: CPU/RAM for a
+  QEMU *launch* is a host-side flag (`-smp`, `-m`) decided before the
+  VM starts, so a config screen for that would be a launcher
+  tool/script living outside Rave-OS entirely -- different from an
+  in-OS boot config screen, which would need real SMP/RAM-detection
+  support this kernel doesn't have at all yet. Which one is actually
+  wanted needs deciding first. Tied to a second open question, also
+  raised the same day: what Rave-OS's actual minimum viable
+  RAM/CPU footprint even is -- worth answering before building a
+  config screen around it.

@@ -1418,3 +1418,147 @@ wrappers, `primitives[]` entries); `kernel/kernel.c` (`WIN_KIND_PAINT`,
 click handling and damage tracking, `kmain()`'s drain-loop
 `mouse_buttons_live` fix); `kernel/Makefile` (`forth_hooks.h` added to
 `forth.o`/`kernel.o` dependencies).
+
+## 2026-08-18 -- The real-hardware PAINT pass: five root-caused bugs, one real feature, and a lesson about testing this class of loop headlessly
+
+The live-hardware verification the previous entry left pending, done
+for real this time -- and it surfaced that the previous stage's own
+headless testing, while correct as far as it went, had never actually
+exercised what happens *between* `RUN PAINT` starting and the first
+successful click. That gap hid five distinct, real bugs, all sharing
+one root cause: `/BIN/PAINT`'s `PLOOP` runs synchronously inside one
+`forth_eval_line()` call, and `kmain()`'s own per-frame loop -- which
+draws the cursor, handles every click outside what a Forth hook
+explicitly covers, and redraws the desktop -- does not run *at all*
+while that loop blocks. Every fix below is a different symptom of that
+same fact, found one at a time as each got unblocked and the *next*
+gap became visible. Work happened on a separate `worktree-paint` git
+worktree/branch, not `main` directly.
+
+**Real hardware first surfaced a fully different bug than the one
+being chased.** The starting complaint was "PAINT's left click doesn't
+paint." Real-hardware testing (with temporary COM1 serial debug
+logging added to `kernel/serial.c`/`.h` -- an 8250 UART driver, kept
+deliberately as its own commit, not folded into any real fix, so it's
+easy to identify and strip out later) instead found `RUN PAINT` typed
+in lowercase silently failing to launch at all: `match_run_command()`
+only case-folds the `RUN ` keyword itself, not the argument after it,
+so `run paint` built `/BIN/paint` against `fs.c`'s byte-exact,
+uppercase-by-convention path lookups, which don't match the real
+`/BIN/PAINT` entry. `forth_run_command()` now uppercases the whole
+built path before resolving it. Bare `PAINT` typed directly at the
+console had always worked (`forth.c`'s own word lookup is already
+case-insensitive), which is exactly what made this easy to miss until
+someone actually typed `run paint` by hand. Separately, `boot/Makefile`'s
+`run` target was missing `-display sdl` (GTK doesn't confine the
+pointer on this KDE Plasma 6/Wayland dev host, already fixed once for
+the Forth console back on 2026-08-03 and silently reintroduced here)
+-- restored.
+
+**The window was invisible until the first successful stroke.**
+Headless repro: screendump immediately after `RUN PAINT` + Enter,
+before any click. Before the fix, the *entire screen* sat frozen
+exactly as it was the instant Enter was pressed -- not just the PAINT
+window missing, the FORTH console's own input box still showed
+un-submitted text, because the redraw that would clear it also never
+runs. `forth_hook_paint_open()` only ever set window state and called
+`raise_window()` (which just reorders `z_order`, it draws nothing);
+the *only* thing that ever drew PAINT's frame/grid/palette was
+`forth_hook_refresh()`, called only from inside the loop's
+"successful paint" branch. On real hardware this read as "PAINT takes
+about 10 seconds to launch and only works sometimes": the user was
+clicking blind at an invisible window, succeeding only when a guess
+happened to land inside its actual (unseen) bounds. Fix:
+`forth_hook_paint_open()` now calls `forth_hook_refresh()` itself
+before `PLOOP` ever starts spinning.
+
+**Two more things turned out to be just as dead during the loop as
+the cursor already was, and each was a real, separately reported
+symptom.** `REFRESH` previously only ran inside `PLOOP`'s "mouse down
+and on-canvas" branch, so the canvas sat static the rest of the time
+even though the mouse was being polled continuously -- fixed by moving
+`REFRESH` to run unconditionally every iteration. Reported directly:
+*"if you open forth then run paint it launches and you can paint but
+the green cursor isn't visible, and you can't change colour. if you
+right click the green cursor is visible, you can select colour but
+can't paint."* Root cause, confirmed by reading `paint_palette_hit_test()`'s
+only other call site: color-swatch clicks were handled *exclusively*
+by `kmain()`'s own per-frame click code, same as the cursor draw --
+dead during `PLOOP`, live again only after right-clicking out, at
+which point `PLOOP` (and thus the ability to paint) has already ended.
+Two new hooks, same shape, both run unconditionally every iteration
+like `REFRESH`: `PALETTE-PICK` (`forth_hook_palette_pick()`) gives the
+script the same palette-hit-test kmain() already had; the cursor
+sprite itself is now also drawn by `forth_hook_refresh()`, but *only*
+while it's within the PAINT window's own already-redrawn rect --
+`draw_paint_group()` repaints that whole area fresh every call, so a
+cursor drawn there this iteration is automatically erased next
+iteration if it's moved, with no separate erase-old-position
+bookkeeping needed. A cursor that disappears once it leaves the PAINT
+window during a live session is accepted as a real v1 gap, not solved
+here -- reproducing `update_and_present()`'s own old/new-position
+damage tracking for one script's own draw call wasn't judged worth it.
+
+**A design detour, deliberately not taken here.** Fixing these one at
+a time is whack-a-mole around one real cause: `kmain()`'s loop simply
+doesn't run while a script's loop blocks it. A real fix -- some
+cooperative-scheduling point where a script's `BEGIN...UNTIL` yields
+control back to `kmain()` periodically instead of looping forever
+inside one call -- is feasible without paging or process isolation
+(`forth.c` already compiles words into real bytecode with a persistent
+`struct forth_vm`, the right shape for a resumable step-N-then-return
+scheduler), but it's a genuine architecture change to the
+interpreter's execution model, not a quick patch. Deliberately deferred
+to its own future design session rather than attempted piecemeal here.
+
+**SAVE had the exact same "dead during a live session" bug, and got a
+real feature attached while it was already being touched.** Given the
+palette/cursor pattern above, checking whether `SAVE`'s own click
+handler had the identical problem was the obvious next question --
+same `kmain()`-only code, so yes. Rather than just adding a matching
+`SAVE-PICK` hook, `SAVE` also gained the filename field it never had:
+`/HOME/SPRITE` was previously the *only* path SAVE could ever write,
+with no way to keep more than one sprite. A new `paint_name_input`
+(the same `console_input` widget and stacked-above-the-button layout
+FILES' own `name_input`/`NEW DIR` pair already established, growing
+the window from 272x330 to 272x356) is pre-filled `SPRITE` -- untouched,
+it reproduces the exact old behavior. Whatever's typed gets uppercased
+and prefixed `/HOME/` via a new shared `paint_build_save_path()`
+helper (same fold `RUN`'s own fix above already applies), used by both
+SAVE's kmain() click handler and the new `SAVE-PICK` hook so the two
+entry points can never resolve to two different paths for the same
+name. An empty field is a silent no-op, this kernel's existing
+convention for every other filesystem-mutation failure. Typing a *new*
+name still needs `kmain()`'s own keyboard handling (dead during
+`PLOOP`, same as everything else in this entry), so that only takes
+effect before `RUN PAINT` starts or after right-clicking out --
+whatever name is already set when the loop starts is what `SAVE-PICK`
+uses throughout that session.
+
+**Verified two ways, and the second one caught something the first
+one couldn't.** Every fix above was checked with a headless
+`-display none -monitor unix:...` repro exactly like every prior stage
+-- with one addition this time: pixel-inspecting the actual `.ppm`
+screendump data (`PIL`'s `getpixel()`), not just eyeballing a
+downscaled thumbnail, since a palette-highlight border and this
+kernel's own accent green are visually near-identical at this
+resolution and a first pass misread one for the other. Separately,
+confirming SAVE actually persisted needed navigating `FILES` through
+real directory clicks (root -> `/HOME`) rather than trusting the plain
+`FILES` start-menu item's listing -- that launcher sets window state
+and raises without ever calling `fs_list_dir()` again, so it always
+shows whatever was listed once at boot, stale regardless of what's
+since been written to disk. `CONFIG`/`GAMES` don't have this problem
+(both already route through `open_files_at()`, which does refresh).
+**Not fixed here** -- a real, separate, pre-existing bug, noted in
+`docs/IDEAS.md` for next time. Real-hardware confirmation of the fixed
+build, by the project's owner: "that works for now perfectly."
+
+Files: `kernel/serial.c`/`.h` (new, temporary debug-only); `kernel/kernel.c`
+(`forth_run_command()` uppercase fix, `forth_hook_paint_open()`/
+`forth_hook_refresh()` cursor-and-redraw fixes, `forth_hook_palette_pick()`,
+`paint_build_save_path()`, `forth_hook_save_pick()`, `paint_name_input`
+widget plumbed through `move_window_content()`/`draw_paint_group()`/
+`draw_window_by_index()`/`draw_scene()`/`update_and_present()`, SAVE's
+click handler); `kernel/forth.c`/`forth_hooks.h` (`PALETTE-PICK`,
+`SAVE-PICK`); `boot/Makefile` (`-display sdl` restored).
