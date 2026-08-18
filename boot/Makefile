@@ -49,8 +49,14 @@ fs.img:
 # bus=0,unit=0/1 = primary IDE channel, master/slave -- same I/O ports
 # (0x1F0-0x1F7, 0x3F6) the kernel's ATA driver talks to, just a different
 # drive-select bit, so no secondary-channel support is needed yet.
+# -display sdl, not the default gtk: gtk doesn't confine/grab the pointer
+# in this KDE Plasma 6/Wayland desktop, so host and guest cursor position
+# drift apart and clicks land in the wrong guest-space location (see
+# docs/BUILD_LOG.md / project memory, first hit and fixed for the Forth
+# console back on 2026-08-03, then silently reintroduced here because this
+# target never got the flag).
 run: disk.img fs.img
-	$(QEMU) -accel kvm -drive file=disk.img,format=raw,if=ide,bus=0,unit=0 -drive file=fs.img,format=raw,if=ide,bus=0,unit=1
+	$(QEMU) -accel kvm -display sdl -drive file=disk.img,format=raw,if=ide,bus=0,unit=0 -drive file=fs.img,format=raw,if=ide,bus=0,unit=1
 
 clean:
 	rm -f stage1.bin stage2.bin disk.img fs.img
