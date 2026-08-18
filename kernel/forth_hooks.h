@@ -28,4 +28,11 @@ void forth_hook_refresh(void);
  * doesn't run at all while that loop blocks. */
 void forth_hook_palette_pick(void);
 
+/* If the left button is currently held over the SAVE button, writes
+ * the grid to /HOME/<the filename field's own text> -- a no-op
+ * otherwise, or if that field is empty. Needed for the same reason as
+ * forth_hook_palette_pick(): kmain()'s own per-frame click handling
+ * doesn't run at all while a script's loop blocks. */
+void forth_hook_save_pick(void);
+
 #endif
