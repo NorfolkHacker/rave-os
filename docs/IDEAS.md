@@ -62,6 +62,41 @@ not a queue.
   color-picking) for the whole session, and saves multiple named
   sprites to `/HOME/<name>`, confirmed on real hardware.
 
+- **PAINT still needs to become an actual sprite editor, not just a
+  proof of concept.** Raised 2026-08-17, alongside the real-hardware
+  bug the 2026-08-18 pass fixed (see above) -- these are the parts of
+  that same report that weren't about the bug itself and are still
+  open:
+  - **Should launch from SHELL, not just via `RUN PAINT` typed into a
+    FORTH console window.** It already lives in `/BIN`; SHELL should be
+    able to run it directly the way it runs any other `/BIN` script,
+    without requiring the user to first open a separate FORTH window.
+  - **The 8-color bottom-strip palette is too small and always visible,
+    wasting canvas space.** Wanted instead: a real palette-chooser
+    popup/dialog that appears on demand, not a fixed strip -- almost
+    certainly needs a bigger-than-8 color set once it's not fighting for
+    screen space.
+  - **Need the ability to delete colours** from whatever the palette
+    becomes -- not just pick from a fixed set.
+  - **Needs LOAD, not just SAVE.** SAVE gained a real filename field
+    2026-08-18 (multiple named sprites under `/HOME/<name>`, no longer
+    just one fixed path), but it's still write-only from the app's own
+    perspective -- there's no way to re-open a previously saved sprite
+    back into the canvas. A real sprite editor needs both halves of
+    that round-trip.
+  - This adds up to substantially more than a bug-fix pass -- likely its
+    own `superpowers:brainstorming` cycle (palette-chooser UI is a real
+    design question, not just an implementation detail) rather than a
+    quick patch to the existing plan.
+
+- **Naming: "FORTH" and "Rave-OS" read as two different things and
+  shouldn't.** Raised 2026-08-17 -- the FORTH console window and the OS
+  as a whole are conceptually the same project, but the UI and docs
+  currently use both names in ways that read as if they're separate.
+  Worth a pass to pick one consistent name and apply it across window
+  titles/branding/docs, rather than leaving it ambiguous which name
+  refers to what.
+
 - **`kmain()`'s loop doesn't run at all while a Forth script's own
   loop blocks -- a real concurrency model, not another one-off hook.**
   The root cause behind all five bugs the 2026-08-18 PAINT pass fixed:
