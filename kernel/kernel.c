@@ -532,6 +532,22 @@ void forth_hook_paint_open(void) {
     }
     windows[WIN_KIND_PAINT].state = WINDOW_OPEN;
     raise_window(z_order, WIN_KIND_PAINT);
+
+    /* Without this, the window stays completely undrawn -- raise_window()
+     * only reorders z_order, it doesn't paint anything, and kmain()'s own
+     * per-frame draw loop isn't running at all while /BIN/PAINT's PLOOP
+     * (BEGIN...UNTIL) blocks inside this same forth_eval_line() call
+     * chain (see forth_hook_refresh()'s own comment). Root-caused via a
+     * headless repro (screendump right after RUN PAINT, before any
+     * click): the entire screen -- not just this window -- sits frozen
+     * exactly as it was the instant Enter was pressed, console input box
+     * included, until the first successful left-click-on-canvas pixel
+     * paint finally calls forth_hook_refresh(). On real hardware this
+     * read as "PAINT takes ~10 seconds to launch and only works
+     * sometimes": the window is invisible so the user is clicking blind,
+     * and only succeeds once a guess happens to land inside the canvas's
+     * actual (unseen) bounds. */
+    forth_hook_refresh();
 }
 
 void forth_hook_pixel(int x, int y, int color) {
