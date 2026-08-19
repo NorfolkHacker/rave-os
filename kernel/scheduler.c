@@ -57,6 +57,11 @@ void scheduler_activate(int slot, void (*entry)(void *arg), void *arg) {
     uint32_t top;
     uint32_t *frame;
 
+    /* Bounds-check slot to prevent out-of-bounds write into programs[] and program_stacks[] */
+    if (slot < 0 || slot >= MAX_PROGRAMS) {
+        return;
+    }
+
     programs[slot].entry = entry;
     programs[slot].arg = arg;
 
@@ -118,6 +123,10 @@ int scheduler_current_slot(void) {
 }
 
 void scheduler_request_close(int slot) {
+    /* Bounds-check slot to prevent out-of-bounds read/write into programs[] */
+    if (slot < 0 || slot >= MAX_PROGRAMS) {
+        return;
+    }
     if (programs[slot].state == PROGRAM_READY && programs[slot].close_requested_frame < 0) {
         programs[slot].close_requested_frame = 0;
     }
@@ -131,4 +140,12 @@ int scheduler_any_active(void) {
         }
     }
     return 0;
+}
+
+/* Test-only helper: corrupt the canary of a given slot. Used by test_scheduler.c
+ * to verify that canary corruption is detected and the slot is force-freed. */
+void scheduler_test_corrupt_stack(int slot) {
+    if (slot >= 0 && slot < MAX_PROGRAMS) {
+        *stack_canary_ptr(slot) = 0xDEADBEEFu;
+    }
 }
