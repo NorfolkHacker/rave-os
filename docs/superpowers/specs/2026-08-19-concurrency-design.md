@@ -197,6 +197,18 @@ keeps its current synchronous behavior -- a single typed line is never
 long-running, so there's nothing to yield around. Only `RUN`-launched
 scripts go through a program slot.
 
+**Observable behavior change**: today, `RUN` evaluates the script
+against the *same* `struct forth_vm` the console window's own typed
+input uses (`kernel.c:2555` passes `&vm`, the console's own VM) -- so
+a word a script defines with `:`/`;` remains callable interactively
+after the script finishes. Under this design, a `RUN`-launched script
+gets its own private VM (per "Out of scope" above), discarded when its
+program slot frees. Words a script defines stop being visible to the
+interactive console once it finishes -- correct given no shared
+interpreter state is a deliberate design choice here, but a real,
+visible change from today's behavior, not just an implementation
+detail.
+
 ### Automatic yield insertion at `BEGIN...UNTIL`
 
 `handle_compile_token()` (forth.c:521-531) already knows the exact
@@ -230,24 +242,56 @@ without its author needing to know a scheduler exists.
 Once PLOOP yields back to `kmain()` every iteration, `kmain()`'s real
 per-frame code -- window redraw, palette hit-test, SAVE hit-test,
 mouse handling -- runs normally for PAINT's window exactly as it does
-for every other window. `forth_hook_refresh()`,
-`forth_hook_palette_pick()`, `forth_hook_save_pick()` (kernel.c), their
-declarations in `forth_hooks.h`, and their Forth primitives
-`prim_palette_pick()`/`prim_save_pick()` plus the `PALETTE-PICK`/
-`SAVE-PICK` primitive-table entries (forth.c) are all deleted as part
-of this work -- they existed only to paper over `kmain()`'s loop not
-running, which this design fixes at the root.
+for every other window (which never call an explicit redraw primitive
+themselves; `kmain()`'s own damage-tracked `draw_scene()` already
+redraws whatever changed, every frame, for all of them). That makes
+`REFRESH` redundant too, not just `PALETTE-PICK`/`SAVE-PICK` -- all
+three exist solely to paper over `kmain()`'s loop not running, and
+this design fixes that at the root.
+
+Deleted as part of this work: `forth_hook_refresh()`,
+`forth_hook_palette_pick()`, `forth_hook_save_pick()` (kernel.c) and
+their declarations in `forth_hooks.h`; `prim_refresh()`,
+`prim_palette_pick()`, `prim_save_pick()` and the `REFRESH`/
+`PALETTE-PICK`/`SAVE-PICK` primitive-table entries (forth.c);
+`forth_hook_paint_open()`'s own direct call to `forth_hook_refresh()`
+(kernel.c:561) -- a just-opened PAINT window gets drawn on its next
+frame by `kmain()`'s normal draw pipeline, the same as every other
+window already is when opened, needing no special-cased call.
 `seed_bin_paint_script()`'s `bin_paint_default[]` script text drops the
 `PALETTE-PICK`/`SAVE-PICK`/forced-`REFRESH` lines it currently carries
 from the 2026-08-18 pass.
 
 ### Killing a hung program
 
-Closing a program's window (e.g. PAINT's) already sets a flag the
-script's own loop condition checks, letting it exit gracefully on its
-next iteration -- that stays the normal path, unchanged.
+Checked against the actual script, not assumed: PLOOP's `UNTIL`
+condition today only checks `MOUSE-RIGHT-DOWN?`
+(`seed_bin_paint_script()`, kernel.c) -- closing PAINT's window
+currently does *not* signal the script at all, graceful or otherwise.
+This design adds that signal rather than assuming it exists: a new
+hook, `forth_hook_window_closed(void)` (returns 1 if
+`windows[WIN_KIND_PAINT].state != WINDOW_OPEN`, else 0), backing a new
+Forth primitive `WINDOW-CLOSED?`. `bin_paint_default[]`'s `UNTIL` line
+becomes `MOUSE-RIGHT-DOWN? WINDOW-CLOSED? +` -- `+` works as a logical
+OR over this dialect's `{0, -1}` boolean convention (forth.c:218-221)
+the same way the script's existing `OVER OVER SWAP -1 > SWAP -1 > *`
+already uses `*` as AND, so no new primitive is needed for the
+combinator itself. Closing PAINT's window now makes its own script
+exit gracefully on its next iteration -- that's the normal path.
 
-What's new: the desktop now tracks frames-since-close-requested per
+`kmain()`'s generic close-button handler (kernel.c:2245-2246, fires for
+whichever window's close box was hit, identified by `target`) needs to
+know which scheduler slot a given window's script is running in, to
+call the new close-timeout API on it. `forth_hook_paint_open()` runs
+from inside the running program's own context (it's called from a
+Forth primitive), so it can record `paint_program_slot =
+scheduler_current_slot()` (a new, generically-named accessor returning
+whichever slot is mid-switch, or -1 outside any program) the moment
+PAINT's window opens -- no string-matching on the `RUN` argument
+needed. The close handler then does `if (target == WIN_KIND_PAINT &&
+paint_program_slot >= 0) { scheduler_request_close(paint_program_slot); }`.
+
+What's new beyond that: the desktop now tracks frames-since-close-requested per
 program slot (`close_requested`, above). If a program hasn't freed its
 own slot within a bounded grace period (60 frames, ~1 second at a
 60fps tick) after its window's close was requested, `kmain()`
