@@ -19,21 +19,6 @@ int forth_hook_mouse_y(void);
 int forth_hook_mouse_down(void);       /* 1 if the left button is currently held, 0 otherwise */
 int forth_hook_mouse_right_down(void); /* 1 if the right button is currently held, 0 otherwise */
 int forth_hook_current_color(void);    /* the natively-selected palette index, 0..7 */
-void forth_hook_refresh(void);
-
-/* If the left button is currently held over a palette swatch, selects
- * it (see forth_hook_current_color()'s comment above) -- a no-op
- * otherwise. Needed so a script's own loop can change color without
- * ever falling back to kmain()'s per-frame click handling, which
- * doesn't run at all while that loop blocks. */
-void forth_hook_palette_pick(void);
-
-/* If the left button is currently held over the SAVE button, writes
- * the grid to /HOME/<the filename field's own text> -- a no-op
- * otherwise, or if that field is empty. Needed for the same reason as
- * forth_hook_palette_pick(): kmain()'s own per-frame click handling
- * doesn't run at all while a script's loop blocks. */
-void forth_hook_save_pick(void);
 
 /* OP_CALL_YIELD's target -- called at every compiled BEGIN...UNTIL
  * loop back-edge (forth.c's handle_compile_token()), automatically,

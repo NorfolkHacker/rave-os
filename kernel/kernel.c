@@ -544,22 +544,6 @@ void forth_hook_paint_open(void) {
     }
     windows[WIN_KIND_PAINT].state = WINDOW_OPEN;
     raise_window(z_order, WIN_KIND_PAINT);
-
-    /* Without this, the window stays completely undrawn -- raise_window()
-     * only reorders z_order, it doesn't paint anything, and kmain()'s own
-     * per-frame draw loop isn't running at all while /BIN/PAINT's PLOOP
-     * (BEGIN...UNTIL) blocks inside this same forth_eval_line() call
-     * chain (see forth_hook_refresh()'s own comment). Root-caused via a
-     * headless repro (screendump right after RUN PAINT, before any
-     * click): the entire screen -- not just this window -- sits frozen
-     * exactly as it was the instant Enter was pressed, console input box
-     * included, until the first successful left-click-on-canvas pixel
-     * paint finally calls forth_hook_refresh(). On real hardware this
-     * read as "PAINT takes ~10 seconds to launch and only works
-     * sometimes": the window is invisible so the user is clicking blind,
-     * and only succeeds once a guess happens to land inside the canvas's
-     * actual (unseen) bounds. */
-    forth_hook_refresh();
 }
 
 void forth_hook_pixel(int x, int y, int color) {
@@ -641,54 +625,6 @@ int forth_hook_window_closed(void) {
     return windows[WIN_KIND_PAINT].state != WINDOW_OPEN;
 }
 
-/* The one genuinely new piece of architecture in this feature: draws
- * and presents PAINT's own screen region immediately, synchronously,
- * from inside this call -- kmain()'s own event loop (the only other
- * place gfx_present() normally gets called) isn't running at all while
- * a Forth BEGIN...UNTIL loop is executing, so without this, nothing a
- * script draws would appear on screen until the whole loop finishes.
- * Bypasses the normal damage-tracked update cycle entirely for this
- * one window, this one call -- draw_paint_group() is the same function
- * the normal per-frame path already uses, just invoked directly here
- * instead of through draw_window_by_index()/update_and_present(). */
-void forth_hook_refresh(void) {
-    int wx0, wy0, wx1, wy1;
-
-    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN) {
-        return;
-    }
-    draw_paint_group(&windows[WIN_KIND_PAINT], &paint, &paint_name_input, &paint_save_btn);
-
-    wx0 = windows[WIN_KIND_PAINT].x - 2;
-    wy0 = windows[WIN_KIND_PAINT].y - WINDOW_TITLEBAR_HEIGHT - 2;
-    wx1 = wx0 + windows[WIN_KIND_PAINT].w + 4;
-    wy1 = wy0 + windows[WIN_KIND_PAINT].h + WINDOW_TITLEBAR_HEIGHT + 4;
-
-    /* Cursor sprite, real bug reported directly from testing: without
-     * this, the cursor is invisible for the entire live paint session
-     * (only kmain()'s own per-frame loop ever drew it, and that loop
-     * isn't running), reading as "PAINT steals the mouse" even though
-     * the PS/2 driver never stopped tracking it -- there was just
-     * nothing on screen to show where it was. Only drawn when it's
-     * actually within this window's own redrawn rect (checked here,
-     * not clamped into it) -- draw_paint_group() above already
-     * repaints that whole rect fresh every single call, so a cursor
-     * drawn there this iteration is automatically erased next
-     * iteration if the cursor has moved, with no separate erase logic
-     * needed. Drawing it outside this rect would need that same
-     * erase-old-position handling update_and_present() does for the
-     * rest of the desktop (old_x/old_y/touched, further down this
-     * file) -- deliberately not reproduced here; a cursor that
-     * disappears once it leaves the PAINT window during a live
-     * session is a real, acceptable v1 gap, not silently worked
-     * around. */
-    if (mx >= wx0 && my >= wy0 && mx + CURSOR_SIZE <= wx1 && my + CURSOR_SIZE <= wy1) {
-        gfx_fill_rect(mx, my, CURSOR_SIZE, CURSOR_SIZE, (mouse_buttons_live & 0x01) ? CURSOR_CLICK_COLOR : CURSOR_IDLE_COLOR);
-    }
-
-    gfx_present_rect(wx0, wy0, wx1 - wx0, wy1 - wy0);
-}
-
 /* Converts a click position into a palette swatch index (0..7), or -1
  * if the click missed the palette strip entirely. Mirrors
  * files_list_hit_test()'s own "convert a click into a logical index"
@@ -710,47 +646,17 @@ static int paint_palette_hit_test(const struct window *win, int px, int py) {
     return idx;
 }
 
-/* Real bug, reported directly from testing: with only PIXEL/MOUSE-DOWN?
- * available to it, /BIN/PAINT's own loop could paint but never pick a
- * color, because paint_palette_hit_test() above was only ever called
- * from kmain()'s own per-frame click handling (see the "Clicking a
- * palette swatch selects it" block, further down this file) --
- * which, like every other bit of kmain()'s loop, does not run at all
- * while PLOOP's BEGIN...UNTIL blocks inside forth_eval_line(). So a
- * palette click made during a live paint session was silently
- * dropped, every time, with no way to recover except right-clicking
- * to exit PLOOP entirely (which kills the ability to paint until
- * /BIN/PAINT is re-run) -- swap to a new color and painting stops;
- * paint and the color never worked at the same time. This hook gives
- * the script the same palette-hit-test kmain() already had, so PLOOP
- * can pick a color from inside its own loop without ever needing
- * kmain()'s loop to run at all. Level-triggered while the button is
- * held, same convention PIXEL's own "MOUSE-DOWN? IF ... PIXEL" already
- * uses -- reselecting the same already-current color every iteration
- * the button stays down over it is harmless. */
-void forth_hook_palette_pick(void) {
-    int swatch;
-
-    poll_mouse_state();
-    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN || !(mouse_buttons_live & 0x01)) {
-        return;
-    }
-    swatch = paint_palette_hit_test(&windows[WIN_KIND_PAINT], mx + CURSOR_SIZE / 2, my + CURSOR_SIZE / 2);
-    if (swatch >= 0) {
-        paint.current_color = swatch;
-    }
-}
-
 /* Builds "/HOME/" + the filename field's own text, uppercased to match
  * this filesystem's all-caps path convention -- the same fold RUN's
- * own path resolution already applies (see forth_run_command()'s
- * comment). Shared by both the kmain() click handler below and
- * forth_hook_save_pick(), so the two SAVE entry points can never
- * resolve to two different paths for the same typed name. Returns 0
- * (leaving *out* unset) if the field is empty -- SAVE with no name is
- * a no-op, same "no-error-UI, silent no-op" convention as the rest of
- * this kernel's filesystem writes; both callers check this before
- * doing anything else. */
+ * own path resolution already applies (the old synchronous
+ * forth_run_command() covered this in its own comment before it was
+ * replaced in the 2026-08-19 concurrency pass; the fold itself now
+ * lives inline in kmain()'s own RUN handling). Used by kmain()'s own
+ * SAVE-button click handler below. Returns 0 (leaving *out* unset) if
+ * the field is empty -- SAVE with no name is a no-op, same
+ * "no-error-UI, silent no-op" convention as the rest of this kernel's
+ * filesystem writes; the caller checks this before doing anything
+ * else. */
 static int paint_build_save_path(char *out, int out_max) {
     int pos = 0;
     int i;
@@ -768,37 +674,6 @@ static int paint_build_save_path(char *out, int out_max) {
     return 1;
 }
 
-/* Real bug, same shape as forth_hook_palette_pick() above: SAVE's
- * click handler lives entirely in kmain()'s own per-frame code (the
- * "Writes the grid to /HOME/<name>" block, further down this file),
- * which doesn't run at all while PLOOP blocks -- so without this,
- * clicking SAVE during a live paint session silently did nothing,
- * exactly like color-picking did before PALETTE-PICK. Gives PLOOP the
- * same button-hit-test-and-write kmain() already had. Level-triggered,
- * same convention PIXEL and PALETTE-PICK both already use. */
-void forth_hook_save_pick(void) {
-    char path[FS_PATH_MAX];
-
-    poll_mouse_state();
-    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN || !(mouse_buttons_live & 0x01)) {
-        return;
-    }
-    if (!button_hit_test(&paint_save_btn, mx + CURSOR_SIZE / 2, my + CURSOR_SIZE / 2)) {
-        return;
-    }
-    if (paint_build_save_path(path, (int)sizeof(path))) {
-        unsigned char sprite_bytes[PAINT_GRID_SIZE * PAINT_GRID_SIZE];
-        int prow, pcol;
-        for (prow = 0; prow < PAINT_GRID_SIZE; prow++) {
-            for (pcol = 0; pcol < PAINT_GRID_SIZE; pcol++) {
-                sprite_bytes[prow * PAINT_GRID_SIZE + pcol] = (unsigned char)paint.grid[prow][pcol];
-            }
-        }
-        fs_delete(path);
-        fs_create_file(path, sprite_bytes, sizeof(sprite_bytes));
-    }
-}
-
 /* fs.h's own constant, kept under this file's existing local name (no
  * call site here needs to change) -- same "the old name survives a
  * refactor" precedent VIEWER_BUF_SIZE already set when the VIEWER
@@ -813,7 +688,7 @@ void forth_hook_save_pick(void) {
 #define FILES_SELECTED_BG_COLOR 0x123322
 
 /* One sector's worth -- every current test file is far smaller. RUN
- * (forth_run_command(), the only remaining reader) uses VIEWER_BUF_SIZE
+ * (run_program_entry(), which reads it) uses VIEWER_BUF_SIZE
  * - 1 so there's always room for a manual nul terminator, since
  * fs_read_file() copies exactly out_size raw bytes and doesn't add one
  * itself. Kept its original name (predating the VIEWER window's removal)
@@ -1064,43 +939,21 @@ static int fx_default_from_config(void) {
  * reboots (fs_create_file() only ever succeeds the very first time a
  * path exists). While the left button is held and the cursor is over
  * the canvas, paints the current color at the cursor's cell; stops
- * when the right button is pressed. The bounds check exists because
+ * when the right button is pressed or the window is closed
+ * (WINDOW-CLOSED?, Task 4). The bounds check exists because
  * MOUSE-X/MOUSE-Y return -1 when the cursor isn't over the canvas at
  * all (e.g. hovering the palette strip).
  *
- * REFRESH runs unconditionally every loop iteration, not just inside
- * the paint branch -- kmain()'s own per-frame draw loop isn't running
- * at all while this BEGIN...UNTIL blocks (same reason
- * forth_hook_paint_open() now calls REFRESH itself on open, see
- * above), so without an every-iteration redraw the canvas would sit
- * static between successful paints even though the mouse is being
- * polled the whole time -- the same "screen looks frozen" flavor of gap,
- * one level down. REFRESH also now draws the cursor sprite itself
- * while it's within the PAINT window's own bounds (see
- * forth_hook_refresh()'s own comment) -- it stops being visible if it
- * leaves that area during a live session, a real, acceptable v1 gap
- * this doesn't try to solve.
- *
- * PALETTE-PICK also runs every iteration, for the same underlying
- * reason: color selection used to be handled only by kmain()'s own
- * per-frame click code (the "Clicking a palette swatch selects it"
- * block, further down this file), which -- like the redraw above --
- * never runs while this loop blocks. Before this, a palette click
- * during a live paint session was silently dropped every time; the
- * only way to change color was to right-click out of the loop
- * entirely, which also ends the ability to paint until /BIN/PAINT is
- * re-run. See forth_hook_palette_pick()'s own comment (kernel.c, right
- * after paint_palette_hit_test()).
- *
- * SAVE-PICK, same reasoning again: SAVE's click handler is also
- * kmain()-only code, so without this, clicking SAVE during a live
- * session did nothing either. Saves to /HOME/<name>, where <name> is
- * the filename field's own current text (pre-filled "SPRITE" by
- * default, see forth_hook_save_pick()'s comment) -- typing a *new*
- * name still needs kmain()'s own keyboard handling, so that only takes
- * effect before RUN PAINT starts or after right-clicking out; whatever
- * name is already set when the loop starts is what SAVE-PICK uses
- * throughout that session.
+ * No REFRESH/PALETTE-PICK/SAVE-PICK calls here (2026-08-19 concurrency
+ * pass deleted all three, along with the hooks they wrapped) -- those
+ * existed only because kmain()'s own per-frame redraw, palette
+ * hit-test, and SAVE hit-test didn't run at all while this
+ * BEGIN...UNTIL blocked inside forth_eval_line()'s call chain. Since
+ * Task 5, a compiled BEGIN...UNTIL loop yields back to scheduler_tick()
+ * (and through it to kmain()'s own per-frame work) on every iteration
+ * instead of blocking, so all of that now happens for free through the
+ * exact same general per-frame path every other window already uses --
+ * no PAINT-specific workaround needed.
  *
  * Two real deviations from the design spec's illustrative script, both
  * found while headlessly verifying this against the actual dialect
@@ -1130,22 +983,20 @@ static int fx_default_from_config(void) {
  *    then that word is invoked as its own top-level line -- the
  *    ordinary, idiomatic way any Forth runs a loop from the console,
  *    and RUN's own line-by-line feed already preserves compile-mode
- *    state across lines for exactly this shape (see forth_run_command()
- *    above). */
+ *    state across lines for exactly this shape (see run_program_entry()
+ *    above -- the old synchronous forth_run_command() did the same
+ *    before it was replaced in the 2026-08-19 concurrency pass). */
 static void seed_bin_paint_script(void) {
     static const char bin_paint_default[] =
         "PAINT\n"
         ": PLOOP\n"
         "  BEGIN\n"
-        "    PALETTE-PICK\n"
-        "    SAVE-PICK\n"
         "    MOUSE-DOWN? IF\n"
         "      MOUSE-X MOUSE-Y\n"
         "      OVER OVER SWAP -1 > SWAP -1 > *\n"
         "      IF CURRENT-COLOR PIXEL ELSE DROP DROP THEN\n"
         "    THEN\n"
-        "    REFRESH\n"
-        "    MOUSE-RIGHT-DOWN?\n"
+        "    MOUSE-RIGHT-DOWN? WINDOW-CLOSED? +\n"
         "  UNTIL\n"
         ";\n"
         "PLOOP\n";
@@ -2721,12 +2572,10 @@ void kmain(void) {
             } else if (paint_name_input.focused) {
                 /* No Enter-triggered action here, unlike FILES' own
                  * name_input -- SAVE only ever fires from clicking the
-                 * SAVE button itself (or PALETTE-PICK's own
-                 * SAVE-PICK sibling hook, from inside a live PLOOP
-                 * session), never from typing. Enter just inserts
-                 * nothing (console_input_feed_char()'s return value is
-                 * ignored) since a filename has no meaningful use for a
-                 * literal newline. */
+                 * SAVE button itself, never from typing. Enter just
+                 * inserts nothing (console_input_feed_char()'s return
+                 * value is ignored) since a filename has no meaningful
+                 * use for a literal newline. */
                 console_input_feed_char(&paint_name_input, c);
             }
             had_event = 1;
