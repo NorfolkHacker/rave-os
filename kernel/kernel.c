@@ -342,13 +342,13 @@ static void poll_mouse_state(void) {
 #define PAINT_PALETTE_COLORS 8
 
 /* File-scope, same "hook-reachability" reasoning as mx/my above --
- * forth_hook_pixel()/forth_hook_paint_open()/forth_hook_refresh() are
- * called from deep inside forth_eval_line()'s call stack, with no path
- * back to kmain()'s locals. kmain() still threads &paint through the
- * normal five-function draw pipeline exactly like every other window's
- * own state (struct editor ed, etc.) -- this doesn't change that, it
- * only additionally makes paint reachable from the hooks, which aren't
- * part of that pipeline at all. */
+ * forth_hook_pixel()/forth_hook_paint_open()/forth_hook_current_color()
+ * are called from deep inside forth_eval_line()'s call stack, with no
+ * path back to kmain()'s locals. kmain() still threads &paint through
+ * the normal five-function draw pipeline exactly like every other
+ * window's own state (struct editor ed, etc.) -- this doesn't change
+ * that, it only additionally makes paint reachable from the hooks,
+ * which aren't part of that pipeline at all. */
 struct paint {
     int grid[PAINT_GRID_SIZE][PAINT_GRID_SIZE]; /* palette index 0..7 per cell, row-major */
     int current_color;                          /* natively-selected palette swatch, 0..7 */
@@ -360,10 +360,12 @@ static struct console_input paint_name_input;
 
 /* Same reachability problem mx/my/paint had above: forth_hook_paint_open()
  * (Task 3) needs to reach windows[WIN_KIND_PAINT].state and call
- * raise_window(z_order, WIN_KIND_PAINT), and forth_hook_refresh() needs
- * windows[WIN_KIND_PAINT] too -- both are hook functions with no path back
- * to kmain()'s locals. kmain() still initializes and threads these through
- * the normal pipeline exactly as before; only their storage moved. */
+ * raise_window(z_order, WIN_KIND_PAINT), and forth_hook_window_closed()
+ * plus paint_mouse_cell() (used by forth_hook_mouse_x()/
+ * forth_hook_mouse_y()) need windows[WIN_KIND_PAINT] too -- all hook
+ * functions (or hook helpers) with no path back to kmain()'s locals.
+ * kmain() still initializes and threads these through the normal
+ * pipeline exactly as before; only their storage moved. */
 static struct window windows[MAX_WINDOWS];
 static int z_order[MAX_WINDOWS];
 
@@ -523,13 +525,18 @@ static void draw_paint_group(const struct window *win, const struct paint *pt, c
 
 /* forth_hooks.h implementations -- forth.c's only window into
  * graphics/mouse state (see docs/superpowers/specs/2026-08-16-paint-design.md).
- * Inserted here, immediately after draw_paint_group(), rather than up
- * near poll_mouse_state() -- forth_hook_refresh() below calls
- * draw_paint_group(), which must already be visible (this is C, not a
- * language with forward declarations by default) to avoid an
+ * Inserted here, immediately after draw_paint_group(), for historical
+ * reasons: forth_hook_refresh() used to live here and called
+ * draw_paint_group() directly, which had to already be visible (this is
+ * C, not a language with forward declarations by default) to avoid an
  * implicit-function-declaration warning under -Wall -Wextra.
- * poll_mouse_state() itself is defined much earlier in this file, so
- * these hooks can call it regardless of where they themselves sit. */
+ * forth_hook_refresh() itself is gone (2026-08-19 concurrency pass --
+ * kmain()'s own normal per-frame draw pipeline, update_and_present(),
+ * now redraws PAINT the same as every other window, so no hook needs to
+ * call draw_paint_group() directly any more), but the remaining hooks
+ * are left in this same spot rather than moved. poll_mouse_state()
+ * itself is defined much earlier in this file, so these hooks can call
+ * it regardless of where they themselves sit. */
 
 void forth_hook_paint_open(void) {
     serial_write_str("HOOK paint_open\n");
