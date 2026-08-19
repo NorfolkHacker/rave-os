@@ -45,7 +45,7 @@
  * what IF already needed; a loop-back branch is just a
  * branch-if-zero whose target happens to be earlier in code[] than
  * where it's emitted. */
-enum forth_op { OP_LITERAL, OP_CALL_PRIMITIVE, OP_CALL_WORD, OP_EXIT, OP_BRANCH, OP_BRANCH_IF_ZERO };
+enum forth_op { OP_LITERAL, OP_CALL_PRIMITIVE, OP_CALL_WORD, OP_EXIT, OP_BRANCH, OP_BRANCH_IF_ZERO, OP_CALL_YIELD };
 
 /* Compile-time-only bookkeeping for control-flow words: a small stack
  * of not-yet-resolved branches (IF/ELSE, kind CTRL_KIND_IF -- code[]

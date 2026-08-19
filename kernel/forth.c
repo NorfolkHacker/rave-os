@@ -318,6 +318,10 @@ static void prim_mouse_right_down(struct forth_vm *vm) {
     forth_push(vm, forth_hook_mouse_right_down() ? -1 : 0);
 }
 
+static void prim_window_closed(struct forth_vm *vm) {
+    forth_push(vm, forth_hook_window_closed() ? -1 : 0);
+}
+
 static void prim_current_color(struct forth_vm *vm) {
     forth_push(vm, (int32_t)forth_hook_current_color());
 }
@@ -351,6 +355,7 @@ static const struct forth_word primitives[] = {
     {">", prim_gt}, {".", prim_dot}, {"CR", prim_cr}, {"@", prim_fetch}, {"!", prim_store},
     {"PAINT", prim_paint}, {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
     {"MOUSE-DOWN?", prim_mouse_down}, {"MOUSE-RIGHT-DOWN?", prim_mouse_right_down},
+    {"WINDOW-CLOSED?", prim_window_closed},
     {"CURRENT-COLOR", prim_current_color}, {"REFRESH", prim_refresh},
     {"PALETTE-PICK", prim_palette_pick},
     {"SAVE-PICK", prim_save_pick},
@@ -420,6 +425,10 @@ static void forth_exec(struct forth_vm *vm, int start_ip) {
             ip = (cond == 0) ? (int)instr->arg : ip + 1;
             break;
         }
+        case OP_CALL_YIELD:
+            forth_hook_yield();
+            ip++;
+            break;
         }
 
         if (vm->error[0]) {
@@ -528,6 +537,7 @@ static void handle_compile_token(struct forth_vm *vm, const char *token) {
         if (!ctrl_pop(vm, CTRL_KIND_BEGIN, &e, "MISMATCHED UNTIL")) {
             return;
         }
+        forth_emit(vm, OP_CALL_YIELD, 0);
         forth_emit(vm, OP_BRANCH_IF_ZERO, e.value); /* loop back if false; falls through if true */
         return;
     }

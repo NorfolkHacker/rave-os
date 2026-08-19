@@ -631,6 +631,16 @@ int forth_hook_current_color(void) {
     return paint.current_color;
 }
 
+void forth_hook_yield(void) {
+    if (scheduler_current_slot() >= 0) {
+        scheduler_yield();
+    }
+}
+
+int forth_hook_window_closed(void) {
+    return windows[WIN_KIND_PAINT].state != WINDOW_OPEN;
+}
+
 /* The one genuinely new piece of architecture in this feature: draws
  * and presents PAINT's own screen region immediately, synchronously,
  * from inside this call -- kmain()'s own event loop (the only other

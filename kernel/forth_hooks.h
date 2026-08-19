@@ -35,4 +35,20 @@ void forth_hook_palette_pick(void);
  * doesn't run at all while a script's loop blocks. */
 void forth_hook_save_pick(void);
 
+/* OP_CALL_YIELD's target -- called at every compiled BEGIN...UNTIL
+ * loop back-edge (forth.c's handle_compile_token()), automatically,
+ * with no script-source opt-in. A no-op when the calling code isn't
+ * running inside a scheduled program (scheduler_current_slot() < 0 --
+ * e.g. a word typed and invoked directly at the interactive console,
+ * never spawned through RUN): a single typed line is never
+ * long-running, so there's nothing to yield around there. See
+ * docs/superpowers/specs/2026-08-19-concurrency-design.md. */
+void forth_hook_yield(void);
+
+/* 1 if the PAINT window has been closed (state != WINDOW_OPEN), 0
+ * otherwise -- lets a script's own loop condition notice its window
+ * closed instead of only ever checking its own domain-specific exit
+ * condition (PLOOP's is MOUSE-RIGHT-DOWN?). */
+int forth_hook_window_closed(void);
+
 #endif
