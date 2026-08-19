@@ -980,48 +980,34 @@ static void handle_edit_command(struct shell *sh, struct editor *ed, char *edito
     raise_window(z_order, WIN_KIND_EDITOR);
 }
 
-/* RUN <name>, typed at the Forth console: a shell-like convenience, not
- * a real Forth word -- resolved and executed entirely here rather than
- * inside forth.c, which stays completely free of filesystem/GUI
- * dependencies (see forth.h). A bare name (no leading '/') resolves
- * against /BIN, giving that directory real purpose; an absolute path
- * (leading '/') is used as-is for a script living elsewhere. Reads the
- * file, splits it into lines, and feeds each one through
- * forth_eval_line() exactly as if it had been typed and Entered
- * individually -- multi-line colon definitions inside a script work for
- * free, since compile-mode state already persists across separate
- * forth_eval_line() calls (forth.h). */
-static void forth_run_command(struct forth_vm *vm, struct console_output *co, const char *arg) {
+struct run_program_ctx {
+    struct forth_vm vm;
+    struct console_output *co;
     char path[FILES_PATH_MAX];
+};
+static struct run_program_ctx run_ctxs[MAX_PROGRAMS];
+
+/* Entry point for a RUN-launched program, executed inside its own
+ * scheduler slot (scheduler.h) instead of blocking kmain() -- replaces
+ * the old synchronous forth_run_command(), which read and evaluated a
+ * whole script in a single call. path/vm/co are filled in by the RUN
+ * call site (below) before scheduler_activate() ever runs this, since
+ * ci.text (the source of the raw argument) is cleared as soon as that
+ * call site returns -- path resolution can't be deferred to here. The
+ * read-and-line-feed logic itself is otherwise identical to before;
+ * the only behavioral difference is that a BEGIN...UNTIL loop inside
+ * the script now yields (forth.c's OP_CALL_YIELD) back to
+ * scheduler_tick(), and through it to kmain()'s own per-frame work,
+ * between iterations instead of blocking here until the whole script
+ * finishes. */
+static void run_program_entry(void *arg) {
+    struct run_program_ctx *ctx = (struct run_program_ctx *)arg;
     char buf[VIEWER_BUF_SIZE];
     unsigned int out_size;
-    int pos = 0;
     int oi, line_start;
 
-    if (arg[0] == '/') {
-        str_append(path, &pos, (int)sizeof(path), arg);
-    } else {
-        str_append(path, &pos, (int)sizeof(path), "/BIN/");
-        str_append(path, &pos, (int)sizeof(path), arg);
-    }
-
-    /* match_run_command() only folds the "RUN " keyword itself, not the
-     * argument after it -- fs.c's directory lookups (str_eq()) are
-     * byte-exact, and every real path in this filesystem is uppercase by
-     * convention (/BIN, /BIN/PAINT, /ETC/CONFIG, ...), so "run paint"
-     * typed without Shift built "/BIN/paint" and silently failed to
-     * resolve against the real "/BIN/PAINT" entry -- the actual root
-     * cause behind PAINT's Forth loop never starting on real hardware
-     * (bare "PAINT" still worked, since forth.c's own word lookup is
-     * already case-insensitive; only this path-based lookup wasn't). */
-    for (pos = 0; path[pos]; pos++) {
-        if (path[pos] >= 'a' && path[pos] <= 'z') {
-            path[pos] = (char)(path[pos] - 32);
-        }
-    }
-
-    if (fs_read_file(path, buf, VIEWER_BUF_SIZE - 1, &out_size) != 0) {
-        console_output_append_line(co, "(RUN FAILED)");
+    if (fs_read_file(ctx->path, buf, VIEWER_BUF_SIZE - 1, &out_size) != 0) {
+        console_output_append_line(ctx->co, "(RUN FAILED)");
         return;
     }
     buf[out_size] = 0;
@@ -1032,8 +1018,8 @@ static void forth_run_command(struct forth_vm *vm, struct console_output *co, co
             char eval_out[128];
             char saved = buf[oi];
             buf[oi] = 0;
-            forth_eval_line(vm, &buf[line_start], eval_out, sizeof(eval_out));
-            append_split_lines(co, eval_out);
+            forth_eval_line(&ctx->vm, &buf[line_start], eval_out, sizeof(eval_out));
+            append_split_lines(ctx->co, eval_out);
             buf[oi] = saved;
             line_start = oi + 1;
         }
@@ -2563,7 +2549,33 @@ void kmain(void) {
                      * word). */
                     run_arg = vm.compiling ? 0 : match_run_command(ci.text);
                     if (run_arg) {
-                        forth_run_command(&vm, &co, run_arg);
+                        int run_slot = scheduler_reserve("RUN");
+                        if (run_slot < 0) {
+                            console_output_append_line(&co, "(TOO MANY PROGRAMS RUNNING)");
+                        } else {
+                            struct run_program_ctx *ctx = &run_ctxs[run_slot];
+                            int rpos = 0;
+
+                            forth_init(&ctx->vm);
+                            ctx->co = &co;
+                            /* Same case-fold as before (see the old
+                             * forth_run_command()'s comment, now moved
+                             * here): every real path in this filesystem
+                             * is uppercase by convention, and fs.c's
+                             * lookups are byte-exact. */
+                            if (run_arg[0] == '/') {
+                                str_append(ctx->path, &rpos, (int)sizeof(ctx->path), run_arg);
+                            } else {
+                                str_append(ctx->path, &rpos, (int)sizeof(ctx->path), "/BIN/");
+                                str_append(ctx->path, &rpos, (int)sizeof(ctx->path), run_arg);
+                            }
+                            for (rpos = 0; ctx->path[rpos]; rpos++) {
+                                if (ctx->path[rpos] >= 'a' && ctx->path[rpos] <= 'z') {
+                                    ctx->path[rpos] = (char)(ctx->path[rpos] - 32);
+                                }
+                            }
+                            scheduler_activate(run_slot, run_program_entry, ctx);
+                        }
                     } else {
                         char out[128];
                         /* forth_eval_line() never touches console_output.h
