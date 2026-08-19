@@ -17,6 +17,7 @@
 #include "console_output.h"
 #include "forth.h"
 #include "forth_hooks.h"
+#include "scheduler.h"
 #include "serial.h"
 #include "shell.h"
 #include "editor.h"
@@ -2709,7 +2710,9 @@ void kmain(void) {
             had_event = 1;
         }
 
-        if (had_event) {
+        scheduler_tick();
+
+        if (had_event || scheduler_any_active()) {
             int touched[MAX_WINDOWS];
             int menu_touched = (menu.open != old_menu_open) || (menu_hovered_item != old_menu_hovered_item);
 
