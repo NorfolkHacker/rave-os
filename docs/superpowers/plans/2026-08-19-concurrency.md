@@ -45,7 +45,7 @@
 **Interfaces:**
 - Produces: `void context_switch(uint32_t *save_esp_here, uint32_t new_esp);` (cdecl, 32-bit) -- every later task's fiber switching goes through this exact signature.
 
-- [ ] **Step 1: Write `context_switch.asm`**
+- [x] **Step 1: Write `context_switch.asm`**
 
 ```nasm
 ; void context_switch(uint32_t *save_esp_here, uint32_t new_esp)
@@ -78,7 +78,7 @@ context_switch:
     ret
 ```
 
-- [ ] **Step 2: Write the host-side test**
+- [x] **Step 2: Write the host-side test**
 
 ```c
 /* kernel/tests/test_context_switch.c -- host-side only, never linked
@@ -138,7 +138,7 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 3: Build and run the test**
+- [x] **Step 3: Build and run the test**
 
 Run (inside the `forth-os` distrobox container):
 ```bash
@@ -149,7 +149,7 @@ gcc -m32 test_context_switch.c context_switch.o -o test_context_switch
 ```
 Expected: `PASS`. If `gcc -m32` fails to link a hosted binary (missing 32-bit libc, distinct from the freestanding kernel build), install the container's 32-bit dev package (e.g. `gcc-multilib`/`libc6-dev-i386` depending on the container's base) and retry -- this is a one-time container setup issue, not a code problem.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add kernel/context_switch.asm kernel/tests/test_context_switch.c
@@ -182,7 +182,7 @@ git commit -m "kernel: context_switch() fiber primitive, host-tested"
   int scheduler_any_active(void);
   ```
 
-- [ ] **Step 1: Write `scheduler.h`**
+- [x] **Step 1: Write `scheduler.h`**
 
 ```c
 #ifndef RAVEOS_SCHEDULER_H
@@ -256,7 +256,7 @@ int scheduler_any_active(void);
 #endif
 ```
 
-- [ ] **Step 2: Write `scheduler.c`**
+- [x] **Step 2: Write `scheduler.c`**
 
 ```c
 #include "scheduler.h"
@@ -395,7 +395,7 @@ int scheduler_any_active(void) {
 }
 ```
 
-- [ ] **Step 3: Write the host-side scheduler test**
+- [x] **Step 3: Write the host-side scheduler test**
 
 ```c
 /* kernel/tests/test_scheduler.c -- host-side only. scheduler.c has no
@@ -456,7 +456,7 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 4: Build and run the test**
+- [x] **Step 4: Build and run the test**
 
 Run (inside the `forth-os` container):
 ```bash
@@ -467,7 +467,7 @@ gcc -m32 test_scheduler.c scheduler.o context_switch.o -o test_scheduler
 ```
 Expected: `PASS`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/scheduler.h kernel/scheduler.c kernel/tests/test_scheduler.c
@@ -486,7 +486,7 @@ git commit -m "kernel: cooperative program scheduler, host-tested"
 **Interfaces:**
 - Consumes: `scheduler_tick()`, `scheduler_any_active()` (Task 2).
 
-- [ ] **Step 1: Add build rules to `kernel/Makefile`**
+- [x] **Step 1: Add build rules to `kernel/Makefile`**
 
 Add `context_switch.o scheduler.o` to `C_OBJS`... actually `context_switch.o` is assembled, not compiled -- keep it separate like `kernel_entry.o`:
 
@@ -524,7 +524,7 @@ clean:
 	rm -f kernel_entry.o context_switch.o $(C_OBJS) kernel.elf kernel.bin
 ```
 
-- [ ] **Step 2: `#include "scheduler.h"` in `kernel.c`**
+- [x] **Step 2: `#include "scheduler.h"` in `kernel.c`**
 
 Add after the existing `#include "forth_hooks.h"` (kernel.c:19):
 ```c
@@ -532,7 +532,7 @@ Add after the existing `#include "forth_hooks.h"` (kernel.c:19):
 #include "scheduler.h"
 ```
 
-- [ ] **Step 3: Call `scheduler_tick()` every frame and fix the idle path**
+- [x] **Step 3: Call `scheduler_tick()` every frame and fix the idle path**
 
 The loop currently ends (kernel.c:2781-2790):
 ```c
@@ -570,7 +570,7 @@ Find the `if (had_event) { ... update_and_present(...); } else { __asm__ volatil
 
 (The `if (had_event` this replaces is the one immediately preceding this `update_and_present()` call -- find and change just that `if`'s condition; do not touch any other `had_event` check earlier in the loop, e.g. the ones setting `had_event = 1` on each input source.)
 
-- [ ] **Step 4: Build and boot-test (regression only)**
+- [x] **Step 4: Build and boot-test (regression only)**
 
 Nothing calls `scheduler_reserve()`/`scheduler_activate()` yet, so `scheduler_any_active()` is always 0 and behavior must be pixel-identical to before this task.
 
@@ -581,7 +581,7 @@ cd ../boot && make clean && make
 ```
 Then boot headlessly (matching this project's established pattern) and screendump the desktop; confirm it matches a screendump taken before this task (same taskbar, same idle desktop, no visual regression).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/Makefile kernel/kernel.c
@@ -603,13 +603,13 @@ git commit -m "kernel: wire scheduler_tick() into kmain(), fix idle-hlt starvati
 - Consumes: `scheduler_current_slot()`, `scheduler_yield()` (Task 2).
 - Produces: `forth_hook_yield()`, `forth_hook_window_closed()` (used starting Task 6's script update; `forth_hook_window_closed()` also used by Task 7).
 
-- [ ] **Step 1: Add `OP_CALL_YIELD` to `forth.h`**
+- [x] **Step 1: Add `OP_CALL_YIELD` to `forth.h`**
 
 ```c
 enum forth_op { OP_LITERAL, OP_CALL_PRIMITIVE, OP_CALL_WORD, OP_EXIT, OP_BRANCH, OP_BRANCH_IF_ZERO, OP_CALL_YIELD };
 ```
 
-- [ ] **Step 2: Emit it at every compiled `UNTIL`**
+- [x] **Step 2: Emit it at every compiled `UNTIL`**
 
 In `handle_compile_token()` (forth.c:526-533):
 ```c
@@ -624,7 +624,7 @@ In `handle_compile_token()` (forth.c:526-533):
     }
 ```
 
-- [ ] **Step 3: Handle it in `forth_exec()`'s switch**
+- [x] **Step 3: Handle it in `forth_exec()`'s switch**
 
 In `forth_exec()` (forth.c:389-423), add a case alongside the existing ones:
 ```c
@@ -634,7 +634,7 @@ In `forth_exec()` (forth.c:389-423), add a case alongside the existing ones:
             break;
 ```
 
-- [ ] **Step 4: Add `WINDOW-CLOSED?`**
+- [x] **Step 4: Add `WINDOW-CLOSED?`**
 
 Add a primitive next to `prim_mouse_right_down()` (forth.c:317-319):
 ```c
@@ -649,7 +649,7 @@ Add it to `primitives[]` (forth.c:348-357), next to `MOUSE-RIGHT-DOWN?`:
     {"WINDOW-CLOSED?", prim_window_closed},
 ```
 
-- [ ] **Step 5: Declare the two new hooks in `forth_hooks.h`**
+- [x] **Step 5: Declare the two new hooks in `forth_hooks.h`**
 
 ```c
 /* OP_CALL_YIELD's target -- called at every compiled BEGIN...UNTIL
@@ -669,7 +669,7 @@ void forth_hook_yield(void);
 int forth_hook_window_closed(void);
 ```
 
-- [ ] **Step 6: Implement both hooks in `kernel.c`**
+- [x] **Step 6: Implement both hooks in `kernel.c`**
 
 Add near the other `forth_hook_*` implementations (after `forth_hook_current_color()`, kernel.c:629-631):
 ```c
@@ -684,7 +684,7 @@ int forth_hook_window_closed(void) {
 }
 ```
 
-- [ ] **Step 7: Build and smoke-test**
+- [x] **Step 7: Build and smoke-test**
 
 Run (inside the `forth-os` container):
 ```bash
@@ -693,7 +693,7 @@ cd ../boot && make clean && make
 ```
 Boot headlessly; type `RUN PAINT` at the Forth console; confirm it still opens and paints exactly as before this task (RUN is still synchronous until Task 5, so `WINDOW-CLOSED?`/auto-yield exist but don't change observable behavior yet -- this step only confirms the new opcode/primitive compile and don't break existing behavior).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add kernel/forth.h kernel/forth.c kernel/forth_hooks.h kernel/kernel.c
@@ -711,7 +711,7 @@ git commit -m "forth: auto-yield at every BEGIN...UNTIL back-edge, add WINDOW-CL
 **Interfaces:**
 - Consumes: `scheduler_reserve()`, `scheduler_activate()` (Task 2).
 
-- [ ] **Step 1: Replace `forth_run_command()` with a scheduled entry point**
+- [x] **Step 1: Replace `forth_run_command()` with a scheduled entry point**
 
 Delete `forth_run_command()` (kernel.c:983-1030) entirely and replace it with:
 
@@ -763,7 +763,7 @@ static void run_program_entry(void *arg) {
 }
 ```
 
-- [ ] **Step 2: Replace the `RUN` call site**
+- [x] **Step 2: Replace the `RUN` call site**
 
 At kernel.c:2553-2555, currently:
 ```c
@@ -807,7 +807,7 @@ Replace with:
                     } else {
 ```
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 ```bash
 cd kernel && make clean && make
@@ -815,13 +815,13 @@ cd ../boot && make clean && make
 ```
 Fix any compile errors (e.g. if `forth_run_command`'s old prototype/declaration lingers anywhere -- it shouldn't, it was file-local `static`).
 
-- [ ] **Step 4: Headless QEMU regression test -- the actual fix**
+- [x] **Step 4: Headless QEMU regression test -- the actual fix**
 
 This is the direct test for the bug motivating this whole design. Boot headlessly, open the Forth console, type `RUN PAINT` -- confirm the console's own prompt returns immediately (not after the whole script "finishes", since PLOOP never finishes on its own). While PLOOP is looping:
 - Drive the mouse over a *different* window (e.g. open FILES via the start menu) through the QEMU monitor and confirm via screendump that FILES opens and redraws -- today (before this task) that's impossible, since nothing but PLOOP's own hand-copied hooks ever ran during the loop.
 - Confirm PAINT itself still works: paint a pixel, pick a palette color, click SAVE -- exercising the exact three code paths the 2026-08-18 pass hand-patched, now happening via the general mechanism (kmain()'s own per-frame click handling, running because it never actually stopped) rather than the `PALETTE-PICK`/`SAVE-PICK`/`REFRESH` primitives (still present at this point in the plan -- Task 6 removes them, and this same scenario is the regression test for that removal too).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/kernel.c
@@ -841,7 +841,7 @@ git commit -m "kernel: RUN spawns a scheduled program instead of blocking kmain(
 **Interfaces:**
 - None produced -- pure deletion plus one script-text change.
 
-- [ ] **Step 1: Delete the three primitive wrappers and table entries in `forth.c`**
+- [x] **Step 1: Delete the three primitive wrappers and table entries in `forth.c`**
 
 Delete `prim_refresh()`, `prim_palette_pick()`, `prim_save_pick()` (forth.c:325-338):
 ```c
@@ -878,7 +878,7 @@ Delete just the `REFRESH`/`PALETTE-PICK`/`SAVE-PICK` lines (leave `WINDOW-CLOSED
 };
 ```
 
-- [ ] **Step 2: Delete the three hook declarations from `forth_hooks.h`**
+- [x] **Step 2: Delete the three hook declarations from `forth_hooks.h`**
 
 Delete:
 ```c
@@ -901,7 +901,7 @@ void forth_hook_palette_pick(void);
 void forth_hook_save_pick(void);
 ```
 
-- [ ] **Step 3: Delete the three hook implementations in `kernel.c`**
+- [x] **Step 3: Delete the three hook implementations in `kernel.c`**
 
 Delete `forth_hook_refresh()` in full (kernel.c:633-679, the whole function including its doc comment).
 
@@ -929,7 +929,7 @@ In `forth_hook_paint_open()` (kernel.c:533-562), delete the trailing call and it
 ```
 so the function ends at `raise_window(z_order, WIN_KIND_PAINT);` (a just-opened PAINT window is drawn on its next frame by `kmain()`'s normal `update_and_present()`, same as every other window when opened -- no special-cased call needed once `kmain()`'s own loop is guaranteed to run again on the next tick).
 
-- [ ] **Step 4: Update `bin_paint_default[]`**
+- [x] **Step 4: Update `bin_paint_default[]`**
 
 In `seed_bin_paint_script()` (kernel.c:1138-1156), change:
 ```c
@@ -970,7 +970,7 @@ to:
 
 Also update the function's own doc comment (kernel.c:1063-1137) to remove the now-stale `PALETTE-PICK`/`SAVE-PICK`/forced-`REFRESH` explanation paragraphs, since they describe primitives that no longer exist.
 
-- [ ] **Step 5: Build**
+- [x] **Step 5: Build**
 
 ```bash
 cd kernel && make clean && make
@@ -980,11 +980,11 @@ This should surface a compile error if any deleted symbol is still referenced so
 
 Note: because `/BIN/PAINT` is seeded idempotently (`fs_create_file()` only succeeds the first time the path exists, per `seed_bin_paint_script()`'s own comment), a `fs.img` from an earlier test run still has the *old* script text on disk. Use a fresh `fs.img` (or delete the existing one and let it reseed) for this test, or the new `WINDOW-CLOSED?` word won't actually be exercised.
 
-- [ ] **Step 6: Headless QEMU regression test**
+- [x] **Step 6: Headless QEMU regression test**
 
 Re-run Task 5 Step 4's exact scenario against this build: `RUN PAINT`, confirm another window (FILES) redraws and responds while PLOOP loops, confirm paint/palette-pick/SAVE all still work -- now via the general per-frame path alone, with no `PALETTE-PICK`/`SAVE-PICK`/`REFRESH` primitives present at all. Additionally: click PAINT's window close button (X) while PLOOP is looping and confirm the window actually closes within roughly one frame (previously impossible; also the first real exercise of `WINDOW-CLOSED?`).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add kernel/forth.c kernel/forth_hooks.h kernel/kernel.c
@@ -1002,7 +1002,7 @@ git commit -m "kernel: delete PALETTE-PICK/SAVE-PICK/REFRESH workaround hooks, n
 **Interfaces:**
 - Consumes: `scheduler_current_slot()` (Task 2, also used since Task 4), `scheduler_request_close()` (Task 2).
 
-- [ ] **Step 1: Track which scheduler slot opened PAINT**
+- [x] **Step 1: Track which scheduler slot opened PAINT**
 
 Add a file-scope static near `paint`/`paint_save_btn`/`paint_name_input` (kernel.c:356-358):
 ```c
@@ -1019,7 +1019,7 @@ In `forth_hook_paint_open()` (kernel.c:533-, after Task 6's deletion its body no
 ```
 This runs from inside whichever program's own context called the `PAINT` Forth word, so `scheduler_current_slot()` correctly identifies that program's slot with no string-matching on what the script was named.
 
-- [ ] **Step 2: Request close when PAINT's window is closed**
+- [x] **Step 2: Request close when PAINT's window is closed**
 
 At kernel.c:2245-2246, currently:
 ```c
@@ -1038,7 +1038,7 @@ Change to:
 ```
 This is the forced backstop only -- the graceful path (Task 6's `WINDOW-CLOSED? +` in `PLOOP`'s `UNTIL`) is what normally makes the script exit on its very next iteration, well within the 60-frame grace period. `scheduler_request_close()` only matters when a script's own loop condition doesn't check `WINDOW-CLOSED?` at all (a future/edited script bug), which is exactly the case Step 3 below deliberately constructs to verify.
 
-- [ ] **Step 3: Build and test the graceful path (automated)**
+- [x] **Step 3: Build and test the graceful path (automated)**
 
 ```bash
 cd kernel && make clean && make
@@ -1046,7 +1046,7 @@ cd ../boot && make clean && make
 ```
 Headless QEMU: `RUN PAINT`, click the close button without right-clicking first -- confirm (screendump) the window disappears within about one frame, same as Task 6 Step 6 already established (this step just confirms `paint_program_slot`/`scheduler_request_close()` compile in and don't break that path).
 
-- [ ] **Step 4: Manually verify the forced-timeout path**
+- [x] **Step 4: Manually verify the forced-timeout path**
 
 This exercises the case where a script's own loop ignores the close signal -- not reachable through the shipped `PLOOP` script anymore (Task 6 made it check `WINDOW-CLOSED?`), so verify it using this OS's own `EDIT` command rather than a source change:
 1. Boot (headless or real hardware), open a SHELL or FORTH window, run `EDIT /BIN/PAINT`.
@@ -1057,7 +1057,7 @@ This exercises the case where a script's own loop ignores the close signal -- no
 
 Label this step's script edit explicitly as a throwaway verification, not a change to keep.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/kernel.c
@@ -1074,15 +1074,15 @@ git commit -m "kernel: wire close-then-timeout kill path for PAINT's scheduled p
 
 **Interfaces:** None -- documentation only.
 
-- [ ] **Step 1: Append a `docs/BUILD_LOG.md` entry**
+- [x] **Step 1: Append a `docs/BUILD_LOG.md` entry**
 
 Cover: the root cause (no timer interrupt, no preemption, `kmain()`'s loop fully blocked during any `BEGIN...UNTIL`), the fiber/`context_switch()` mechanism, auto-yield at every compiled `UNTIL`, `RUN` becoming async, the five deleted workaround hooks/primitives, the new `WINDOW-CLOSED?` word and kill-timeout path, and the observable behavior change (RUN-launched scripts no longer share dictionary state with the interactive console). Follow this project's established `## YYYY-MM-DD -- <title>` entry style (see the 2026-08-18 entry for the shape/depth expected).
 
-- [ ] **Step 2: Update `docs/IDEAS.md`**
+- [x] **Step 2: Update `docs/IDEAS.md`**
 
 Strike through the `kmain()`'s loop doesn't run at all while a Forth script's own loop blocks` entry (currently un-struck, describing exactly what this plan just fixed) with a `Done, <date>` note pointing at this plan/spec and the `BUILD_LOG.md` entry, following this file's existing convention for closed items (see the `A real path for user-written system programs` and `FILES' plain start-menu launcher shows stale data` entries for the exact strikethrough + "Done, date --" format).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/BUILD_LOG.md docs/IDEAS.md

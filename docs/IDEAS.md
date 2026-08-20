@@ -5,6 +5,16 @@ later. Entries here haven't been brainstormed, scoped, or committed to;
 they're a starting point for a future `superpowers:brainstorming` session,
 not a queue.
 
+- **`font.c`'s `?` and `/` glyphs render as zero-width.** Found
+  2026-08-20 while verifying the concurrency scheduler's kill-timeout
+  path: editing `/BIN/PAINT` live in the in-OS `EDIT` window showed
+  `MOUSE-DOWN? IF` and `EDIT /BIN/PAINT` with no visible `?`/`/` at
+  all -- the characters are genuinely present in the buffer (the file
+  still parses and runs correctly; `EDIT /BIN/PAINT` still resolves
+  the right path), it's purely a rendering gap. Cosmetic only, but a
+  real trap for anyone reading a script back through `EDIT` or `cat`
+  expecting to see punctuation that's actually there.
+
 - **256 colour.** The backbuffer/graphics pipeline is currently a fixed
   32-bit packed-RGB backdrop built around one near-black + acid-green
   palette (`graphics.c`, `kernel.c`'s `backdrop_color()`). Revisit

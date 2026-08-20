@@ -1670,6 +1670,31 @@ Unit-level: `kernel/tests/test_context_switch.c` and
 primitive in isolation and the scheduler's bounds-checking/canary/
 close-timeout paths directly -- both passing.
 
+**The forced-timeout path itself, verified separately** (the plan's
+Task 7 Step 4, done after the rest of this entry was first written):
+edited `/BIN/PAINT` live via `EDIT` to replace its `UNTIL` condition
+with a bare `0` -- a script that never exits on its own and never
+checks `WINDOW-CLOSED?` at all, simulating a genuinely hung program
+rather than one that just ignores a single check. Closed its window,
+then immediately launched three more `RUN PAINT`s to fill the
+remaining slots (`MAX_PROGRAMS = 4`) -- all three succeeded, confirming
+the closed-but-still-running slot didn't block anything else in the
+meantime. Since nothing in `scheduler.c` can free a `PROGRAM_READY`
+slot except natural script completion (impossible for this script) or
+the timeout branch in `scheduler_tick()`, a later `RUN PAINT` still
+succeeding is conclusive proof the forced-kill path fired for real in
+the kernel, not just in `test_scheduler.c`'s host-side simulation of
+it. Restored the original script afterward via `rm /BIN/PAINT` +
+reboot rather than retyping it by hand -- `seed_bin_paint_script()`'s
+idempotent create-if-missing reseeds it correctly on next boot, and is
+a more reliable restore path than the in-OS editor for a script this
+size. Separately noticed and worth flagging, not a regression from
+this work: the editor's `?` and `/` glyphs render as zero-width in
+this font (present in the buffer, invisible on screen) -- cosmetic
+only, confirmed by the file still parsing and running correctly, but a
+real gap if anyone's reading a script back through `EDIT` expecting to
+see punctuation that's actually there.
+
 Files: `kernel/context_switch.asm` (new), `kernel/scheduler.c`/`.h`
 (new), `kernel/tests/test_context_switch.c`/`test_scheduler.c` (new,
 host-built); `kernel/forth.c` (`OP_CALL_YIELD` emission at `UNTIL`,
