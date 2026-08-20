@@ -97,25 +97,18 @@ not a queue.
   titles/branding/docs, rather than leaving it ambiguous which name
   refers to what.
 
-- **`kmain()`'s loop doesn't run at all while a Forth script's own
-  loop blocks -- a real concurrency model, not another one-off hook.**
-  The root cause behind all five bugs the 2026-08-18 PAINT pass fixed:
-  every fix so far has been giving `PLOOP` its own copy of one more
-  piece of what `kmain()`'s loop normally does (`REFRESH`,
-  `PALETTE-PICK`, `SAVE-PICK`), one at a time, as each gap was
-  discovered. That's sustainable for one script but doesn't scale --
-  the real fix is some way for a script's `BEGIN...UNTIL` to yield
-  control back to `kmain()` periodically instead of looping forever
-  inside one call. Feasible without paging or process isolation:
-  `forth.c` already compiles words into real bytecode
-  (`OP_LITERAL`/`OP_CALL_WORD`/`OP_BRANCH`/...) with a persistent
-  `struct forth_vm` holding VM state across calls -- the right shape
-  for a resumable "run N steps, return, resume" scheduler. Raised
-  separately: real *process* separation (programs living outside the
-  kernel entirely, not just cooperative stepping inside it) is a
-  further, bigger ask than this -- worth distinguishing the two when
-  this gets designed, not conflating them. Treat as its own full
-  `superpowers:brainstorming` cycle, not a quick add-on.
+- ~~**`kmain()`'s loop doesn't run at all while a Forth script's own
+  loop blocks.**~~ Done, 2026-08-19/20 -- shipped as a real cooperative
+  scheduler, not another one-off hook: a fiber/coroutine primitive
+  (`context_switch.asm`), a fixed program-slot table (`scheduler.c`),
+  automatic yield insertion at every `BEGIN...UNTIL` back-edge, `RUN`
+  spawning a non-blocking scheduled program, and a close-then-timeout
+  kill path for a window whose program ignores a graceful close. Real
+  process isolation (ring 3/paging/syscalls) was explicitly scoped
+  out as "Rave-OS v2 scale" -- programs still share one address space,
+  ring 0, cooperative-only. See `docs/superpowers/specs/2026-08-19-concurrency-design.md`
+  and `docs/BUILD_LOG.md`'s entry for the same date for the full design
+  and verification.
 
 - ~~**FILES' plain start-menu launcher shows stale data.**~~ Done,
   2026-08-18 -- `STARTMENU_ITEM_FILES` now routes through

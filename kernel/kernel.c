@@ -357,6 +357,7 @@ struct paint {
 static struct paint paint;
 static struct button paint_save_btn;
 static struct console_input paint_name_input;
+static int paint_program_slot = -1;
 
 /* Same reachability problem mx/my/paint had above: forth_hook_paint_open()
  * (Task 3) needs to reach windows[WIN_KIND_PAINT].state and call
@@ -551,6 +552,7 @@ void forth_hook_paint_open(void) {
     }
     windows[WIN_KIND_PAINT].state = WINDOW_OPEN;
     raise_window(z_order, WIN_KIND_PAINT);
+    paint_program_slot = scheduler_current_slot();
 }
 
 void forth_hook_pixel(int x, int y, int color) {
@@ -2099,6 +2101,9 @@ void kmain(void) {
                      * real desktop. */
                     if (window_close_hit_test(&windows[target], cx, cy)) {
                         windows[target].state = WINDOW_CLOSED;
+                        if (target == WIN_KIND_PAINT && paint_program_slot >= 0) {
+                            scheduler_request_close(paint_program_slot);
+                        }
                     } else if (window_minimize_hit_test(&windows[target], cx, cy)) {
                         windows[target].state = WINDOW_MINIMIZED;
                     } else {

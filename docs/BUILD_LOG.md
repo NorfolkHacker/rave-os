@@ -1562,3 +1562,121 @@ widget plumbed through `move_window_content()`/`draw_paint_group()`/
 `draw_window_by_index()`/`draw_scene()`/`update_and_present()`, SAVE's
 click handler); `kernel/forth.c`/`forth_hooks.h` (`PALETTE-PICK`,
 `SAVE-PICK`); `boot/Makefile` (`-display sdl` restored).
+
+## 2026-08-19/20 -- Cooperative concurrency: real program slots instead of one more hook
+
+The 2026-08-18 entry above closed with a deliberate deferral: fixing
+PLOOP's dead-cursor/dead-palette/dead-SAVE bugs one hook at a time was
+whack-a-mole around one real cause, and the actual fix -- a way for a
+script's `BEGIN...UNTIL` to yield control back to `kmain()` instead of
+blocking it for the loop's whole lifetime -- was "a genuine architecture
+change... not a quick patch." This is that change, done as its own full
+`superpowers:brainstorming` cycle (spec at
+`docs/superpowers/specs/2026-08-19-concurrency-design.md`) rather than
+folded into anything else.
+
+**Scope, decided up front and held to.** Raised mid-brainstorm and
+explicitly widened from the original framing ("unblock kmain() while
+PLOOP runs") to the real ask: "I don't want PAINT or Forth as
+extensions to the kernel -- the kernel should be just that, a kernel,
+with anything else as a standalone program that runs concurrently."
+Two follow-up decisions kept that ask buildable without a from-scratch
+paging/ring-3/syscall project: programs get their own execution
+context but stay in the *same address space* (ring 0, no memory
+protection -- a real "Rave-OS v2" project was explicitly named and
+declined), and switching is *cooperative* (programs yield voluntarily;
+no timer-interrupt-driven preemption). The desktop/window-manager loop
+itself stays kernel-resident rather than becoming a scheduled program
+-- it's the one thing that must never freeze.
+
+**The mechanism: a real fiber/coroutine primitive, not a Forth-only
+patch.** `kernel/context_switch.asm` (new) is one symmetric asm
+routine -- push callee-saved registers, swap `esp`, pop the other
+side's registers, `ret` -- that resumes whichever side last called it,
+in either direction. `kernel/scheduler.c` (new) wraps it in a fixed
+`MAX_PROGRAMS`-slot table (4 slots, each an 8KB static stack -- no
+heap allocator exists), a stack-overflow canary checked before every
+switch into a slot, and `scheduler_tick()`, called unconditionally
+every `kmain()` frame, round-robining through `PROGRAM_READY` slots.
+Building this as a general primitive (not "make `forth_exec()`
+resumable") was the deliberate call: it works for any future
+standalone program, not just Forth-interpreted ones.
+
+**Wiring it to the actual bug.** `forth.c`'s `UNTIL` compilation
+(forth.c:521-531) already knows the exact bytecode offset of every
+loop back-edge -- it's what patches `OP_BRANCH_IF_ZERO`'s target. A
+new `OP_CALL_YIELD` is emitted immediately before that branch for
+*every* `BEGIN...UNTIL` compiled, with no script-author opt-in needed
+and no risk of a future script forgetting a yield call, since
+`BEGIN...UNTIL` is the only loop construct this Forth dialect has.
+`RUN` (`kernel.c`) changed from blocking `forth_eval_line()` until a
+script finishes to allocating a program slot, priming it with an entry
+function that runs the script, and returning immediately -- the
+console gets its prompt back right away instead of freezing for as
+long as the script's loop runs. This made `forth_hook_refresh()`/
+`forth_hook_palette_pick()`/`forth_hook_save_pick()` and their
+`REFRESH`/`PALETTE-PICK`/`SAVE-PICK` primitives dead code, deleted:
+once PLOOP actually yields every iteration, `kmain()`'s own per-frame
+redraw/hit-test code services PAINT's window exactly like every other
+window, with no special-casing.
+
+**Killing a hung program -- checked against the real script, not
+assumed.** PLOOP's `UNTIL` condition only checked
+`MOUSE-RIGHT-DOWN?` -- closing PAINT's window didn't signal the script
+at all, graceful or otherwise. Added `WINDOW-CLOSED?` (backed by a new
+`forth_hook_window_closed()`) and folded it into `bin_paint_default[]`'s
+`UNTIL` line via `+` as logical OR (matching this dialect's existing
+`*`-as-AND convention), so closing the window now makes the script
+exit gracefully on its next iteration -- the normal path. For the case
+where a program ignores that (bug, not the common case): `kmain()`'s
+close-button handler now calls `scheduler_request_close()` on
+whichever slot the window's program is running in
+(`forth_hook_paint_open()` records `paint_program_slot =
+scheduler_current_slot()` the moment PAINT's window opens, so no
+string-matching on the `RUN` argument is needed); if a program hasn't
+freed its own slot within `SCHEDULER_CLOSE_GRACE_FRAMES` (60 frames)
+of that request, `scheduler_tick()` force-frees it, abandoning its
+stack outright -- safe here specifically because nothing in this
+kernel holds an open resource across calls. No new UI: this reuses the
+existing window-close button, escalating from graceful to forced
+instead of waiting forever. This is the one piece that shipped today,
+closing out the design -- everything else above landed 2026-08-19.
+
+**What this doesn't cover, by design, not oversight.** A program stuck
+in a loop with no `BEGIN...UNTIL` back-edge at all can't be reached by
+any of this -- cooperative scheduling only regains control at a
+`yield()` call, and there's no interrupt forcing one. Out of scope,
+named explicitly during the brainstorm: real process isolation (ring
+3, paging, a syscall ABI -- "Rave-OS v2 scale, not an incremental
+step") and multiple concurrent Forth interpreters sharing state (each
+scheduled Forth program gets its own private `struct forth_vm` --
+words a `RUN`-launched script defines are no longer visible to the
+interactive console after it finishes, a real behavior change from
+before, not just an implementation detail).
+
+**Verified headlessly (QEMU, `-display none` + monitor + screendump,
+this session's established pattern), the actual regression this whole
+design targets**: `RUN PAINT` now returns the console's prompt
+immediately -- confirmed by screendump showing a fresh, ready input box
+while PAINT's window is already fully drawn, something structurally
+impossible under the old blocking model, where `forth_eval_line()`
+wouldn't return until PLOOP's loop exited. Closing PAINT's window mid-loop
+closes it cleanly with the desktop staying fully responsive (FORTH
+console still live, MENU still clickable) -- then `RUN PAINT` was
+run and closed repeatedly in a row with no "too many programs" error,
+confirming slots actually free and get reused rather than leaking.
+Unit-level: `kernel/tests/test_context_switch.c` and
+`test_scheduler.c` (host-built, no QEMU needed) cover the fiber
+primitive in isolation and the scheduler's bounds-checking/canary/
+close-timeout paths directly -- both passing.
+
+Files: `kernel/context_switch.asm` (new), `kernel/scheduler.c`/`.h`
+(new), `kernel/tests/test_context_switch.c`/`test_scheduler.c` (new,
+host-built); `kernel/forth.c` (`OP_CALL_YIELD` emission at `UNTIL`,
+`WINDOW-CLOSED?`); `kernel/kernel.c` (`scheduler_tick()` wired into
+`kmain()`'s frame loop, idle-hlt starvation fix, `RUN` spawns a
+program instead of blocking, `paint_program_slot` tracking +
+close-button wiring to `scheduler_request_close()`, deletion of
+`forth_hook_refresh()`/`forth_hook_palette_pick()`/`forth_hook_save_pick()`
+and their primitive-table entries); `kernel/Makefile` (new object
+files). Design: `docs/superpowers/specs/2026-08-19-concurrency-design.md`.
