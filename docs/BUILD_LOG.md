@@ -1705,3 +1705,32 @@ close-button wiring to `scheduler_request_close()`, deletion of
 `forth_hook_refresh()`/`forth_hook_palette_pick()`/`forth_hook_save_pick()`
 and their primitive-table entries); `kernel/Makefile` (new object
 files). Design: `docs/superpowers/specs/2026-08-19-concurrency-design.md`.
+
+## 2026-08-20 -- Fixed: `?` glyph missing from `font.c`
+
+`docs/IDEAS.md`'s previous entry (found the day before, while
+verifying the scheduler's forced-timeout kill path) reported both `?`
+and `/` rendering as invisible in the in-OS `EDIT` window. Root-caused
+with `superpowers:systematic-debugging` before touching anything:
+wrote a small host-built probe that dumps `font_glyph()`'s raw 7x5
+bitmap for a character, and it showed `/` already had a correct,
+non-blank `G_SLASH` pattern -- just a sparse single-pixel diagonal,
+easy to mistake for blank in a quick look. `?` was the real bug: no
+`G_QMARK` array existed anywhere in `kernel/gfx/font.c`, and no `case
+'?'` in `font_glyph()`'s switch, so it silently fell through to the
+`default: return G_SPACE;` branch -- rendering identically to an
+actual space, with no error or warning anywhere in the pipeline.
+
+Fixed by adding a `G_QMARK` glyph and its switch case, following the
+file's existing pattern. Added `kernel/tests/test_font.c` (host-built,
+no QEMU needed, same convention as `test_scheduler.c`/
+`test_context_switch.c`) as a regression guard: it asserts every
+character `font_glyph()` claims to cover (the full switch list) comes
+back non-blank, so a future glyph silently missing its case fails the
+test instead of rendering as invisible on screen. Confirmed the fix by
+re-running the same host probe (`?` now shows a real bitmap) and
+`test_font.c` (FAIL before the fix, PASS after); `kernel/Makefile`'s
+`font.o`/`text.o` targets still build clean with no new warnings.
+
+Files: `kernel/gfx/font.c` (`G_QMARK` + `case '?'`);
+`kernel/tests/test_font.c` (new, host-built).

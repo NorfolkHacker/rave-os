@@ -61,6 +61,7 @@ static const char *const G_PLUS[7]  = {".....","..X..","..X..","XXXXX","..X..","
 static const char *const G_STAR[7]  = {".....","..X..","X.X.X",".XXX.","X.X.X","..X..","....."};
 static const char *const G_SLASH[7] = {"....X","...X.","...X.","..X..",".X...",".X...","X...."};
 static const char *const G_AT[7]    = {".XXX.","X...X","X.XXX","X.X.X","X.XX.","X....",".XXX."};
+static const char *const G_QMARK[7] = {".XXX.","X...X","....X","...X.","..X..",".....","..X.."};
 
 static char raveos_toupper(char c) {
     if (c >= 'a' && c <= 'z') {
@@ -100,6 +101,7 @@ const char *const *font_glyph(char c) {
         case '*': return G_STAR;
         case '/': return G_SLASH;
         case '@': return G_AT;
+        case '?': return G_QMARK;
         case ' ': default: return G_SPACE;
     }
 }

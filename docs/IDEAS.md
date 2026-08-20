@@ -5,15 +5,19 @@ later. Entries here haven't been brainstormed, scoped, or committed to;
 they're a starting point for a future `superpowers:brainstorming` session,
 not a queue.
 
-- **`font.c`'s `?` and `/` glyphs render as zero-width.** Found
-  2026-08-20 while verifying the concurrency scheduler's kill-timeout
-  path: editing `/BIN/PAINT` live in the in-OS `EDIT` window showed
-  `MOUSE-DOWN? IF` and `EDIT /BIN/PAINT` with no visible `?`/`/` at
-  all -- the characters are genuinely present in the buffer (the file
-  still parses and runs correctly; `EDIT /BIN/PAINT` still resolves
-  the right path), it's purely a rendering gap. Cosmetic only, but a
-  real trap for anyone reading a script back through `EDIT` or `cat`
-  expecting to see punctuation that's actually there.
+- ~~**`font.c`'s `?` and `/` glyphs render as zero-width.**~~ Done,
+  2026-08-20. Root cause turned out to be narrower than the original
+  report: `/` already had a correct, non-blank `G_SLASH` glyph in
+  `kernel/gfx/font.c` all along (confirmed with a host-built probe
+  dumping its 7x5 bitmap) -- it's just a sparse single-pixel diagonal,
+  easy to mistake for blank at a glance. `?` was the real bug: no
+  `G_QMARK` glyph existed anywhere and no `case '?'` in `font_glyph()`'s
+  switch, so it silently fell through to the default space glyph.
+  Fixed by adding `G_QMARK` and its case. Added
+  `kernel/tests/test_font.c` (host-built, no QEMU needed) as a
+  regression guard -- it checks every character `font_glyph()` claims
+  to cover renders as non-blank, so a future glyph silently missing
+  its switch case fails loudly instead of rendering as invisible.
 
 - **256 colour.** The backbuffer/graphics pipeline is currently a fixed
   32-bit packed-RGB backdrop built around one near-black + acid-green
@@ -138,3 +142,27 @@ not a queue.
   raised the same day: what Rave-OS's actual minimum viable
   RAM/CPU footprint even is -- worth answering before building a
   config screen around it.
+
+- **A real cross-compilation toolchain, not host `gcc -m32`.** Raised
+  2026-08-20. The kernel currently builds with the host's own `gcc`
+  (inside the `forth-os` distrobox container) using `-m32 -ffreestanding
+  -nostdlib` flags to approximate freestanding i686 output -- it works,
+  but it's borrowing a hosted compiler's target rather than actually
+  cross-compiling, which risks host-toolchain-version drift (a `gcc`
+  upgrade silently changing codegen/ABI assumptions) and means anyone
+  building Rave-OS needs a Linux host with 32-bit multilib support, not
+  just any machine. A proper `i686-elf-gcc`/binutils cross-compiler
+  (the classic OSDev-recommended setup) would remove both constraints.
+  Not urgent -- the current setup works and boots on real hardware --
+  but worth doing before this becomes a distribution/onboarding problem.
+
+- **Different resolution settings, not just the one hardcoded
+  640x480.** Raised 2026-08-20. `boot/stage2.asm`'s `VBE_MODE` is
+  hardcoded to `0x112` (640x480, 32bpp) -- the kernel has no path to
+  request or fall back across multiple VBE modes at all. Worth
+  revisiting once there's an actual reason to want more screen space
+  (PAINT's palette-chooser redesign above is one candidate), but a real
+  feature here means both stage2 querying/selecting among multiple VBE
+  modes and the whole GUI layer's widgets (`kernel.c`'s window-pipeline
+  functions, `taskbar.c`, `startmenu.c`, etc.) no longer assuming one
+  fixed screen size -- likely a bigger lift than it first sounds.
