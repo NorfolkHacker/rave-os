@@ -2,7 +2,7 @@
  * freestanding-only dependencies, so it compiles and runs natively
  * here exactly as it will inside kernel.bin. */
 #include <stdio.h>
-#include "../scheduler.h"
+#include "../sched/scheduler.h"
 
 /* Test-only helper from scheduler.c */
 extern void scheduler_test_corrupt_stack(int slot);

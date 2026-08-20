@@ -3,104 +3,112 @@ AS := nasm
 LD := ld
 OBJCOPY := objcopy
 
+# Quoted #include "foo.h" lines throughout the tree stay bare filenames
+# (no "../gfx/" style relative paths) -- these -I flags are what resolve
+# them across the arch/drivers/sched/fs/forth/gfx/gui split below, the
+# same way a real toolchain's module layout usually works. Object files
+# stay flat in kernel/ regardless of which subdirectory their source
+# lives in -- one build directory, not one per subsystem.
+INCLUDES := -I. -Iarch -Idrivers -Isched -Ifs -Iforth -Igfx -Igui
+
 # -mgeneral-regs-only: GCC's __attribute__((interrupt)) handlers (isr.c)
 # must never touch FPU/MMX/SSE registers -- there's no FPU state
 # save/restore around interrupt entry/exit, so any incidental use (even
 # compiler-generated) would corrupt whatever the interrupted code was
 # doing with it. This also just suits a kernel with no FPU context
 # switching at all yet.
-CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra
+CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra $(INCLUDES)
 
 C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o desktop_icon.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o fs.o editor.o serial.o scheduler.o
 
 all: kernel.bin
 
-kernel_entry.o: kernel_entry.asm
-	$(AS) -f elf32 kernel_entry.asm -o kernel_entry.o
+kernel_entry.o: arch/kernel_entry.asm
+	$(AS) -f elf32 arch/kernel_entry.asm -o kernel_entry.o
 
-context_switch.o: context_switch.asm
-	$(AS) -f elf32 context_switch.asm -o context_switch.o
+context_switch.o: sched/context_switch.asm
+	$(AS) -f elf32 sched/context_switch.asm -o context_switch.o
 
-kernel.o: kernel.c graphics.h text.h mouse.h keyboard.h interrupts.h window.h button.h taskbar.h startmenu.h console_input.h console_history.h console_output.h forth.h shell.h io.h ata.h fs.h editor.h forth_hooks.h serial.h scheduler.h
+kernel.o: kernel.c gfx/graphics.h gfx/text.h drivers/mouse.h drivers/keyboard.h arch/interrupts.h gui/window.h gui/button.h gui/taskbar.h gui/startmenu.h gui/console_input.h gui/console_history.h gui/console_output.h forth/forth.h gui/shell.h arch/io.h drivers/ata.h fs/fs.h gui/editor.h forth/forth_hooks.h drivers/serial.h sched/scheduler.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
-keyboard.o: keyboard.c keyboard.h
-	$(CC) $(CFLAGS) -c keyboard.c -o keyboard.o
+keyboard.o: drivers/keyboard.c drivers/keyboard.h
+	$(CC) $(CFLAGS) -c drivers/keyboard.c -o keyboard.o
 
-mouse.o: mouse.c mouse.h io.h
-	$(CC) $(CFLAGS) -c mouse.c -o mouse.o
+mouse.o: drivers/mouse.c drivers/mouse.h arch/io.h
+	$(CC) $(CFLAGS) -c drivers/mouse.c -o mouse.o
 
-idt.o: idt.c idt.h
-	$(CC) $(CFLAGS) -c idt.c -o idt.o
+idt.o: arch/idt.c arch/idt.h
+	$(CC) $(CFLAGS) -c arch/idt.c -o idt.o
 
-pic.o: pic.c pic.h io.h
-	$(CC) $(CFLAGS) -c pic.c -o pic.o
+pic.o: arch/pic.c arch/pic.h arch/io.h
+	$(CC) $(CFLAGS) -c arch/pic.c -o pic.o
 
-isr.o: isr.c idt.h pic.h io.h interrupts.h keyboard.h mouse.h graphics.h text.h
-	$(CC) $(CFLAGS) -c isr.c -o isr.o
+isr.o: arch/isr.c arch/idt.h arch/pic.h arch/io.h arch/interrupts.h drivers/keyboard.h drivers/mouse.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c arch/isr.c -o isr.o
 
-graphics.o: graphics.c graphics.h boot_info.h
-	$(CC) $(CFLAGS) -c graphics.c -o graphics.o
+graphics.o: gfx/graphics.c gfx/graphics.h boot_info.h
+	$(CC) $(CFLAGS) -c gfx/graphics.c -o graphics.o
 
-font.o: font.c font.h
-	$(CC) $(CFLAGS) -c font.c -o font.o
+font.o: gfx/font.c gfx/font.h
+	$(CC) $(CFLAGS) -c gfx/font.c -o font.o
 
-text.o: text.c text.h font.h graphics.h
-	$(CC) $(CFLAGS) -c text.c -o text.o
+text.o: gfx/text.c gfx/text.h gfx/font.h gfx/graphics.h
+	$(CC) $(CFLAGS) -c gfx/text.c -o text.o
 
-window.o: window.c window.h graphics.h text.h
-	$(CC) $(CFLAGS) -c window.c -o window.o
+window.o: gui/window.c gui/window.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/window.c -o window.o
 
-button.o: button.c button.h graphics.h text.h
-	$(CC) $(CFLAGS) -c button.c -o button.o
+button.o: gui/button.c gui/button.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/button.c -o button.o
 
-textfield.o: textfield.c textfield.h graphics.h text.h
-	$(CC) $(CFLAGS) -c textfield.c -o textfield.o
+textfield.o: gui/textfield.c gui/textfield.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/textfield.c -o textfield.o
 
-checkbox.o: checkbox.c checkbox.h graphics.h text.h
-	$(CC) $(CFLAGS) -c checkbox.c -o checkbox.o
+checkbox.o: gui/checkbox.c gui/checkbox.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/checkbox.c -o checkbox.o
 
-taskbar.o: taskbar.c taskbar.h window.h graphics.h text.h
-	$(CC) $(CFLAGS) -c taskbar.c -o taskbar.o
+taskbar.o: gui/taskbar.c gui/taskbar.h gui/window.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/taskbar.c -o taskbar.o
 
-desktop_icon.o: desktop_icon.c desktop_icon.h window.h graphics.h text.h
-	$(CC) $(CFLAGS) -c desktop_icon.c -o desktop_icon.o
+desktop_icon.o: gui/desktop_icon.c gui/desktop_icon.h gui/window.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/desktop_icon.c -o desktop_icon.o
 
-startmenu.o: startmenu.c startmenu.h graphics.h text.h
-	$(CC) $(CFLAGS) -c startmenu.c -o startmenu.o
+startmenu.o: gui/startmenu.c gui/startmenu.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/startmenu.c -o startmenu.o
 
-shell.o: shell.c shell.h fs.h
-	$(CC) $(CFLAGS) -c shell.c -o shell.o
+shell.o: gui/shell.c gui/shell.h fs/fs.h
+	$(CC) $(CFLAGS) -c gui/shell.c -o shell.o
 
-console_input.o: console_input.c console_input.h graphics.h text.h
-	$(CC) $(CFLAGS) -c console_input.c -o console_input.o
+console_input.o: gui/console_input.c gui/console_input.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/console_input.c -o console_input.o
 
-console_history.o: console_history.c console_history.h console_input.h
-	$(CC) $(CFLAGS) -c console_history.c -o console_history.o
+console_history.o: gui/console_history.c gui/console_history.h gui/console_input.h
+	$(CC) $(CFLAGS) -c gui/console_history.c -o console_history.o
 
-console_output.o: console_output.c console_output.h text.h
-	$(CC) $(CFLAGS) -c console_output.c -o console_output.o
+console_output.o: gui/console_output.c gui/console_output.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/console_output.c -o console_output.o
 
-editor.o: editor.c editor.h graphics.h text.h
-	$(CC) $(CFLAGS) -c editor.c -o editor.o
+editor.o: gui/editor.c gui/editor.h gfx/graphics.h gfx/text.h
+	$(CC) $(CFLAGS) -c gui/editor.c -o editor.o
 
-forth.o: forth.c forth.h forth_hooks.h
-	$(CC) $(CFLAGS) -c forth.c -o forth.o
+forth.o: forth/forth.c forth/forth.h forth/forth_hooks.h
+	$(CC) $(CFLAGS) -c forth/forth.c -o forth.o
 
-ata.o: ata.c ata.h io.h
-	$(CC) $(CFLAGS) -c ata.c -o ata.o
+ata.o: drivers/ata.c drivers/ata.h arch/io.h
+	$(CC) $(CFLAGS) -c drivers/ata.c -o ata.o
 
-fs.o: fs.c fs.h ata.h
-	$(CC) $(CFLAGS) -c fs.c -o fs.o
+fs.o: fs/fs.c fs/fs.h drivers/ata.h
+	$(CC) $(CFLAGS) -c fs/fs.c -o fs.o
 
-serial.o: serial.c serial.h io.h
-	$(CC) $(CFLAGS) -c serial.c -o serial.o
+serial.o: drivers/serial.c drivers/serial.h arch/io.h
+	$(CC) $(CFLAGS) -c drivers/serial.c -o serial.o
 
-scheduler.o: scheduler.c scheduler.h
-	$(CC) $(CFLAGS) -c scheduler.c -o scheduler.o
+scheduler.o: sched/scheduler.c sched/scheduler.h
+	$(CC) $(CFLAGS) -c sched/scheduler.c -o scheduler.o
 
-kernel.elf: kernel_entry.o context_switch.o $(C_OBJS) linker.ld
-	$(LD) -m elf_i386 -T linker.ld -nostdlib -o kernel.elf kernel_entry.o context_switch.o $(C_OBJS)
+kernel.elf: kernel_entry.o context_switch.o $(C_OBJS) arch/linker.ld
+	$(LD) -m elf_i386 -T arch/linker.ld -nostdlib -o kernel.elf kernel_entry.o context_switch.o $(C_OBJS)
 
 # No sector-boundary padding or size budget here anymore -- just the raw
 # compiled bytes. boot/Makefile is the sole place that now computes how
