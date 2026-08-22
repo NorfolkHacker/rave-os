@@ -575,7 +575,14 @@ static void draw_paint_group(const struct window *win, const struct paint *pt, c
             int sx = canvas_x + pcol * (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
             int sy = canvas_y + prow * (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
 
-            gfx_fill_rect(sx, sy, PAINT_POPUP_SWATCH, PAINT_POPUP_SWATCH, paint_palette[pi]);
+            uint32_t swatch_color = paint_palette[pi];
+            if (pt->palette_hidden_mask & (1u << pi)) {
+                /* Halves each RGB channel -- no blending primitive
+                 * needed, just a bit-shift, enough to read as "dimmed"
+                 * against the popup's dark backing. */
+                swatch_color = (swatch_color >> 1) & 0x7F7F7F;
+            }
+            gfx_fill_rect(sx, sy, PAINT_POPUP_SWATCH, PAINT_POPUP_SWATCH, swatch_color);
             if (pi == pt->current_color) {
                 gfx_fill_rect(sx, sy, PAINT_POPUP_SWATCH, 2, 0x00FF66);
                 gfx_fill_rect(sx, sy + PAINT_POPUP_SWATCH - 2, PAINT_POPUP_SWATCH, 2, 0x00FF66);
@@ -2014,6 +2021,7 @@ void kmain(void) {
         int old_paint_load_btn_hovered = paint_load_btn.hovered;
         int old_paint_load_btn_pressed = paint_load_btn.pressed;
         int old_paint_palette_popup_open = paint.palette_popup_open;
+        uint32_t old_paint_palette_hidden_mask = paint.palette_hidden_mask;
         int old_paint_name_input_len = paint_name_input.len;
         int old_paint_name_input_cursor = paint_name_input.cursor;
         int old_paint_name_input_focused = paint_name_input.focused;
@@ -2471,13 +2479,28 @@ void kmain(void) {
                             }
                         } else {
                             int swatch = paint_popup_grid_hit_test(&windows[WIN_KIND_PAINT], cx, cy);
-                            if (swatch >= 0) {
+                            /* A hidden swatch can't be selected -- same
+                             * "no-error-UI, silent no-op" convention
+                             * SAVE/LOAD's own failure paths already use
+                             * -- but the popup stays open either way,
+                             * so a miss or a hidden pick doesn't force
+                             * the user to reopen it. */
+                            if (swatch >= 0 && !(paint.palette_hidden_mask & (1u << swatch))) {
                                 paint.current_color = swatch;
+                                paint.palette_popup_open = 0;
+                            } else if (swatch < 0) {
+                                paint.palette_popup_open = 0;
                             }
-                            paint.palette_popup_open = 0;
                         }
                     } else if (paint.palette_popup_open) {
                         paint.palette_popup_open = 0;
+                    }
+                }
+
+                if (paint_is_topmost && paint.palette_popup_open && right_held && !prev_right_held) {
+                    int swatch = paint_popup_grid_hit_test(&windows[WIN_KIND_PAINT], cx, cy);
+                    if (swatch >= 0) {
+                        paint.palette_hidden_mask ^= 1u << swatch;
                     }
                 }
 
@@ -2821,7 +2844,8 @@ void kmain(void) {
                                       (paint_save_btn.pressed != old_paint_save_btn_pressed) ||
                                       (paint_load_btn.hovered != old_paint_load_btn_hovered) ||
                                       (paint_load_btn.pressed != old_paint_load_btn_pressed) ||
-                                      (paint.palette_popup_open != old_paint_palette_popup_open);
+                                      (paint.palette_popup_open != old_paint_palette_popup_open) ||
+                                      (paint.palette_hidden_mask != old_paint_palette_hidden_mask);
             {
                 struct window_content wc = {
                     .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
