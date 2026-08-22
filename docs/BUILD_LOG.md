@@ -1887,3 +1887,39 @@ Files: `kernel/gui/desktop_icon.c`/`.h` (deleted); `kernel/Makefile`
 (object list + build rule removed); `kernel/gui/shell.c`,
 `kernel/gui/startmenu.c`, `kernel/gui/startmenu.h` (stale comment
 references dropped).
+
+## 2026-08-22 -- SHELL can now RUN programs, not just EDIT them
+
+First sub-project of `docs/IDEAS.md`'s "PAINT sprite editor" item
+(decomposed into four independent pieces via `superpowers:brainstorming`
+-- SHELL launch, a palette-chooser popup, delete-colors, and LOAD;
+this closes out just the first). SHELL already special-cased `EDIT`
+before falling through to `shell_eval_line()` (its own comment already
+called it "a console-level convenience like RUN"), but had no way to
+launch a scheduled program at all -- only the FORTH console's `RUN`
+could.
+
+Extracted `handle_run_command(struct console_output *out_co, const
+char *run_arg)` from the FORTH console's previously-inline RUN-launch
+block (slot reservation, `/BIN/`-prefix-and-uppercase path resolution,
+`forth_init`, `scheduler_activate`) so both consoles share one
+implementation instead of duplicating it -- `out_co` is wherever the
+launched program's output (or a failure message) should land, not
+hardcoded to FORTH's own console. FORTH's existing `RUN` branch now
+just calls it; SHELL's dispatch gained one more `else if` alongside its
+existing `EDIT` check, reusing the already-generic `match_run_command()`
+un-changed.
+
+Verified via a clean full rebuild plus a headless QEMU pass: `RUN
+HELLO` typed into SHELL launched `/BIN/HELLO` and printed `42` into
+the SHELL console (not FORTH's); `RUN NOPE` correctly reported the
+failure into the SHELL console too. One real headless-testing gap hit
+along the way, not a kernel bug: QEMU's `sendkey enter` produced
+nothing over the monitor socket in this build -- `sendkey ret` worked.
+One pre-existing, unrelated gap noticed while reading the failure
+screendump: `(RUN FAILED)`'s parentheses rendered invisible --
+`font.c` has no glyphs for `(`/`)`, same class of bug as the earlier
+missing `?` glyph. Not fixed here; flagged in `docs/IDEAS.md`.
+
+Files: `kernel/kernel.c` (`handle_run_command()`, new; FORTH's RUN
+branch simplified to call it; SHELL's dispatch gained a RUN branch).

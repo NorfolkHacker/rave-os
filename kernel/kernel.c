@@ -941,6 +941,43 @@ static void run_program_entry(void *arg) {
     }
 }
 
+/* Launches a RUN target: reserves a scheduler slot, resolves run_arg to
+ * a /BIN/-relative or absolute path (uppercased, same filesystem
+ * convention as before), and activates it via run_program_entry() --
+ * shared by both consoles that intercept RUN (the FORTH console and
+ * SHELL), so a future third console picks it up by calling this
+ * instead of re-deriving the same path/scheduler dance. out_co is
+ * where the launched program's own output (or a failure message) goes
+ * -- each caller's own console, not necessarily the FORTH one. */
+static void handle_run_command(struct console_output *out_co, const char *run_arg) {
+    int run_slot = scheduler_reserve("RUN");
+    if (run_slot < 0) {
+        console_output_append_line(out_co, "(TOO MANY PROGRAMS RUNNING)");
+    } else {
+        struct run_program_ctx *ctx = &run_ctxs[run_slot];
+        int rpos = 0;
+
+        forth_init(&ctx->vm);
+        ctx->co = out_co;
+        /* Same case-fold as before (see the old forth_run_command()'s
+         * comment, now moved here): every real path in this filesystem
+         * is uppercase by convention, and fs.c's lookups are
+         * byte-exact. */
+        if (run_arg[0] == '/') {
+            str_append(ctx->path, &rpos, (int)sizeof(ctx->path), run_arg);
+        } else {
+            str_append(ctx->path, &rpos, (int)sizeof(ctx->path), "/BIN/");
+            str_append(ctx->path, &rpos, (int)sizeof(ctx->path), run_arg);
+        }
+        for (rpos = 0; ctx->path[rpos]; rpos++) {
+            if (ctx->path[rpos] >= 'a' && ctx->path[rpos] <= 'z') {
+                ctx->path[rpos] = (char)(ctx->path[rpos] - 32);
+            }
+        }
+        scheduler_activate(run_slot, run_program_entry, ctx);
+    }
+}
+
 #define ETC_CONFIG_PATH "/ETC/CONFIG"
 
 /* Seeds /ETC/CONFIG with today's default if missing (same idempotent
@@ -2426,33 +2463,7 @@ void kmain(void) {
                      * word). */
                     run_arg = vm.compiling ? 0 : match_run_command(ci.text);
                     if (run_arg) {
-                        int run_slot = scheduler_reserve("RUN");
-                        if (run_slot < 0) {
-                            console_output_append_line(&co, "(TOO MANY PROGRAMS RUNNING)");
-                        } else {
-                            struct run_program_ctx *ctx = &run_ctxs[run_slot];
-                            int rpos = 0;
-
-                            forth_init(&ctx->vm);
-                            ctx->co = &co;
-                            /* Same case-fold as before (see the old
-                             * forth_run_command()'s comment, now moved
-                             * here): every real path in this filesystem
-                             * is uppercase by convention, and fs.c's
-                             * lookups are byte-exact. */
-                            if (run_arg[0] == '/') {
-                                str_append(ctx->path, &rpos, (int)sizeof(ctx->path), run_arg);
-                            } else {
-                                str_append(ctx->path, &rpos, (int)sizeof(ctx->path), "/BIN/");
-                                str_append(ctx->path, &rpos, (int)sizeof(ctx->path), run_arg);
-                            }
-                            for (rpos = 0; ctx->path[rpos]; rpos++) {
-                                if (ctx->path[rpos] >= 'a' && ctx->path[rpos] <= 'z') {
-                                    ctx->path[rpos] = (char)(ctx->path[rpos] - 32);
-                                }
-                            }
-                            scheduler_activate(run_slot, run_program_entry, ctx);
-                        }
+                        handle_run_command(&co, run_arg);
                     } else {
                         char out[128];
                         /* forth_eval_line() never touches console_output.h
@@ -2494,6 +2505,7 @@ void kmain(void) {
                      * same as any other long line in this console. */
                     char echoed[FS_PATH_MAX + CONSOLE_INPUT_MAX + 8];
                     const char *edit_arg;
+                    const char *run_arg;
                     int pos = 0;
 
                     str_append(echoed, &pos, (int)sizeof(echoed), sh.cwd);
@@ -2501,14 +2513,17 @@ void kmain(void) {
                     str_append(echoed, &pos, (int)sizeof(echoed), shell_ci.text);
                     console_output_append_line(&shell_co, echoed);
 
-                    /* EDIT is a console-level convenience like RUN, not
-                     * a real shell_eval_line() command -- intercepted
+                    /* EDIT and RUN are console-level conveniences, not
+                     * real shell_eval_line() commands -- intercepted
                      * before falling through, same precedent RUN
                      * already set for FORTH. */
                     edit_arg = match_edit_command(shell_ci.text);
+                    run_arg = match_run_command(shell_ci.text);
                     if (edit_arg) {
                         handle_edit_command(&sh, &ed, editor_path, (int)sizeof(editor_path), editor_title,
                                             (int)sizeof(editor_title), windows, z_order, &shell_co, edit_arg);
+                    } else if (run_arg) {
+                        handle_run_command(&shell_co, run_arg);
                     } else {
                         char shell_out[VIEWER_BUF_SIZE];
                         shell_eval_line(&sh, shell_ci.text, shell_out, (int)sizeof(shell_out));

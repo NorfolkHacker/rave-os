@@ -5,6 +5,13 @@ later. Entries here haven't been brainstormed, scoped, or committed to;
 they're a starting point for a future `superpowers:brainstorming` session,
 not a queue.
 
+- **`font.c` has no glyphs for `(`/`)` -- render invisible, same class
+  of bug as the `?`/`/` one below.** Found 2026-08-22 while verifying
+  SHELL's new `RUN` support: `(RUN FAILED)` rendered with both
+  parentheses blank, indistinguishable from spaces. Same fix shape as
+  the `?` glyph fix -- add `G_LPAREN`/`G_RPAREN` and their `case`s in
+  `font_glyph()`'s switch, and add them to `test_font.c`'s covered set.
+
 - ~~**`font.c`'s `?` and `/` glyphs render as zero-width.**~~ Done,
   2026-08-20. Root cause turned out to be narrower than the original
   report: `/` already had a correct, non-blank `G_SLASH` glyph in
@@ -75,10 +82,12 @@ not a queue.
   bug the 2026-08-18 pass fixed (see above) -- these are the parts of
   that same report that weren't about the bug itself and are still
   open:
-  - **Should launch from SHELL, not just via `RUN PAINT` typed into a
-    FORTH console window.** It already lives in `/BIN`; SHELL should be
-    able to run it directly the way it runs any other `/BIN` script,
-    without requiring the user to first open a separate FORTH window.
+  - ~~**Should launch from SHELL, not just via `RUN PAINT` typed into a
+    FORTH console window.**~~ Done, 2026-08-22 -- SHELL now intercepts
+    `RUN <target>` the same way it already intercepted `EDIT`, sharing
+    a new `handle_run_command()` with the FORTH console instead of
+    duplicating the launch logic. See `docs/BUILD_LOG.md`'s entry for
+    the same date.
   - **The 8-color bottom-strip palette is too small and always visible,
     wasting canvas space.** Wanted instead: a real palette-chooser
     popup/dialog that appears on demand, not a fixed strip -- almost
