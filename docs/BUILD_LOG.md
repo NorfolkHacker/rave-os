@@ -1777,3 +1777,61 @@ Files: `kernel/drivers/keyboard.h`/`keyboard.c` (three new keys);
 `kernel/gui/editor.h`/`editor.c` (three new functions);
 `kernel/kernel.c` (three new dispatch branches); `kernel/tests/test_editor.c`
 (new, host-built).
+
+## 2026-08-22 -- Struct-based refactor of the window-content pipeline
+
+`docs/IDEAS.md` had flagged this twice: `move_window_content()`,
+`draw_files_group()`, `draw_window_by_index()`, `draw_scene()`, and
+`update_and_present()` had each been hand-widened every time a window
+kind added its own widgets (FILES' clipboard buttons, the editor's
+`ed`/`save_btn`, ...) -- `update_and_present()` alone was up to roughly
+30 parameters. A fifth (now the case) or sixth window kind would widen
+all five signatures again.
+
+Followed `superpowers:brainstorming`'s bounded path. Added one
+`struct window_content` bundling the 19 widget/state fields that
+appear across some subset of those five functions (`co`/`ci`/
+`shell_co`/`shell_ci`, `cwd`/`file_entries`/`file_entry_count`/
+`files_selected_mask`, the FILES button set, `ed`/`save_btn`, and the
+PAINT set) -- scene-level parameters (`w`/`h`/`fx_enabled`/`windows`/
+`z_order`/`bar`/`menu`/damage-tracking arrays) stayed as individual
+parameters, since they aren't per-window-kind content. Cut
+`move_window_content()` from 18 params to 4, `draw_files_group()` from
+11 to 2, `draw_window_by_index()` from 20 to 3, `draw_scene()` from 29
+to 13, `update_and_present()` from ~35 to 22. `draw_forth_group()`/
+`draw_shell_group()`/`draw_editor_group()`/`draw_paint_group()` (3-4
+params each) were never the problem and stayed untouched.
+
+Chose one struct with plain (non-const) fields over a matching
+const-pointee twin: `move_window_content()` mutates widget positions
+directly, and the four read-only callers taking `const struct
+window_content *` lose the compiler's enforcement that they can't
+write through it (though nothing stops them from actually doing so) --
+accepted as the simpler tradeoff, consistent with how much of this
+codebase already relies on caller discipline rather than the type
+system. The three call sites (the boot-time `draw_scene()` call, the
+drag handler's `move_window_content()` call, and the main loop's
+`update_and_present()` call) each build an identical 19-field
+designated-initializer literal from the same already-in-scope
+`kmain()` locals -- verified textually identical across all three
+after writing them, since a mismatched field wouldn't be caught by the
+compiler (a missing field in a designated initializer just
+zero-initializes silently).
+
+`kernel.c`'s GUI pipeline isn't host-buildable (real framebuffer/mouse
+dependencies), so this was verified the way this codebase's other
+GUI-path changes always have been: a clean full rebuild
+(`-Wall -Wextra`, no new warnings -- and since every old bare parameter
+name was removed from each function's signature, any left-unconverted
+reference in a function body would have been a compile error, not a
+silent bug), then a headless QEMU pass (`-display none` + monitor
+socket + `screendump`, chunked `mouse_move` per
+[[feedback_qemu_input_testing]]) opening and dragging the FORTH window
+(simplest case, 2 widgets) and the FILES window (widest case, 6
+widgets: `name_input` + 5 buttons) -- both windows' content moved
+correctly with them, no widget left behind at the old position.
+SHELL/EDITOR/PAINT share FORTH's already-proven 2-widget shape, so
+weren't separately live-tested.
+
+Files: `kernel/kernel.c` (`struct window_content` type; all five
+functions' signatures/bodies; three call sites).

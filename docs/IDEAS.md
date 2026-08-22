@@ -53,18 +53,13 @@ not a queue.
   only handle arrow keys. See `docs/BUILD_LOG.md`'s entry for the same
   date.
 
-- **A struct-based refactor of `kernel.c`'s five window-pipeline
-  functions.** `move_window_content()`, `draw_window_by_index()`,
-  `draw_scene()`, and `update_and_present()` have each been widened three
-  times now across separate stages (FILES' selection-mask type change,
-  FILES' three new clipboard buttons, then the text editor's `ed`/
-  `save_btn`) -- `update_and_present()` is up to roughly 30 parameters.
-  Flagged as worth a real cleanup (e.g. a `struct window_content` bundle
-  passed by pointer) by two separate final-branch reviews now, both of
-  which explicitly deferred it rather than bundle an unrelated
-  refactor into a feature's own fix wave. A fifth window kind would
-  widen all five signatures again -- worth doing before that happens,
-  not after.
+- ~~**A struct-based refactor of `kernel.c`'s five window-pipeline
+  functions.**~~ Done, 2026-08-22 -- `move_window_content()`,
+  `draw_files_group()`, `draw_window_by_index()`, `draw_scene()`, and
+  `update_and_present()` now take a single `struct window_content *`
+  instead of their own hand-widened parameter lists (`update_and_present()`
+  alone went from ~35 params to 22). See `docs/BUILD_LOG.md`'s entry for
+  the same date.
 
 - ~~**A real path for user-written system programs, not just Forth
   scripts.**~~ Done, 2026-08-17 -- shipped as the paint/sprite designer +

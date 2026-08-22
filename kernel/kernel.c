@@ -400,6 +400,44 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
     }
 }
 
+/* Bundles every widget/state pointer the window-content pipeline
+ * (move_window_content()/draw_files_group()/draw_window_by_index()/
+ * draw_scene()/update_and_present()) needs to move or draw a window's
+ * content, keyed by window kind -- replacing what used to be each of
+ * those five functions' own hand-widened parameter list (up to ~30 for
+ * update_and_present()) after each new window kind added its own
+ * widgets. Built fresh at each of the three call sites from kmain()'s
+ * own locals; nothing here changes where those locals actually live.
+ * Fields stay non-const even though most callers only read through the
+ * struct -- move_window_content() is the one that mutates widget
+ * positions directly, and a single shared struct is simpler than a
+ * matching const-pointee twin just for the read-only callers (the
+ * bundle's own pointer can't be reseated by a `const struct
+ * window_content *`, but nothing stops writing through e.g. wc->co->x
+ * -- relies on the same caller discipline this codebase already trusts
+ * elsewhere, not a compiler guarantee). */
+struct window_content {
+    struct console_output *co;
+    struct console_input *ci;
+    struct console_output *shell_co;
+    struct console_input *shell_ci;
+    const char *cwd;
+    const struct fs_dirent *file_entries;
+    unsigned int file_entry_count;
+    uint32_t files_selected_mask;
+    struct console_input *name_input;
+    struct button *new_dir_btn;
+    struct button *delete_btn;
+    struct button *cut_btn;
+    struct button *copy_btn;
+    struct button *paste_btn;
+    struct editor *ed;
+    struct button *save_btn;
+    struct paint *pt;
+    struct console_input *paint_name_input;
+    struct button *paint_save_btn;
+};
+
 /* Moves a window's content widgets by the same delta already applied to
  * the window itself during a drag. This is the single place that
  * happens now, replacing what used to be a hand-written list of
@@ -408,52 +446,45 @@ static void clamp_window_to_screen(struct window *win, int w, int h) {
  * was added. Centralizing it here means a future window's widget only
  * needs to be added in one place to drag correctly, not remembered at
  * every call site that moves the window. */
-static void move_window_content(int kind, struct console_output *co, struct console_input *ci,
-                                struct console_input *name_input, struct button *new_dir_btn,
-                                struct button *delete_btn, struct button *cut_btn, struct button *copy_btn,
-                                struct button *paste_btn, struct console_output *shell_co,
-                                struct console_input *shell_ci, struct editor *ed, struct button *save_btn,
-                                struct paint *pt, struct console_input *paint_name_input, struct button *paint_save_btn,
-                                int applied_dx, int applied_dy) {
+static void move_window_content(int kind, struct window_content *wc, int applied_dx, int applied_dy) {
     if (kind == WIN_KIND_FORTH) {
-        co->x += applied_dx;
-        co->y += applied_dy;
-        ci->x += applied_dx;
-        ci->y += applied_dy;
+        wc->co->x += applied_dx;
+        wc->co->y += applied_dy;
+        wc->ci->x += applied_dx;
+        wc->ci->y += applied_dy;
     } else if (kind == WIN_KIND_FILES) {
-        name_input->x += applied_dx;
-        name_input->y += applied_dy;
-        new_dir_btn->x += applied_dx;
-        new_dir_btn->y += applied_dy;
-        delete_btn->x += applied_dx;
-        delete_btn->y += applied_dy;
-        cut_btn->x += applied_dx;
-        cut_btn->y += applied_dy;
-        copy_btn->x += applied_dx;
-        copy_btn->y += applied_dy;
-        paste_btn->x += applied_dx;
-        paste_btn->y += applied_dy;
+        wc->name_input->x += applied_dx;
+        wc->name_input->y += applied_dy;
+        wc->new_dir_btn->x += applied_dx;
+        wc->new_dir_btn->y += applied_dy;
+        wc->delete_btn->x += applied_dx;
+        wc->delete_btn->y += applied_dy;
+        wc->cut_btn->x += applied_dx;
+        wc->cut_btn->y += applied_dy;
+        wc->copy_btn->x += applied_dx;
+        wc->copy_btn->y += applied_dy;
+        wc->paste_btn->x += applied_dx;
+        wc->paste_btn->y += applied_dy;
     } else if (kind == WIN_KIND_SHELL) {
-        shell_co->x += applied_dx;
-        shell_co->y += applied_dy;
-        shell_ci->x += applied_dx;
-        shell_ci->y += applied_dy;
+        wc->shell_co->x += applied_dx;
+        wc->shell_co->y += applied_dy;
+        wc->shell_ci->x += applied_dx;
+        wc->shell_ci->y += applied_dy;
     } else if (kind == WIN_KIND_EDITOR) {
-        ed->x += applied_dx;
-        ed->y += applied_dy;
-        save_btn->x += applied_dx;
-        save_btn->y += applied_dy;
+        wc->ed->x += applied_dx;
+        wc->ed->y += applied_dy;
+        wc->save_btn->x += applied_dx;
+        wc->save_btn->y += applied_dy;
     } else if (kind == WIN_KIND_PAINT) {
-        /* The canvas/palette are drawn directly from pt's own
+        /* The canvas/palette are drawn directly from wc->pt's own
          * fixed-size arrays at an offset from the window's own x/y
-         * (see draw_paint_group()) -- nothing about pt itself needs
+         * (see draw_paint_group()) -- nothing about wc->pt itself needs
          * to move when the window is dragged, only its own widgets. */
-        paint_name_input->x += applied_dx;
-        paint_name_input->y += applied_dy;
-        paint_save_btn->x += applied_dx;
-        paint_save_btn->y += applied_dy;
+        wc->paint_name_input->x += applied_dx;
+        wc->paint_name_input->y += applied_dy;
+        wc->paint_save_btn->x += applied_dx;
+        wc->paint_save_btn->y += applied_dy;
     }
-    (void)pt;
 }
 
 /* The first window: the Forth console. */
@@ -1063,27 +1094,24 @@ static void files_clipboard_stage(struct files_clipboard *clip, const char *cwd,
  * given pixel row means. A bit in files_selected_mask names a selected
  * row (its index into file_entries) -- several bits can be set at once,
  * and every row whose bit is set is drawn with a highlight background. */
-static void draw_files_group(const struct window *files, const char *cwd, const struct fs_dirent *file_entries,
-                             unsigned int file_entry_count, uint32_t files_selected_mask, const struct console_input *name_input,
-                             const struct button *new_dir_btn, const struct button *delete_btn,
-                             const struct button *cut_btn, const struct button *copy_btn, const struct button *paste_btn) {
+static void draw_files_group(const struct window *files, const struct window_content *wc) {
     unsigned int i;
     int row = 1;
 
     window_draw(files);
-    text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET, cwd, TEXT_ACCENT_COLOR, 1);
+    text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET, wc->cwd, TEXT_ACCENT_COLOR, 1);
 
-    if (!str_eq(cwd, "/")) {
+    if (!str_eq(wc->cwd, "/")) {
         text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT, "..", TEXT_PRIMARY_COLOR, 1);
         row++;
     }
 
-    if (file_entry_count == 0) {
+    if (wc->file_entry_count == 0) {
         text_puts(files->x + 8, files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT, "(EMPTY)", TEXT_MUTED_COLOR,
                   1);
     }
 
-    for (i = 0; i < file_entry_count; i++) {
+    for (i = 0; i < wc->file_entry_count; i++) {
         char line[FS_NAME_MAX + 16];
         int pos = 0;
         int row_y = files->y + FILES_LIST_Y_OFFSET + row * FILES_ROW_HEIGHT;
@@ -1101,22 +1129,22 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
          * mirrors this exact row_y + FILES_ROW_HEIGHT > list_bottom_y
          * check, so nothing here needs to become clickable, just stop
          * being drawn. */
-        if (row_y + FILES_ROW_HEIGHT > name_input->y) {
+        if (row_y + FILES_ROW_HEIGHT > wc->name_input->y) {
             break;
         }
 
-        str_append(line, &pos, (int)sizeof(line), file_entries[i].name);
-        if (file_entries[i].type == FS_TYPE_DIR) {
+        str_append(line, &pos, (int)sizeof(line), wc->file_entries[i].name);
+        if (wc->file_entries[i].type == FS_TYPE_DIR) {
             str_append(line, &pos, (int)sizeof(line), "/");
         } else {
             char num[12];
             str_append(line, &pos, (int)sizeof(line), " ");
-            format_uint(file_entries[i].size_bytes, num);
+            format_uint(wc->file_entries[i].size_bytes, num);
             str_append(line, &pos, (int)sizeof(line), num);
             str_append(line, &pos, (int)sizeof(line), "B");
         }
 
-        if (files_selected_mask & (1u << i)) {
+        if (wc->files_selected_mask & (1u << i)) {
             gfx_fill_rect(files->x + 4, row_y - 2, files->w - 8, FILES_ROW_HEIGHT - 2, FILES_SELECTED_BG_COLOR);
             text_color = TEXT_ACCENT_COLOR;
         }
@@ -1125,12 +1153,12 @@ static void draw_files_group(const struct window *files, const char *cwd, const 
         row++;
     }
 
-    console_input_draw(name_input);
-    button_draw(new_dir_btn);
-    button_draw(delete_btn);
-    button_draw(cut_btn);
-    button_draw(copy_btn);
-    button_draw(paste_btn);
+    console_input_draw(wc->name_input);
+    button_draw(wc->new_dir_btn);
+    button_draw(wc->delete_btn);
+    button_draw(wc->cut_btn);
+    button_draw(wc->copy_btn);
+    button_draw(wc->paste_btn);
 }
 
 #define FILES_HIT_NONE (-1)
@@ -1200,27 +1228,17 @@ static void open_files_at(char *cwd, int cwd_cap, const char *target, struct win
 /* The one place that dispatches "draw whatever's inside window index
  * idx" -- both draw_scene() and update_and_present() go through this
  * instead of each hand-rolling their own kind check. */
-static void draw_window_by_index(int idx, const struct window *windows, const struct console_output *co,
-                                 const struct console_input *ci, const struct console_output *shell_co,
-                                 const struct console_input *shell_ci, const char *cwd,
-                                 const struct fs_dirent *file_entries, unsigned int file_entry_count,
-                                 uint32_t files_selected_mask, const struct console_input *name_input,
-                                 const struct button *new_dir_btn, const struct button *delete_btn,
-                                 const struct button *cut_btn, const struct button *copy_btn,
-                                 const struct button *paste_btn, const struct editor *ed, const struct button *save_btn,
-                                 const struct paint *pt, const struct console_input *paint_name_input,
-                                 const struct button *paint_save_btn) {
+static void draw_window_by_index(int idx, const struct window *windows, const struct window_content *wc) {
     if (idx == WIN_KIND_FORTH) {
-        draw_forth_group(&windows[idx], co, ci);
+        draw_forth_group(&windows[idx], wc->co, wc->ci);
     } else if (idx == WIN_KIND_FILES) {
-        draw_files_group(&windows[idx], cwd, file_entries, file_entry_count, files_selected_mask, name_input, new_dir_btn,
-                         delete_btn, cut_btn, copy_btn, paste_btn);
+        draw_files_group(&windows[idx], wc);
     } else if (idx == WIN_KIND_SHELL) {
-        draw_shell_group(&windows[idx], shell_co, shell_ci);
+        draw_shell_group(&windows[idx], wc->shell_co, wc->shell_ci);
     } else if (idx == WIN_KIND_EDITOR) {
-        draw_editor_group(&windows[idx], ed, save_btn);
+        draw_editor_group(&windows[idx], wc->ed, wc->save_btn);
     } else {
-        draw_paint_group(&windows[idx], pt, paint_name_input, paint_save_btn);
+        draw_paint_group(&windows[idx], wc->pt, wc->paint_name_input, wc->paint_save_btn);
     }
 }
 
@@ -1230,17 +1248,9 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
  * correct by full reconstruction, same reasoning the whole scene used to
  * be redrawn this way every frame before damage tracking (see
  * update_and_present() below). */
-static void draw_scene(int w, int h, const struct window *windows, int fx_enabled, const struct console_output *co,
-                       const struct console_input *ci, const struct console_output *shell_co,
-                       const struct console_input *shell_ci, const int *z_order, const struct taskbar *bar,
-                       int hovered_entry, const struct startmenu *menu, int menu_hovered_item, int mx, int my,
-                       uint32_t cursor_color, const char *cwd, const struct fs_dirent *file_entries,
-                       unsigned int file_entry_count, uint32_t files_selected_mask, const struct console_input *name_input,
-                       const struct button *new_dir_btn, const struct button *delete_btn,
-                       const struct button *cut_btn, const struct button *copy_btn,
-                       const struct button *paste_btn, const struct editor *ed, const struct button *save_btn,
-                       const struct paint *pt, const struct console_input *paint_name_input,
-                       const struct button *paint_save_btn) {
+static void draw_scene(int w, int h, const struct window *windows, int fx_enabled, const struct window_content *wc,
+                       const int *z_order, const struct taskbar *bar, int hovered_entry, const struct startmenu *menu,
+                       int menu_hovered_item, int mx, int my, uint32_t cursor_color) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -1254,9 +1264,7 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN) {
-            draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
-                                 files_selected_mask, name_input, new_dir_btn, delete_btn, cut_btn, copy_btn,
-                                 paste_btn, ed, save_btn, pt, paint_name_input, paint_save_btn);
+            draw_window_by_index(idx, windows, wc);
         }
     }
 
@@ -1305,19 +1313,11 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
  * painted back-to-front in z-order so the topmost window correctly wins
  * wherever two windows overlap. */
 static void update_and_present(int w, int h, const struct window *windows, int fx_enabled,
-                               const struct console_output *co, const struct console_input *ci,
-                               const struct console_output *shell_co, const struct console_input *shell_ci,
+                               const struct window_content *wc,
                                const int *z_order, const int *old_z, int old_mx, int old_my, int mx, int my,
                                uint32_t cursor_color, const int *old_x, const int *old_y, const int *touched,
                                int fx_changed, const struct taskbar *bar, int hovered_entry, int old_hovered_entry,
-                               const struct startmenu *menu, int menu_hovered_item, int menu_touched, const char *cwd,
-                               const struct fs_dirent *file_entries, unsigned int file_entry_count,
-                               uint32_t files_selected_mask, const struct console_input *name_input,
-                               const struct button *new_dir_btn, const struct button *delete_btn,
-                               const struct button *cut_btn, const struct button *copy_btn,
-                               const struct button *paste_btn, const struct editor *ed, const struct button *save_btn,
-                               const struct paint *pt, const struct console_input *paint_name_input,
-                               const struct button *paint_save_btn) {
+                               const struct startmenu *menu, int menu_hovered_item, int menu_touched) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
     int redraw[DAMAGE_REGIONS];
@@ -1435,9 +1435,7 @@ static void update_and_present(int w, int h, const struct window *windows, int f
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
         if (windows[idx].state == WINDOW_OPEN && redraw[idx]) {
-            draw_window_by_index(idx, windows, co, ci, shell_co, shell_ci, cwd, file_entries, file_entry_count,
-                                 files_selected_mask, name_input, new_dir_btn, delete_btn, cut_btn, copy_btn,
-                                 paste_btn, ed, save_btn, pt, paint_name_input, paint_save_btn);
+            draw_window_by_index(idx, windows, wc);
         }
     }
 
@@ -1857,10 +1855,18 @@ void kmain(void) {
         file_entry_count = 0;
     }
 
-    draw_scene(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, &bar, taskbar_hovered, &menu,
-              menu_hovered_item, mx, my, cursor_color, cwd, file_entries, file_entry_count, files_selected_mask,
-              &name_input, &new_dir_btn, &delete_btn, &cut_btn, &copy_btn, &paste_btn, &ed, &save_btn, &paint,
-              &paint_name_input, &paint_save_btn);
+    {
+        struct window_content wc = {
+            .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
+            .file_entries = file_entries, .file_entry_count = file_entry_count,
+            .files_selected_mask = files_selected_mask, .name_input = &name_input,
+            .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
+            .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
+            .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
+        };
+        draw_scene(w, h, windows, fx_enabled, &wc, z_order, &bar, taskbar_hovered, &menu, menu_hovered_item, mx, my,
+                  cursor_color);
+    }
     gfx_present();
 
     for (;;) {
@@ -2022,9 +2028,17 @@ void kmain(void) {
 
                     applied_dx = windows[dragging_window].x - drag_start_x;
                     applied_dy = windows[dragging_window].y - drag_start_y;
-                    move_window_content(dragging_window, &co, &ci, &name_input, &new_dir_btn, &delete_btn, &cut_btn,
-                                        &copy_btn, &paste_btn, &shell_co, &shell_ci, &ed, &save_btn, &paint,
-                                        &paint_name_input, &paint_save_btn, applied_dx, applied_dy);
+                    {
+                        struct window_content wc = {
+                            .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
+                            .file_entries = file_entries, .file_entry_count = file_entry_count,
+                            .files_selected_mask = files_selected_mask, .name_input = &name_input,
+                            .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
+                            .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
+                            .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
+                        };
+                        move_window_content(dragging_window, &wc, applied_dx, applied_dy);
+                    }
                 } else {
                     dragging_window = -1;
                 }
@@ -2670,12 +2684,19 @@ void kmain(void) {
                                       !str_eq(paint_name_input.text, old_paint_name_input_text) ||
                                       (paint_save_btn.hovered != old_paint_save_btn_hovered) ||
                                       (paint_save_btn.pressed != old_paint_save_btn_pressed);
-            update_and_present(w, h, windows, fx_enabled, &co, &ci, &shell_co, &shell_ci, z_order, old_z, old_mx,
-                               old_my, mx, my, cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled,
-                               &bar, taskbar_hovered, old_taskbar_hovered, &menu, menu_hovered_item, menu_touched,
-                               cwd, file_entries, file_entry_count, files_selected_mask, &name_input, &new_dir_btn,
-                               &delete_btn, &cut_btn, &copy_btn, &paste_btn, &ed, &save_btn, &paint,
-                               &paint_name_input, &paint_save_btn);
+            {
+                struct window_content wc = {
+                    .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
+                    .file_entries = file_entries, .file_entry_count = file_entry_count,
+                    .files_selected_mask = files_selected_mask, .name_input = &name_input,
+                    .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
+                    .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
+                    .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
+                };
+                update_and_present(w, h, windows, fx_enabled, &wc, z_order, old_z, old_mx, old_my, mx, my,
+                                   cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled, &bar,
+                                   taskbar_hovered, old_taskbar_hovered, &menu, menu_hovered_item, menu_touched);
+            }
         } else {
             __asm__ volatile("hlt");
         }
