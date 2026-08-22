@@ -475,7 +475,7 @@ Replace with:
                             }
                         }
 ```
-(Note the behavior change from Task 2: a hidden-swatch click no longer closes the popup, since there's now something meaningful left to do there -- pick a different, visible color, or right-click to restore it. A miss within the popup's own bounds -- landing in a gap -- still closes it, same as before, since `paint_popup_grid_hit_test()` always returns a valid index for any in-bounds click per Task 2's own reasoning, so `swatch < 0` here only fires for clicks that fell through from the outer `else` -- this branch is reachable only when `paint.palette_popup_open` was already true, meaning `swatch` is always `>= 0` in practice; kept for defensive clarity, matching this codebase's existing style of an explicit check even where current geometry makes it unreachable.)
+(Note the behavior change from Task 2: a hidden-swatch click no longer closes the popup, since there's now something meaningful left to do there -- pick a different, visible color, or right-click to restore it. The `swatch < 0` branch is not dead code, despite what an earlier version of this plan claimed: it's reached by every click that lands inside the PAINT window but outside the popup's own 140x140 grid -- the SAVE/LOAD buttons, the filename field, the canvas, or re-clicking the current-color swatch itself -- while the popup is open, and is exactly the "click elsewhere inside PAINT dismisses the popup" path the design spec calls for. Do not remove it.)
 
 Immediately after that whole `if (click_edge) { ... }` block (the one Task 2 added, now modified above), add the right-click handling as its own statement:
 ```c
