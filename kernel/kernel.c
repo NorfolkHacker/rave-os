@@ -356,6 +356,7 @@ struct paint {
 };
 static struct paint paint;
 static struct button paint_save_btn;
+static struct button paint_load_btn;
 static struct console_input paint_name_input;
 static int paint_program_slot = -1;
 
@@ -436,6 +437,7 @@ struct window_content {
     struct paint *pt;
     struct console_input *paint_name_input;
     struct button *paint_save_btn;
+    struct button *paint_load_btn;
 };
 
 /* Moves a window's content widgets by the same delta already applied to
@@ -484,6 +486,8 @@ static void move_window_content(int kind, struct window_content *wc, int applied
         wc->paint_name_input->y += applied_dy;
         wc->paint_save_btn->x += applied_dx;
         wc->paint_save_btn->y += applied_dy;
+        wc->paint_load_btn->x += applied_dx;
+        wc->paint_load_btn->y += applied_dy;
     }
 }
 
@@ -522,7 +526,7 @@ static void draw_editor_group(const struct window *ed_win, const struct editor *
  * (no separate widget module, unlike editor.c -- this window's whole
  * content is exactly two nested loops over fixed-size arrays). */
 static void draw_paint_group(const struct window *win, const struct paint *pt, const struct console_input *name_input,
-                             const struct button *save_btn) {
+                             const struct button *save_btn, const struct button *load_btn) {
     int row, col, i;
     int canvas_x = win->x + 8;
     int canvas_y = win->y + 8;
@@ -553,6 +557,7 @@ static void draw_paint_group(const struct window *win, const struct paint *pt, c
 
     console_input_draw(name_input);
     button_draw(save_btn);
+    button_draw(load_btn);
 }
 
 /* forth_hooks.h implementations -- forth.c's only window into
@@ -692,12 +697,12 @@ static int paint_palette_hit_test(const struct window *win, int px, int py) {
  * forth_run_command() covered this in its own comment before it was
  * replaced in the 2026-08-19 concurrency pass; the fold itself now
  * lives inline in kmain()'s own RUN handling). Used by kmain()'s own
- * SAVE-button click handler below. Returns 0 (leaving *out* unset) if
- * the field is empty -- SAVE with no name is a no-op, same
- * "no-error-UI, silent no-op" convention as the rest of this kernel's
- * filesystem writes; the caller checks this before doing anything
- * else. */
-static int paint_build_save_path(char *out, int out_max) {
+ * SAVE- and LOAD-button click handlers below. Returns 0 (leaving *out*
+ * unset) if the field is empty -- SAVE/LOAD with no name is a no-op,
+ * same "no-error-UI, silent no-op" convention as the rest of this
+ * kernel's filesystem writes; the caller checks this before doing
+ * anything else. */
+static int paint_build_sprite_path(char *out, int out_max) {
     int pos = 0;
     int i;
 
@@ -1275,7 +1280,7 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
     } else if (idx == WIN_KIND_EDITOR) {
         draw_editor_group(&windows[idx], wc->ed, wc->save_btn);
     } else {
-        draw_paint_group(&windows[idx], wc->pt, wc->paint_name_input, wc->paint_save_btn);
+        draw_paint_group(&windows[idx], wc->pt, wc->paint_name_input, wc->paint_save_btn, wc->paint_load_btn);
     }
 }
 
@@ -1810,13 +1815,25 @@ void kmain(void) {
     console_input_set_text(&paint_name_input, "SPRITE");
     paint_name_input.focused = 0;
 
+    /* SAVE/LOAD side by side, same "(total - 16 - 8) / 2, second.x =
+     * first.x + first.w + 8" split FILES' own NEW DIR/DELETE pair
+     * already uses -- no window resize needed, since this row already
+     * had exactly one button's worth of width to spare. */
     paint_save_btn.x = windows[WIN_KIND_PAINT].x + 8;
     paint_save_btn.y = paint_name_input.y + paint_name_input.h + 6;
-    paint_save_btn.w = PAINT_GRID_SIZE * PAINT_CELL_PX;
+    paint_save_btn.w = (PAINT_GRID_SIZE * PAINT_CELL_PX - 8) / 2;
     paint_save_btn.h = 22;
     paint_save_btn.label = "SAVE";
     paint_save_btn.hovered = 0;
     paint_save_btn.pressed = 0;
+
+    paint_load_btn.x = paint_save_btn.x + paint_save_btn.w + 8;
+    paint_load_btn.y = paint_save_btn.y;
+    paint_load_btn.w = paint_save_btn.w;
+    paint_load_btn.h = 22;
+    paint_load_btn.label = "LOAD";
+    paint_load_btn.hovered = 0;
+    paint_load_btn.pressed = 0;
 
     paint.current_color = 1; /* white -- a visible default against the near-black eraser color at index 0 */
     paint.opened_once = 0;
@@ -1900,6 +1917,7 @@ void kmain(void) {
             .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
             .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
             .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
+            .paint_load_btn = &paint_load_btn,
         };
         draw_scene(w, h, windows, fx_enabled, &wc, z_order, &bar, taskbar_hovered, &menu, menu_hovered_item, mx, my,
                   cursor_color);
@@ -1952,6 +1970,8 @@ void kmain(void) {
         int old_paint_current_color = paint.current_color;
         int old_paint_save_btn_hovered = paint_save_btn.hovered;
         int old_paint_save_btn_pressed = paint_save_btn.pressed;
+        int old_paint_load_btn_hovered = paint_load_btn.hovered;
+        int old_paint_load_btn_pressed = paint_load_btn.pressed;
         int old_paint_name_input_len = paint_name_input.len;
         int old_paint_name_input_cursor = paint_name_input.cursor;
         int old_paint_name_input_focused = paint_name_input.focused;
@@ -2073,6 +2093,7 @@ void kmain(void) {
                             .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
                             .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
                             .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
+                            .paint_load_btn = &paint_load_btn,
                         };
                         move_window_content(dragging_window, &wc, applied_dx, applied_dy);
                     }
@@ -2396,14 +2417,14 @@ void kmain(void) {
 
                 /* Writes the grid to /HOME/<name> (the filename field's
                  * own text, empty defaulting handled by
-                 * paint_build_save_path()) as 256 raw bytes, one per
+                 * paint_build_sprite_path()) as 256 raw bytes, one per
                  * cell, row-major -- same fs_delete()+fs_create_file()
                  * shape EDITOR's own SAVE already uses, and the same
                  * silent-no-op-on-failure convention. */
                 paint_save_btn.hovered = paint_is_topmost && button_hit_test(&paint_save_btn, cx, cy);
                 if (paint_save_btn.hovered && click_edge) {
                     char path[FS_PATH_MAX];
-                    if (paint_build_save_path(path, (int)sizeof(path))) {
+                    if (paint_build_sprite_path(path, (int)sizeof(path))) {
                         unsigned char sprite_bytes[PAINT_GRID_SIZE * PAINT_GRID_SIZE];
                         int prow, pcol;
                         for (prow = 0; prow < PAINT_GRID_SIZE; prow++) {
@@ -2416,6 +2437,39 @@ void kmain(void) {
                     }
                 }
                 paint_save_btn.pressed = paint_save_btn.hovered && left_held;
+
+                /* The other half of SAVE's round-trip: reads /HOME/<name>
+                 * back into the grid. Only accepts it if the file is
+                 * exactly 256 bytes -- fs_read_file() only rejects "too
+                 * big for buf_size", not "too small", so a truncated or
+                 * wrong-format file would otherwise partially load with
+                 * the rest of sprite_bytes left as stack garbage. Each
+                 * byte is also clamped to a valid palette index (< 8,
+                 * else 0): draw_paint_group() indexes paint_palette[]
+                 * with pt->grid[row][col] completely unchecked, so a
+                 * stray out-of-range byte from a bad or hand-edited file
+                 * would read past that 8-entry array. Anything else
+                 * (missing file, wrong size) is a silent no-op, same
+                 * convention as SAVE with an empty name. */
+                paint_load_btn.hovered = paint_is_topmost && button_hit_test(&paint_load_btn, cx, cy);
+                if (paint_load_btn.hovered && click_edge) {
+                    char path[FS_PATH_MAX];
+                    if (paint_build_sprite_path(path, (int)sizeof(path))) {
+                        unsigned char sprite_bytes[PAINT_GRID_SIZE * PAINT_GRID_SIZE];
+                        unsigned int out_size;
+                        if (fs_read_file(path, sprite_bytes, sizeof(sprite_bytes), &out_size) == 0 &&
+                            out_size == sizeof(sprite_bytes)) {
+                            int prow, pcol;
+                            for (prow = 0; prow < PAINT_GRID_SIZE; prow++) {
+                                for (pcol = 0; pcol < PAINT_GRID_SIZE; pcol++) {
+                                    unsigned char v = sprite_bytes[prow * PAINT_GRID_SIZE + pcol];
+                                    paint.grid[prow][pcol] = (v < PAINT_PALETTE_COLORS) ? v : 0;
+                                }
+                            }
+                        }
+                    }
+                }
+                paint_load_btn.pressed = paint_load_btn.hovered && left_held;
             }
 
             prev_left_held = left_held;
@@ -2698,7 +2752,9 @@ void kmain(void) {
                                       (paint_name_input.focused != old_paint_name_input_focused) ||
                                       !str_eq(paint_name_input.text, old_paint_name_input_text) ||
                                       (paint_save_btn.hovered != old_paint_save_btn_hovered) ||
-                                      (paint_save_btn.pressed != old_paint_save_btn_pressed);
+                                      (paint_save_btn.pressed != old_paint_save_btn_pressed) ||
+                                      (paint_load_btn.hovered != old_paint_load_btn_hovered) ||
+                                      (paint_load_btn.pressed != old_paint_load_btn_pressed);
             {
                 struct window_content wc = {
                     .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
@@ -2707,6 +2763,7 @@ void kmain(void) {
                     .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
                     .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
                     .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
+                    .paint_load_btn = &paint_load_btn,
                 };
                 update_and_present(w, h, windows, fx_enabled, &wc, z_order, old_z, old_mx, old_my, mx, my,
                                    cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled, &bar,

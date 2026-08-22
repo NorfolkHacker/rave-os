@@ -5,6 +5,26 @@ later. Entries here haven't been brainstormed, scoped, or committed to;
 they're a starting point for a future `superpowers:brainstorming` session,
 not a queue.
 
+- **`touched[WIN_KIND_PAINT]` doesn't actually track `paint.grid[][]`
+  content changes -- may only redraw live by incidental window
+  overlap.** Found 2026-08-22 while verifying the new LOAD button. The
+  comment above `touched[WIN_KIND_PAINT]`'s computation still credits
+  "REFRESH's own direct draw+present calls" for keeping the canvas
+  live-updated while a `PIXEL`-writing Forth script runs -- but
+  `REFRESH` itself was deleted in an earlier stage (see
+  `docs/BUILD_LOG.md`'s "delete PALETTE-PICK/SAVE-PICK/REFRESH
+  workaround hooks" entry), so that reasoning is stale. Grid content
+  visibly did update live during this session's own QEMU testing, but
+  only because the FORTH and PAINT windows happen to overlap at their
+  default positions -- FORTH's own damage region (from the typed `PIXEL`
+  command) overlapped PAINT's, so `update_and_present()`'s fixed-point
+  damage loop pulled PAINT's redraw in as a side effect, not because
+  grid changes are tracked directly. Not fully reproduced (would need
+  moving the PAINT window away from FORTH and re-running a `PIXEL`
+  script to confirm it actually fails to redraw), so this is a
+  well-reasoned hypothesis from reading the code, not a proven bug --
+  worth a real repro before fixing.
+
 - **`font.c` has no glyphs for `(`/`)` -- render invisible, same class
   of bug as the `?`/`/` one below.** Found 2026-08-22 while verifying
   SHELL's new `RUN` support: `(RUN FAILED)` rendered with both
@@ -95,12 +115,12 @@ not a queue.
     screen space.
   - **Need the ability to delete colours** from whatever the palette
     becomes -- not just pick from a fixed set.
-  - **Needs LOAD, not just SAVE.** SAVE gained a real filename field
-    2026-08-18 (multiple named sprites under `/HOME/<name>`, no longer
-    just one fixed path), but it's still write-only from the app's own
-    perspective -- there's no way to re-open a previously saved sprite
-    back into the canvas. A real sprite editor needs both halves of
-    that round-trip.
+  - ~~**Needs LOAD, not just SAVE.**~~ Done, 2026-08-22 -- a LOAD button
+    sits beside SAVE (same filename field, split row, no window
+    resize), reads `/HOME/<name>` back into the grid only if it's
+    exactly 256 bytes, and clamps each byte to a valid palette index in
+    case of a bad/hand-edited file. See `docs/BUILD_LOG.md`'s entry for
+    the same date.
   - This adds up to substantially more than a bug-fix pass -- likely its
     own `superpowers:brainstorming` cycle (palette-chooser UI is a real
     design question, not just an implementation detail) rather than a

@@ -1923,3 +1923,54 @@ missing `?` glyph. Not fixed here; flagged in `docs/IDEAS.md`.
 
 Files: `kernel/kernel.c` (`handle_run_command()`, new; FORTH's RUN
 branch simplified to call it; SHELL's dispatch gained a RUN branch).
+
+## 2026-08-22 -- PAINT gets a LOAD button, completing the SAVE round-trip
+
+Second sub-project of `docs/IDEAS.md`'s "PAINT sprite editor" item
+(SHELL launch done earlier the same day; palette-chooser popup and
+delete-colors remain, deferred to their own brainstorming session).
+
+Added `paint_load_btn` beside `paint_save_btn` -- same filename field,
+split into a two-button row using FILES' own `new_dir_btn`/`delete_btn`
+side-by-side formula (`(w-8)/2`, `second.x = first.x + first.w + 8`),
+so no window resize was needed. Renamed `paint_build_save_path()` to
+`paint_build_sprite_path()` since both buttons use it now. Threaded
+`paint_load_btn` through everywhere `paint_save_btn` already flowed:
+`struct window_content`, `move_window_content()`'s `WIN_KIND_PAINT`
+branch, `draw_paint_group()`, `draw_window_by_index()`, all three
+`window_content` literals, and the `touched[WIN_KIND_PAINT]`
+hover/press diff.
+
+LOAD's click handler found two real defensive gaps while designing it,
+both closed: `fs_read_file()` only rejects "too big for the buffer,"
+not "too small," so a truncated or wrong-format file would otherwise
+partially load with the rest of the 256-byte buffer left as stack
+garbage -- fixed by requiring `out_size == 256` exactly. Separately,
+`draw_paint_group()` indexes `paint_palette[]` (8 entries) with
+`pt->grid[row][col]` completely unchecked, so a stray out-of-range
+byte from a bad or hand-edited sprite file would read past that array
+-- fixed by clamping each loaded byte to a valid palette index (`< 8`,
+else `0`). Anything else (missing file, wrong size, empty filename) is
+a silent no-op, matching this kernel's existing "no-error-UI"
+convention.
+
+Verified via a clean full rebuild plus a headless QEMU pass, driven
+through FORTH's `PAINT`/`PIXEL` words rather than mouse clicks on the
+canvas (there's no click-to-draw yet -- the canvas is still
+Forth-script-driven only, per the still-open palette-chooser/PAINT
+sub-projects): `0 0 2 PIXEL` set the top-left cell red (confirmed via
+direct pixel sampling, `0xFF3B30`); SAVE, then `0 0 5 PIXEL` changed it
+to green (`0x00FF66`); LOAD correctly reverted it back to red, proving
+the round-trip; LOAD with a nonexistent filename left it unchanged
+(safe no-op). Found one real, tangential issue while doing this
+verification -- not fixed here, see the new `docs/IDEAS.md` entry:
+`touched[WIN_KIND_PAINT]` doesn't track grid content changes at all,
+and the live update this session actually observed appears to be
+incidental (FORTH's and PAINT's default window positions happen to
+overlap on screen).
+
+Files: `kernel/kernel.c` (`paint_load_btn`, new; `paint_build_save_path()`
+renamed to `paint_build_sprite_path()`; `struct window_content`,
+`move_window_content()`, `draw_paint_group()`, `draw_window_by_index()`,
+the three `window_content` literals, and the PAINT `touched[]` diff all
+updated to thread it through; new LOAD click handler).
