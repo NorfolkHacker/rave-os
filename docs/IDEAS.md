@@ -5,32 +5,31 @@ later. Entries here haven't been brainstormed, scoped, or committed to;
 they're a starting point for a future `superpowers:brainstorming` session,
 not a queue.
 
-- **`touched[WIN_KIND_PAINT]` doesn't actually track `paint.grid[][]`
+- ~~**`touched[WIN_KIND_PAINT]` doesn't actually track `paint.grid[][]`
   content changes -- may only redraw live by incidental window
-  overlap.** Found 2026-08-22 while verifying the new LOAD button. The
-  comment above `touched[WIN_KIND_PAINT]`'s computation still credits
-  "REFRESH's own direct draw+present calls" for keeping the canvas
-  live-updated while a `PIXEL`-writing Forth script runs -- but
-  `REFRESH` itself was deleted in an earlier stage (see
-  `docs/BUILD_LOG.md`'s "delete PALETTE-PICK/SAVE-PICK/REFRESH
-  workaround hooks" entry), so that reasoning is stale. Grid content
-  visibly did update live during this session's own QEMU testing, but
-  only because the FORTH and PAINT windows happen to overlap at their
-  default positions -- FORTH's own damage region (from the typed `PIXEL`
-  command) overlapped PAINT's, so `update_and_present()`'s fixed-point
-  damage loop pulled PAINT's redraw in as a side effect, not because
-  grid changes are tracked directly. Not fully reproduced (would need
-  moving the PAINT window away from FORTH and re-running a `PIXEL`
-  script to confirm it actually fails to redraw), so this is a
-  well-reasoned hypothesis from reading the code, not a proven bug --
-  worth a real repro before fixing.
+  overlap.**~~ Done, 2026-08-22 -- root-caused with
+  `superpowers:systematic-debugging` before fixing. Confirmed live: real
+  mouse-driven painting (`PLOOP`) always redrew correctly, because the
+  cursor's own per-frame damage footprint sits on whatever cell it's
+  painting -- not because grid changes were tracked. The real gap was
+  narrower than first suspected: a typed `PIXEL` command reaching a
+  canvas cell with *no* mouse movement and *no* overlapping window
+  (reproduced with `PAINT` then `0 0 3 PIXEL` at FORTH's console,
+  targeting a cell outside FORTH's own window bounds) failed to redraw
+  before this fix. Fixed by adding `paint.grid_generation` (bumped
+  unconditionally by `forth_hook_pixel()`) and comparing it in
+  `touched[WIN_KIND_PAINT]`'s diff -- the exact same "generation counter,
+  only ever increases" pattern `console_output.h`'s own `generation`
+  field already established for the same problem. Re-ran the isolated
+  repro case: renders correctly now. See `docs/BUILD_LOG.md`'s entry for
+  the same date.
 
-- **`font.c` has no glyphs for `(`/`)` -- render invisible, same class
-  of bug as the `?`/`/` one below.** Found 2026-08-22 while verifying
-  SHELL's new `RUN` support: `(RUN FAILED)` rendered with both
-  parentheses blank, indistinguishable from spaces. Same fix shape as
-  the `?` glyph fix -- add `G_LPAREN`/`G_RPAREN` and their `case`s in
-  `font_glyph()`'s switch, and add them to `test_font.c`'s covered set.
+- ~~**`font.c` has no glyphs for `(`/`)` -- render invisible, same class
+  of bug as the `?`/`/` one below.**~~ Done, 2026-08-22 -- added
+  `G_LPAREN`/`G_RPAREN` and their `case`s in `font_glyph()`'s switch,
+  same shape as the `?` fix. `(RUN FAILED)` now renders with visible
+  parentheses, confirmed via a live SHELL `RUN NOPE` screendump. Added
+  `(`/`)` to `test_font.c`'s covered set as a regression guard.
 
 - ~~**`font.c`'s `?` and `/` glyphs render as zero-width.**~~ Done,
   2026-08-20. Root cause turned out to be narrower than the original

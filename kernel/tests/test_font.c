@@ -25,7 +25,7 @@ int main(void) {
      * default glyph, that's the bug this test exists to catch. */
     static const char covered[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        ":;-!.,'><%=+*/?@";
+        ":;-!.,'><%=+*/?@()";
     unsigned int i;
 
     for (i = 0; i < sizeof(covered) - 1; i++) {

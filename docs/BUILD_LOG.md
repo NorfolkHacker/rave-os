@@ -2020,3 +2020,63 @@ grown; `struct paint` gains two fields; `draw_paint_group()`,
 `paint_palette_hit_test()` -- and the PAINT click-handling/`touched[]`
 diff in `kmain()` all updated); `kernel/forth/forth.c` (`prim_pixel()`'s
 bounds check).
+
+## 2026-08-22 -- Fixed: `(`/`)` glyphs missing from `font.c`
+
+Same class of bug as the earlier `?` glyph fix, found the same day while
+verifying SHELL's new `RUN` support: `(RUN FAILED)` rendered as `  RUN
+FAILED  ` -- no `G_LPAREN`/`G_RPAREN` array existed and no `case '('`/
+`case ')'` in `font_glyph()`'s switch, so both silently fell through to
+the `default: return G_SPACE;` branch, rendering identically to spaces
+with no error anywhere in the pipeline.
+
+Followed TDD: added `(`/`)` to `test_font.c`'s covered set first,
+confirmed RED (`FAIL: font_glyph('(') is blank -- missing from the
+switch`), then added `G_LPAREN`/`G_RPAREN` (7x5 curved-bracket bitmaps,
+mirror images of each other) and their `case`s, confirmed GREEN. Full
+kernel rebuild clean, no new warnings. Re-verified live: booted, typed
+`RUN NOPE` into SHELL, confirmed `(RUN FAILED)` now renders with both
+parentheses visible via a screendump.
+
+Files: `kernel/gfx/font.c` (`G_LPAREN`/`G_RPAREN` + their `case`s);
+`kernel/tests/test_font.c` (`(`/`)` added to the covered set).
+
+## 2026-08-22 -- Fixed: PAINT's canvas didn't reliably redraw live on grid changes
+
+Root-caused with `superpowers:systematic-debugging` before touching
+anything -- the comment above `touched[WIN_KIND_PAINT]`'s computation
+still credited "REFRESH's own direct draw+present calls" for keeping
+the canvas live-updated while a `PIXEL`-writing Forth script runs, but
+`REFRESH` was deleted in the 2026-08-19 concurrency pass. Traced what
+actually keeps it working today: `update_and_present()`'s damage rect
+always starts as the union of the cursor's old/new position (it moves
+on nearly every event), so real mouse-driven painting (`PLOOP`,
+clicking/dragging over the canvas) always redraws correctly as a side
+effect of the cursor's own per-frame footprint sitting on the painted
+cell -- confirmed live headlessly (a stationary click with no drag
+still redrew correctly, `PLOOP` running via `RUN PAINT` from SHELL).
+
+The real gap was narrower than the standing IDEAS.md entry suspected:
+it's not about window overlap at all, it's about the *cursor* not
+being near the affected cell -- which only happens when content
+changes without mouse involvement. Reproduced cleanly: typed `PAINT`
+then `0 0 3 PIXEL` at FORTH's console (a canvas cell chosen outside
+FORTH's own window bounds, cursor left sitting at the console's input
+field, no mouse movement at all), screendumped immediately -- the
+painted cell did not appear.
+
+Fixed the same way `console_output.h`'s own `generation` field already
+solves this exact class of problem (comment there: "generation only
+ever increases, so any change is detectable as !="): added
+`paint.grid_generation`, bumped unconditionally by `forth_hook_pixel()`
+on every write, and compared against a snapshot in
+`touched[WIN_KIND_PAINT]`'s existing diff, same shape as `co.generation`
+already gets for `touched[WIN_KIND_FORTH]`. Re-ran the exact isolated
+repro after the fix: the painted cell (orange, `0xFF9500`) now appears
+immediately, confirmed via direct pixel sampling, no mouse movement
+involved. Rewrote the stale REFRESH-crediting comment to document the
+real mechanism (and the investigation that found it) instead.
+
+Files: `kernel/kernel.c` (`struct paint` gains `grid_generation`;
+`forth_hook_pixel()` bumps it; `touched[WIN_KIND_PAINT]`'s diff and its
+`old_paint_*` locals updated; stale comment rewritten).

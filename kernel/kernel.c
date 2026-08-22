@@ -361,6 +361,7 @@ struct paint {
     int opened_once;                             /* clears grid to all-zero only the first time PAINT ever opens */
     int palette_popup_open;                      /* whether the palette-chooser popup is showing */
     uint32_t palette_hidden_mask;                /* bit i set means color i is hidden from selection (Task 3) */
+    int grid_generation;                         /* bumped on every grid[][] write -- see forth_hook_pixel() */
 };
 static struct paint paint;
 static struct button paint_save_btn;
@@ -632,6 +633,14 @@ void forth_hook_pixel(int x, int y, int color) {
     serial_write_str(" c="); serial_write_int(color);
     serial_write_str("\n");
     paint.grid[y][x] = color;
+    /* Bumped unconditionally, same "generation only ever increases, so
+     * any change is detectable as !=" invariant console_output.h's own
+     * generation field already documents -- lets touched[WIN_KIND_PAINT]
+     * (see kmain()) detect a grid change without diffing all 256 cells
+     * every frame, and without relying on some other window's damage
+     * (or the cursor's own footprint) coincidentally overlapping the
+     * canvas to trigger a redraw. */
+    paint.grid_generation++;
 }
 
 /* Converts the live cursor position (poll_mouse_state()'s own mx/my,
@@ -2039,6 +2048,7 @@ void kmain(void) {
         int old_paint_load_btn_pressed = paint_load_btn.pressed;
         int old_paint_palette_popup_open = paint.palette_popup_open;
         uint32_t old_paint_palette_hidden_mask = paint.palette_hidden_mask;
+        int old_paint_grid_generation = paint.grid_generation;
         int old_paint_name_input_len = paint_name_input.len;
         int old_paint_name_input_cursor = paint_name_input.cursor;
         int old_paint_name_input_focused = paint_name_input.focused;
@@ -2842,18 +2852,21 @@ void kmain(void) {
                                       (ed.cursor != old_ed_cursor) || (ed.focused != old_ed_focused) ||
                                       (save_btn.hovered != old_save_btn_hovered) ||
                                       (save_btn.pressed != old_save_btn_pressed);
-            /* paint.grid[][]'s own content changes (via PIXEL, Task 3)
-             * happen from inside a Forth loop that already forces its
-             * own synchronous mid-loop redraw via REFRESH -- by the
-             * time kmain()'s own damage-tracked cycle runs again
-             * (after the whole script returns), the screen already
-             * reflects the final grid state from REFRESH's own direct
-             * draw+present calls. touched[WIN_KIND_PAINT] here only
-             * needs to catch the things kmain()'s own click/keyboard
-             * handling can change: the selected palette swatch, the
-             * filename field's own content/focus, and the SAVE
-             * button's hover/press state. */
+            /* paint.grid[][]'s own content changes (via PIXEL) are
+             * caught via paint.grid_generation (bumped unconditionally
+             * by forth_hook_pixel() -- see its own comment) rather than
+             * diffing all 256 cells here every frame. This used to rely
+             * on REFRESH's own synchronous mid-loop redraw, but REFRESH
+             * was deleted in the 2026-08-19 concurrency pass; investigating
+             * that stale assumption (2026-08-22) found grid updates were
+             * still visibly redrawing live in the common case only by
+             * accident -- either another window's damage happened to
+             * overlap PAINT's canvas, or (for real mouse-driven painting)
+             * the cursor's own per-frame footprint sits on the affected
+             * cell -- not because content changes were actually tracked.
+             * grid_generation removes that reliance on coincidence. */
             touched[WIN_KIND_PAINT] = touched[WIN_KIND_PAINT] || (paint.current_color != old_paint_current_color) ||
+                                      (paint.grid_generation != old_paint_grid_generation) ||
                                       (paint_name_input.len != old_paint_name_input_len) ||
                                       (paint_name_input.cursor != old_paint_name_input_cursor) ||
                                       (paint_name_input.focused != old_paint_name_input_focused) ||
