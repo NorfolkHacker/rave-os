@@ -528,8 +528,8 @@ static void draw_editor_group(const struct window *ed_win, const struct editor *
     button_draw(save_btn);
 }
 
-/* The fifth window: a 16x16 pixel canvas, an 8-swatch palette strip,
- * and a SAVE button -- opened only via the PAINT Forth word (Task 3),
+/* The fifth window: a 16x16 pixel canvas, a click-to-open palette
+ * popup, and a SAVE button -- opened only via the PAINT Forth word,
  * no start-menu launcher, matching EDIT's own SHELL-only precedent.
  * Canvas and palette are both drawn directly from paint's own state
  * (no separate widget module, unlike editor.c -- this window's whole
@@ -644,7 +644,13 @@ static int paint_mouse_cell(int *out_col, int *out_row) {
     int canvas_x, canvas_y, col, row;
 
     poll_mouse_state();
-    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN) {
+    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN || paint.palette_popup_open) {
+        /* The popup overlays the canvas's own top-left corner (see
+         * draw_paint_group()) -- while it's open the canvas underneath
+         * is not reachable, same as any modal overlay, so MOUSE-X/
+         * MOUSE-Y correctly report "not over the canvas" rather than
+         * letting a click meant for the popup also paint through to
+         * whatever cell happens to be underneath it. */
         return -1;
     }
     canvas_x = windows[WIN_KIND_PAINT].x + 8;
@@ -688,6 +694,14 @@ int forth_hook_mouse_down(void) {
 
 int forth_hook_mouse_right_down(void) {
     poll_mouse_state();
+    /* While the palette popup is open, a right-click is the popup's own
+     * hide/restore gesture (see kmain()'s PAINT click-handling), not a
+     * signal meant for the running Forth script -- otherwise hiding a
+     * color would also trigger PLOOP's own MOUSE-RIGHT-DOWN? quit
+     * condition and kill the program. */
+    if (paint.palette_popup_open) {
+        return 0;
+    }
     return (mouse_buttons_live & 0x02) != 0;
 }
 
@@ -1072,7 +1086,8 @@ static int fx_default_from_config(void) {
  * when the right button is pressed or the window is closed
  * (WINDOW-CLOSED?, Task 4). The bounds check exists because
  * MOUSE-X/MOUSE-Y return -1 when the cursor isn't over the canvas at
- * all (e.g. hovering the palette strip).
+ * all (e.g. hovering the current-color swatch, or while the palette
+ * popup is open and covering it).
  *
  * No REFRESH/PALETTE-PICK/SAVE-PICK calls here (2026-08-19 concurrency
  * pass deleted all three, along with the hooks they wrapped) -- those
@@ -1729,7 +1744,9 @@ void kmain(void) {
     windows[WIN_KIND_EDITOR].close_hovered = 0;
 
     /* 272x356 -- room for the 256x256 canvas (16px/cell x 16 cells),
-     * an 8-swatch palette strip, a filename field, and a SAVE button,
+     * the current-color swatch (the popup overlays the canvas itself
+     * rather than needing its own row), a filename field, and a SAVE
+     * button,
      * all with 8px margins (the filename field adds 26px over the
      * original 330 -- its own 20px height plus a 6px gap above SAVE,
      * same spacing FILES' name_input/NEW DIR pair already uses). y=80
@@ -2533,13 +2550,14 @@ void kmain(void) {
                  * big for buf_size", not "too small", so a truncated or
                  * wrong-format file would otherwise partially load with
                  * the rest of sprite_bytes left as stack garbage. Each
-                 * byte is also clamped to a valid palette index (< 8,
-                 * else 0): draw_paint_group() indexes paint_palette[]
-                 * with pt->grid[row][col] completely unchecked, so a
-                 * stray out-of-range byte from a bad or hand-edited file
-                 * would read past that 8-entry array. Anything else
-                 * (missing file, wrong size) is a silent no-op, same
-                 * convention as SAVE with an empty name. */
+                 * byte is also clamped to a valid palette index
+                 * (< PAINT_PALETTE_COLORS, else 0): draw_paint_group()
+                 * indexes paint_palette[] with pt->grid[row][col]
+                 * completely unchecked, so a stray out-of-range byte
+                 * from a bad or hand-edited file would read past that
+                 * array. Anything else (missing file, wrong size) is a
+                 * silent no-op, same convention as SAVE with an empty
+                 * name. */
                 paint_load_btn.hovered = paint_is_topmost && button_hit_test(&paint_load_btn, cx, cy);
                 if (paint_load_btn.hovered && click_edge) {
                     char path[FS_PATH_MAX];
