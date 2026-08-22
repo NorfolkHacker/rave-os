@@ -97,13 +97,31 @@ not a queue.
     design question, not just an implementation detail) rather than a
     quick patch to the existing plan.
 
-- **Naming: "FORTH" and "Rave-OS" read as two different things and
-  shouldn't.** Raised 2026-08-17 -- the FORTH console window and the OS
-  as a whole are conceptually the same project, but the UI and docs
-  currently use both names in ways that read as if they're separate.
-  Worth a pass to pick one consistent name and apply it across window
-  titles/branding/docs, rather than leaving it ambiguous which name
-  refers to what.
+- ~~**Naming: "FORTH" and "Rave-OS" read as two different things and
+  shouldn't.**~~ Resolved, 2026-08-22 -- re-audited and found this
+  already fixed by later, unrelated work: every window (FORTH included)
+  now titles itself `"RAVE-OS <KIND>"` (`draw_forth_group()` etc. via
+  `windows[i].title`), the boot messages all read `Rave-OS: ...`, and
+  the desktop banner reads `RAVE-OS`. The start menu's bare item labels
+  (`FORTH`, `FILES`, `SHELL`, ...) are a normal, consistent menu
+  convention, not a naming clash. The one concrete example raised
+  during this pass -- a desktop icon still labeled plain `FORTH` --
+  turned out to be dead code that never renders at all; see the new
+  entry below. Nothing left to fix here.
+
+- **`desktop_icon.c`'s functions are dead code -- nothing calls them.**
+  Found 2026-08-22 while re-auditing the naming item above.
+  `desktop_icons_init()`/`desktop_icons_draw()`/`desktop_icon_hit()`
+  are still defined, still built (`desktop_icon.o` is in
+  `kernel/Makefile`'s object list), but nothing in `kernel.c` (or
+  anywhere else in `kernel/`) calls any of them -- confirmed live too,
+  a boot screendump shows zero desktop icons even though every window
+  starts `WINDOW_CLOSED`, exactly the state `desktop_icons_draw()`
+  would draw an icon for. The start menu appears to have fully replaced
+  desktop icons as the way to launch apps at some point, leaving this
+  file orphaned. Needs a decision: delete the dead code, or re-wire it
+  back into `kmain()` as a live feature -- either is a separate task
+  from anything currently in flight.
 
 - ~~**`kmain()`'s loop doesn't run at all while a Forth script's own
   loop blocks.**~~ Done, 2026-08-19/20 -- shipped as a real cooperative

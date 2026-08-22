@@ -1835,3 +1835,32 @@ weren't separately live-tested.
 
 Files: `kernel/kernel.c` (`struct window_content` type; all five
 functions' signatures/bodies; three call sites).
+
+## 2026-08-22 -- Naming audit: already resolved, plus a dead-code find
+
+Took on `docs/IDEAS.md`'s standing "FORTH vs Rave-OS" naming item via
+`superpowers:brainstorming`'s bounded path. A source survey found the
+original ambiguity already resolved by later, unrelated work: every
+window (FORTH included) now titles itself `"RAVE-OS <KIND>"`, the
+bootloader messages all read `Rave-OS: ...`, and the desktop banner
+reads `RAVE-OS` -- all added across stages after this item was raised
+(2026-08-17), before which FORTH's console was arguably the whole OS's
+only real interface.
+
+Asked where the ambiguity was still visible; the answer was "the
+desktop icon still just says FORTH." Checking `desktop_icon.c` found
+its `desktop_icons_init()`/`desktop_icons_draw()`/`desktop_icon_hit()`
+are still defined and still built (`desktop_icon.o` is in
+`kernel/Makefile`'s object list) but are never called from `kernel.c`
+or anywhere else in `kernel/` -- confirmed live too, since a boot
+screendump from the previous session's headless QEMU pass already
+showed zero desktop icons despite every window starting
+`WINDOW_CLOSED` (exactly the state `desktop_icons_draw()` draws an
+icon for). The start menu appears to have fully taken over launching
+apps at some point, orphaning this file rather than anyone deleting
+it. Left as-is per instruction (deleting or re-wiring it is a separate
+task, now flagged in `docs/IDEAS.md`) rather than folding an unrelated
+fix into this naming pass.
+
+No source changes. Files: `docs/IDEAS.md` (naming item marked
+resolved; new dead-code entry).
