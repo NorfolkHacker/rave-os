@@ -1974,3 +1974,49 @@ renamed to `paint_build_sprite_path()`; `struct window_content`,
 `move_window_content()`, `draw_paint_group()`, `draw_window_by_index()`,
 the three `window_content` literals, and the PAINT `touched[]` diff all
 updated to thread it through; new LOAD click handler).
+
+## 2026-08-22 -- PAINT's palette-chooser popup, closing out the sprite-editor item
+
+Final sub-project of `docs/IDEAS.md`'s "PAINT sprite editor" item (SHELL
+launch and LOAD landed earlier the same day). Full design in
+`docs/superpowers/specs/2026-08-22-paint-palette-popup-design.md`,
+brainstormed via `superpowers:brainstorming`'s architectural path.
+
+Grew the master palette from 8 to 16 colors (the original 8
+index-stable, so SAVE/LOAD's file format needed zero changes) and
+replaced the always-visible strip with a small current-color swatch
+that opens a 4x4 popup grid on click, overlaying the canvas's own
+top-left corner. Both new pieces of state (`palette_popup_open`,
+`palette_hidden_mask`) live as fields on `struct paint` itself, so
+they ride through the window-content pipeline for free -- zero changes
+to `struct window_content` or its three call sites.
+
+A per-color hide/restore mechanism (right-click any popup swatch)
+stands in for "delete": colors are hidden, never removed or
+renumbered, so nothing already painted or previously saved can be
+silently reinterpreted by a later palette edit -- the master list's
+shape never changes, only what's currently offered for *new* picks.
+Session-only, resets every boot, same treatment `current_color` itself
+already got.
+
+Also fixed a latent gap this surfaced: `forth.c`'s `PIXEL` word
+hardcoded its own `color >= 8` bounds check, independent of `kernel.c`'s
+`PAINT_PALETTE_COLORS` -- missed, the 8 new colors would have existed
+in the palette but been unpaintable via Forth.
+
+Verified via a headless QEMU pass across all three implementation
+tasks: `PIXEL`-painting with a new color index (9, pink); opening the
+popup and confirming the 4x4 grid renders the right colors in the
+right positions; selecting a new color and confirming the popup
+closes; clicking outside the popup and confirming it closes without
+changing the selection; dragging the window while the popup is open
+and confirming it closes; hiding a color (dims, becomes unselectable)
+and restoring it (full brightness, selectable again) -- all via direct
+pixel-color sampling of screendumps, not just visual inspection.
+
+Files: `kernel/kernel.c` (`PAINT_PALETTE_COLORS`/`paint_palette[]`
+grown; `struct paint` gains two fields; `draw_paint_group()`,
+`paint_swatch_hit_test()`/`paint_popup_grid_hit_test()` -- replacing
+`paint_palette_hit_test()` -- and the PAINT click-handling/`touched[]`
+diff in `kmain()` all updated); `kernel/forth/forth.c` (`prim_pixel()`'s
+bounds check).

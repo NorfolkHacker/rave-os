@@ -97,34 +97,31 @@ not a queue.
   color-picking) for the whole session, and saves multiple named
   sprites to `/HOME/<name>`, confirmed on real hardware.
 
-- **PAINT still needs to become an actual sprite editor, not just a
-  proof of concept.** Raised 2026-08-17, alongside the real-hardware
-  bug the 2026-08-18 pass fixed (see above) -- these are the parts of
-  that same report that weren't about the bug itself and are still
-  open:
+- ~~**PAINT still needs to become an actual sprite editor, not just a
+  proof of concept.**~~ Done, 2026-08-22 -- all four sub-projects raised
+  2026-08-17 landed the same day (2026-08-22): SHELL launch, LOAD,
+  and finally the palette-chooser popup with delete-colors below.
   - ~~**Should launch from SHELL, not just via `RUN PAINT` typed into a
     FORTH console window.**~~ Done, 2026-08-22 -- SHELL now intercepts
     `RUN <target>` the same way it already intercepted `EDIT`, sharing
     a new `handle_run_command()` with the FORTH console instead of
     duplicating the launch logic. See `docs/BUILD_LOG.md`'s entry for
     the same date.
-  - **The 8-color bottom-strip palette is too small and always visible,
-    wasting canvas space.** Wanted instead: a real palette-chooser
-    popup/dialog that appears on demand, not a fixed strip -- almost
-    certainly needs a bigger-than-8 color set once it's not fighting for
-    screen space.
-  - **Need the ability to delete colours** from whatever the palette
-    becomes -- not just pick from a fixed set.
+  - ~~**The 8-color bottom-strip palette is too small and always
+    visible, wasting canvas space.**~~ Done, 2026-08-22 -- replaced by a
+    click-to-open popup showing 16 colors (up from 8), overlaying the
+    canvas's own top-left corner. See `docs/BUILD_LOG.md`'s entry for
+    the same date.
+  - ~~**Need the ability to delete colours** from whatever the palette
+    becomes -- not just pick from a fixed set.~~ Done, 2026-08-22 --
+    right-click any popup swatch to hide/restore it (session-only; the
+    master 16-color list and saved sprites' own meaning never change).
   - ~~**Needs LOAD, not just SAVE.**~~ Done, 2026-08-22 -- a LOAD button
     sits beside SAVE (same filename field, split row, no window
     resize), reads `/HOME/<name>` back into the grid only if it's
     exactly 256 bytes, and clamps each byte to a valid palette index in
     case of a bad/hand-edited file. See `docs/BUILD_LOG.md`'s entry for
     the same date.
-  - This adds up to substantially more than a bug-fix pass -- likely its
-    own `superpowers:brainstorming` cycle (palette-chooser UI is a real
-    design question, not just an implementation detail) rather than a
-    quick patch to the existing plan.
 
 - ~~**Naming: "FORTH" and "Rave-OS" read as two different things and
   shouldn't.**~~ Resolved, 2026-08-22 -- re-audited and found this
