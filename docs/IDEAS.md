@@ -171,30 +171,19 @@ not a queue.
   shows up immediately from the plain `FILES` item, no navigate-away-
   and-back workaround needed.
 
-- **A boot-time config screen: CPU count / RAM for the VM.** Raised
-  2026-08-18. Needs unpacking before it's actionable: CPU/RAM for a
-  QEMU *launch* is a host-side flag (`-smp`, `-m`) decided before the
-  VM starts, so a config screen for that would be a launcher
-  tool/script living outside Rave-OS entirely -- different from an
-  in-OS boot config screen, which would need real SMP/RAM-detection
-  support this kernel doesn't have at all yet. Which one is actually
-  wanted needs deciding first. Tied to a second open question, also
-  raised the same day: what Rave-OS's actual minimum viable
-  RAM/CPU footprint even is -- worth answering before building a
-  config screen around it.
+- ~~**A boot-time config screen: CPU count / RAM for the VM.**~~
+  Dropped, 2026-08-22 -- CPU/RAM for a QEMU launch is a host-side flag
+  (`-smp`, `-m`) decided before the VM even starts, so it's already
+  fully addressable from the command line (`qemu-system-i386 -smp 2 -m
+  256 ...`) with zero need for Rave-OS itself to have any say in it. An
+  in-OS equivalent (real SMP/RAM-detection) was the only version that
+  would've actually needed kernel work, and isn't wanted.
 
-- **A real cross-compilation toolchain, not host `gcc -m32`.** Raised
-  2026-08-20. The kernel currently builds with the host's own `gcc`
-  (inside the `forth-os` distrobox container) using `-m32 -ffreestanding
-  -nostdlib` flags to approximate freestanding i686 output -- it works,
-  but it's borrowing a hosted compiler's target rather than actually
-  cross-compiling, which risks host-toolchain-version drift (a `gcc`
-  upgrade silently changing codegen/ABI assumptions) and means anyone
-  building Rave-OS needs a Linux host with 32-bit multilib support, not
-  just any machine. A proper `i686-elf-gcc`/binutils cross-compiler
-  (the classic OSDev-recommended setup) would remove both constraints.
-  Not urgent -- the current setup works and boots on real hardware --
-  but worth doing before this becomes a distribution/onboarding problem.
+- ~~**A real cross-compilation toolchain, not host `gcc -m32`.**~~
+  Done, 2026-08-22 -- built a real `i686-elf-gcc`/binutils cross-compiler
+  via the classic OSDev recipe, now `kernel/Makefile`'s default (full
+  replacement, not an optional second path). See
+  `docs/BUILD_LOG.md`'s entry for the same date.
 
 - **Different resolution settings, not just the one hardcoded
   640x480.** Raised 2026-08-20. `boot/stage2.asm`'s `VBE_MODE` is

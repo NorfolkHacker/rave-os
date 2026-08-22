@@ -1,7 +1,13 @@
-CC := gcc
+# i686-elf: a real "no OS" cross-compiler target (see
+# toolchain/build-cross.sh), not the host's own gcc approximating
+# freestanding output via -m32 -ffreestanding -nostdlib -- removes the
+# host-toolchain-version-drift risk and the 32-bit-multilib requirement
+# a hosted compiler needed. Must be on PATH (toolchain/build-cross.sh's
+# own instructions cover this).
+CC := i686-elf-gcc
 AS := nasm
-LD := ld
-OBJCOPY := objcopy
+LD := i686-elf-ld
+OBJCOPY := i686-elf-objcopy
 
 # Quoted #include "foo.h" lines throughout the tree stay bare filenames
 # (no "../gfx/" style relative paths) -- these -I flags are what resolve
@@ -17,7 +23,13 @@ INCLUDES := -I. -Iarch -Idrivers -Isched -Ifs -Iforth -Igfx -Igui
 # compiler-generated) would corrupt whatever the interrupted code was
 # doing with it. This also just suits a kernel with no FPU context
 # switching at all yet.
-CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra $(INCLUDES)
+#
+# No -m32 here anymore -- i686-elf-gcc has no other architecture to
+# default to, so it's redundant with a real cross-compiler (it was only
+# ever needed to make the host's own hosted gcc target 32-bit instead
+# of its native 64-bit). -ffreestanding/-nostdlib stay for explicitness
+# even though the target implies them too.
+CFLAGS := -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra $(INCLUDES)
 
 C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o fs.o editor.o serial.o scheduler.o
 

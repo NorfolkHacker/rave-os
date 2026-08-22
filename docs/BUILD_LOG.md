@@ -2129,3 +2129,50 @@ adds `<stdint.h>`); `kernel/gui/window.c` (`window_draw()`,
 the per-window accent instead of a fixed constant; dead `#define`s
 removed); `kernel/kernel.c` (each window's `.accent_color` set at
 init).
+
+## 2026-08-22 -- Real `i686-elf` cross-compiler, replacing host `gcc -m32`
+
+Closed out `docs/IDEAS.md`'s standing toolchain item: the kernel used
+to build with the host's own hosted `gcc`, approximating a freestanding
+i686 target via `-m32 -ffreestanding -nostdlib` -- correct output, but
+exposed to silent codegen/ABI drift on a future host `gcc` upgrade, and
+required a 32-bit-multilib-capable host to build at all. Chose full
+replacement over an optional second toolchain path (discussed with the
+user first) -- an opt-in alternative nobody's forced to use doesn't
+actually remove either risk, it just adds an untested second path.
+
+Built `i686-elf-gcc`/binutils via the classic OSDev "GCC
+Cross-Compiler" recipe (binutils 2.42, gcc 14.2.0, `--without-headers`
+since this target has no OS to host a libc on) into `toolchain/
+build-cross.sh` rather than a one-off manual build -- the whole point
+of this item was avoiding "how did I even build this last time" drift,
+so the recipe itself needed to be reproducible, not just its output.
+Installs to `~/opt/cross` (the OSDev-standard prefix); needs
+`~/opt/cross/bin` on `PATH`. A review pass caught the script downloading
+both tarballs over plain `wget` with no integrity check at all -- a
+compromised mirror or a truncated download would have been silently
+extracted and compiled into the toolchain that produces the kernel
+binary. Fixed by pinning each tarball's SHA256 (computed directly from
+a real download of these exact versions, not copied from a webpage)
+and verifying with `sha256sum -c` before extracting -- `set -eu` aborts
+the script immediately on a mismatch.
+
+`kernel/Makefile`'s `CC`/`LD`/`OBJCOPY` now point at
+`i686-elf-gcc`/`i686-elf-ld`/`i686-elf-objcopy`. Dropped `-m32` from
+`CFLAGS` (redundant -- the cross-compiler has no other architecture to
+default to) but kept `-ffreestanding -nostdlib` for explicitness.
+`boot/Makefile` (uses `nasm` only, no C compiler) is untouched. The
+host-side test suite (`test_font.c` etc.) is unaffected by design --
+those run natively on the build machine, not the target, so they stay
+compiled with plain host `gcc`.
+
+Verified via a clean rebuild (no new warnings beyond the pre-existing
+RWX linker one) plus a headless QEMU pass sampling the exact same
+pixels this session's earlier work already established as known-good
+(FORTH's border `0x00FF66`, PAINT's border `0xFF3B30`, a
+`PIXEL`-painted cell at color index 9 `0xFF4FA3`) -- all three matched
+exactly, confirming the cross-compiled kernel behaves identically to
+the host-`gcc`-built one, not just that it compiles.
+
+Files: `toolchain/build-cross.sh` (new); `kernel/Makefile`
+(`CC`/`LD`/`OBJCOPY`, `CFLAGS`).
