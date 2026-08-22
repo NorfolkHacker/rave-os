@@ -4,8 +4,8 @@
  * fixed list of shortcuts -- the real actions that used to live in the
  * PANEL demo window (EXIT, FX) plus quick links into the standard
  * system folders fs_bootstrap_dirs() already guarantees exist. Same
- * fixed-slot-per-index shape as taskbar.c/desktop_icon.c: there are
- * only ever STARTMENU_ITEM_COUNT possible rows, so a static per-index
+ * fixed-slot-per-index shape as taskbar.c: there are only ever
+ * STARTMENU_ITEM_COUNT possible rows, so a static per-index
  * rect function is simpler than a real menu-widget framework. */
 
 #include "startmenu.h"
@@ -13,8 +13,8 @@
 #include "text.h"
 
 /* Deliberately duplicate literal values, not shared #defines -- every
- * widget file in this codebase (taskbar.c, desktop_icon.c) keeps its
- * own copies of the shared androidacid.com palette rather than pulling
+ * widget file in this codebase (taskbar.c) keeps its own copies of the
+ * shared androidacid.com palette rather than pulling
  * in a colors header, and STARTMENU_BG_COLOR/STARTMENU_BORDER_COLOR are
  * chosen to exactly match taskbar.c's TASKBAR_BG_COLOR/TASKBAR_BORDER_COLOR
  * so the button reads as part of the same bar. */

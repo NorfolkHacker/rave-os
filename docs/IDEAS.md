@@ -109,19 +109,16 @@ not a queue.
   turned out to be dead code that never renders at all; see the new
   entry below. Nothing left to fix here.
 
-- **`desktop_icon.c`'s functions are dead code -- nothing calls them.**
-  Found 2026-08-22 while re-auditing the naming item above.
-  `desktop_icons_init()`/`desktop_icons_draw()`/`desktop_icon_hit()`
-  are still defined, still built (`desktop_icon.o` is in
-  `kernel/Makefile`'s object list), but nothing in `kernel.c` (or
-  anywhere else in `kernel/`) calls any of them -- confirmed live too,
-  a boot screendump shows zero desktop icons even though every window
-  starts `WINDOW_CLOSED`, exactly the state `desktop_icons_draw()`
-  would draw an icon for. The start menu appears to have fully replaced
-  desktop icons as the way to launch apps at some point, leaving this
-  file orphaned. Needs a decision: delete the dead code, or re-wire it
-  back into `kmain()` as a live feature -- either is a separate task
-  from anything currently in flight.
+- ~~**`desktop_icon.c`'s functions are dead code -- nothing calls
+  them.**~~ Resolved, 2026-08-22 -- deleted `kernel/gui/desktop_icon.c`/
+  `.h` and their `kernel/Makefile` entries, since nothing called them
+  and the start menu had already fully replaced desktop icons as the
+  way to launch apps. Also dropped the now-dangling references to
+  `desktop_icon.c` from three comments in `shell.c`/`startmenu.c`/
+  `startmenu.h` that cited it as a design-pattern example. See
+  `docs/BUILD_LOG.md`'s entry for the same date. (Re-wiring desktop
+  icons back in as a live feature was the other option raised when
+  this was found -- not chosen; would be its own task if wanted later.)
 
 - ~~**`kmain()`'s loop doesn't run at all while a Forth script's own
   loop blocks.**~~ Done, 2026-08-19/20 -- shipped as a real cooperative

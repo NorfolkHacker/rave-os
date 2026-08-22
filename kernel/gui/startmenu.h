@@ -26,8 +26,7 @@
 /* x/y/w/h describe the start button itself -- flush with the taskbar's
  * own left edge and the same height, so kernel.c narrows the taskbar's
  * rect to make room and the two read as one continuous bottom bar. The
- * popup's rect is derived from this plus the fixed item count, the same
- * way desktop_icon.c derives each icon's rect from its column origin. */
+ * popup's rect is derived from this plus the fixed item count. */
 struct startmenu {
     int x, y, w, h;
     int open;

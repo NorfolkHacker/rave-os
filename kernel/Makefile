@@ -19,7 +19,7 @@ INCLUDES := -I. -Iarch -Idrivers -Isched -Ifs -Iforth -Igfx -Igui
 # switching at all yet.
 CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra $(INCLUDES)
 
-C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o desktop_icon.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o fs.o editor.o serial.o scheduler.o
+C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o fs.o editor.o serial.o scheduler.o
 
 all: kernel.bin
 
@@ -70,9 +70,6 @@ checkbox.o: gui/checkbox.c gui/checkbox.h gfx/graphics.h gfx/text.h
 
 taskbar.o: gui/taskbar.c gui/taskbar.h gui/window.h gfx/graphics.h gfx/text.h
 	$(CC) $(CFLAGS) -c gui/taskbar.c -o taskbar.o
-
-desktop_icon.o: gui/desktop_icon.c gui/desktop_icon.h gui/window.h gfx/graphics.h gfx/text.h
-	$(CC) $(CFLAGS) -c gui/desktop_icon.c -o desktop_icon.o
 
 startmenu.o: gui/startmenu.c gui/startmenu.h gfx/graphics.h gfx/text.h
 	$(CC) $(CFLAGS) -c gui/startmenu.c -o startmenu.o

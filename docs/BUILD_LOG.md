@@ -1864,3 +1864,26 @@ fix into this naming pass.
 
 No source changes. Files: `docs/IDEAS.md` (naming item marked
 resolved; new dead-code entry).
+
+## 2026-08-22 -- Deleted the dead desktop-icon code
+
+Closed out the previous entry's dead-code finding: `kernel/gui/
+desktop_icon.c`/`.h` deleted, along with `desktop_icon.o`'s object-list
+entry and build rule in `kernel/Makefile`. Nothing else in `kernel/`
+`#include`d `desktop_icon.h` or called any of its three functions, so
+this is a pure removal with zero behavior change -- confirmed by a
+clean full rebuild (`-Wall -Wextra`, no new warnings) and the existing
+host test suite (`test_font`/`test_editor`/`test_scheduler`/
+`test_context_switch`) all still passing.
+
+Also updated three comments (`gui/shell.c`, two in `gui/startmenu.c`,
+one in `gui/startmenu.h`) that cited `desktop_icon.c` as an example of
+a shared pattern (fixed-slot-per-index layout, per-file duplicated
+string helpers/color literals) -- left as-is they'd have pointed at a
+file that no longer exists. Dropped just the dangling reference from
+each list, keeping the other still-real examples (`taskbar.c` etc.).
+
+Files: `kernel/gui/desktop_icon.c`/`.h` (deleted); `kernel/Makefile`
+(object list + build rule removed); `kernel/gui/shell.c`,
+`kernel/gui/startmenu.c`, `kernel/gui/startmenu.h` (stale comment
+references dropped).

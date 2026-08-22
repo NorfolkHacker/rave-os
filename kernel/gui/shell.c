@@ -12,9 +12,8 @@
 /* Bounded append with a running cursor, same shape as kernel.c's own
  * str_append() -- duplicated here rather than shared (see this
  * codebase's "each file owns its small string primitives" convention:
- * taskbar.c, desktop_icon.c, startmenu.c, fs.c's own path_append() all
- * do the same). Truncates rather than overflows dst if src would run
- * past cap. */
+ * taskbar.c, startmenu.c, fs.c's own path_append() all do the same).
+ * Truncates rather than overflows dst if src would run past cap. */
 static void shell_append(char *dst, int *pos, int cap, const char *src) {
     if (cap <= 0) {
         return;
