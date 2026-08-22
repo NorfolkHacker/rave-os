@@ -21,6 +21,7 @@
 #include "interrupts.h"
 #include "keyboard.h"
 #include "mouse.h"
+#include "sb16.h"
 #include "graphics.h"
 #include "text.h"
 
@@ -112,6 +113,12 @@ __attribute__((interrupt)) static void irq12_mouse(struct interrupt_frame *frame
     pic_send_eoi_slave();
 }
 
+__attribute__((interrupt)) static void irq5_sb16(struct interrupt_frame *frame) {
+    (void)frame;
+    sb16_irq_ack();
+    pic_send_eoi_master();
+}
+
 /* Which of the 32 CPU exception vectors push a hardware error code onto
  * the stack before invoking the handler -- fixed by the x86 architecture
  * itself, not a software choice. Getting one of these wrong desyncs the
@@ -155,6 +162,8 @@ void interrupts_init(void) {
         void *handler;
         if (vector == 1) {
             handler = (void *)irq1_keyboard;
+        } else if (vector == 5) {
+            handler = (void *)irq5_sb16;
         } else if (vector == 12) {
             handler = (void *)irq12_mouse;
         } else if (vector < 8) {
@@ -171,6 +180,7 @@ void interrupts_init(void) {
 void interrupts_enable(void) {
     pic_clear_mask(1);  /* keyboard */
     pic_clear_mask(2);  /* cascade line -- required for IRQ8-15 to reach the CPU */
+    pic_clear_mask(5);  /* sb16 */
     pic_clear_mask(12); /* mouse */
     __asm__ volatile("sti");
 }

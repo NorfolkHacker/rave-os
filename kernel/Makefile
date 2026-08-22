@@ -56,7 +56,7 @@ idt.o: arch/idt.c arch/idt.h
 pic.o: arch/pic.c arch/pic.h arch/io.h
 	$(CC) $(CFLAGS) -c arch/pic.c -o pic.o
 
-isr.o: arch/isr.c arch/idt.h arch/pic.h arch/io.h arch/interrupts.h drivers/keyboard.h drivers/mouse.h gfx/graphics.h gfx/text.h
+isr.o: arch/isr.c arch/idt.h arch/pic.h arch/io.h arch/interrupts.h drivers/keyboard.h drivers/mouse.h gfx/graphics.h gfx/text.h drivers/sb16.h
 	$(CC) $(CFLAGS) -c arch/isr.c -o isr.o
 
 graphics.o: gfx/graphics.c gfx/graphics.h boot_info.h

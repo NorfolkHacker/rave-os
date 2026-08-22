@@ -8,6 +8,7 @@
  * extension points. See docs/superpowers/specs/2026-08-16-paint-design.md. */
 
 void forth_hook_paint_open(void);
+void forth_hook_beep(void);
 void forth_hook_pixel(int x, int y, int color);
 
 /* Canvas-relative cell column/row, 0..15, or -1 if the cursor isn't

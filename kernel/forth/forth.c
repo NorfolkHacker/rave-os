@@ -287,6 +287,11 @@ static void prim_paint(struct forth_vm *vm) {
     forth_hook_paint_open();
 }
 
+static void prim_beep(struct forth_vm *vm) {
+    (void)vm;
+    forth_hook_beep();
+}
+
 static void prim_pixel(struct forth_vm *vm) {
     int32_t x, y, color;
     if (!forth_pop(vm, &color) || !forth_pop(vm, &y) || !forth_pop(vm, &x)) {
@@ -338,7 +343,7 @@ static const struct forth_word primitives[] = {
     {"+", prim_add},   {"-", prim_sub},  {"*", prim_mul},   {"/", prim_div}, {"DUP", prim_dup},
     {"DROP", prim_drop}, {"SWAP", prim_swap}, {"OVER", prim_over}, {"=", prim_eq}, {"<", prim_lt},
     {">", prim_gt}, {".", prim_dot}, {"CR", prim_cr}, {"@", prim_fetch}, {"!", prim_store},
-    {"PAINT", prim_paint}, {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
+    {"PAINT", prim_paint}, {"BEEP", prim_beep}, {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
     {"MOUSE-DOWN?", prim_mouse_down}, {"MOUSE-RIGHT-DOWN?", prim_mouse_right_down},
     {"WINDOW-CLOSED?", prim_window_closed},
     {"CURRENT-COLOR", prim_current_color},

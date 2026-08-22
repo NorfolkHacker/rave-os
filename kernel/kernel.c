@@ -612,6 +612,38 @@ static void draw_paint_group(const struct window *win, const struct paint *pt, c
  * itself is defined much earlier in this file, so these hooks can call
  * it regardless of where they themselves sit. */
 
+/* A short, fixed 400Hz square wave -- just enough to prove the hardware
+ * path works, not a synth voice (see docs/superpowers/specs/2026-08-22-
+ * sb16-audio-driver-design.md's explicit scope cut). Generated once, into
+ * a .bss buffer, with pure integer arithmetic -- no floats needed for a
+ * square wave, and .bss costs zero bytes in kernel.bin (objcopy drops it;
+ * see arch/linker.ld's own comment on that), unlike a giant literal array
+ * would have. aligned(4096): a 4096-aligned buffer of at most 4096 bytes
+ * can never straddle the 64KB physical boundary ISA DMA can't cross,
+ * since 65536 is itself a multiple of 4096. */
+#define BEEP_SAMPLE_RATE 8000u
+#define BEEP_FREQ_HZ 400u
+#define BEEP_SAMPLES 2000u /* 250ms at 8000Hz */
+
+static unsigned char beep_tone[BEEP_SAMPLES] __attribute__((aligned(4096)));
+static int beep_tone_ready = 0;
+
+static void beep_tone_generate(void) {
+    unsigned int half_period = BEEP_SAMPLE_RATE / (2u * BEEP_FREQ_HZ);
+    unsigned int i;
+    for (i = 0; i < BEEP_SAMPLES; i++) {
+        beep_tone[i] = ((i / half_period) % 2u == 0u) ? 160 : 96;
+    }
+    beep_tone_ready = 1;
+}
+
+void forth_hook_beep(void) {
+    if (!beep_tone_ready) {
+        beep_tone_generate();
+    }
+    sb16_play_buffer(beep_tone, BEEP_SAMPLES, BEEP_SAMPLE_RATE);
+}
+
 void forth_hook_paint_open(void) {
     serial_write_str("HOOK paint_open\n");
     if (!paint.opened_once) {
