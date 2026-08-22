@@ -45,12 +45,18 @@ not a queue.
   to cover renders as non-blank, so a future glyph silently missing
   its switch case fails loudly instead of rendering as invisible.
 
-- **256 colour.** The backbuffer/graphics pipeline is currently a fixed
-  32-bit packed-RGB backdrop built around one near-black + acid-green
-  palette (`graphics.c`, `kernel.c`'s `backdrop_color()`). Revisit
-  whether this means richer palette use within the existing true-color
-  pipeline, or something closer to a real indexed/paletted colour mode
-  -- not yet decided, just flagged.
+- ~~**256 colour.**~~ Done, 2026-08-22 -- resolved in favor of richer
+  palette use within the existing true-color pipeline (the hardware was
+  never actually limited to 256 colors; a real indexed mode would have
+  been a deliberate retro constraint, not a technical necessity, and
+  wasn't what was wanted). Every window kind now gets its own
+  `accent_color` (border + hovered-control highlight) instead of all
+  five sharing one identical green -- FORTH keeps the original
+  androidacid.com accent, FILES/SHELL/EDITOR/PAINT reuse colors already
+  vetted in PAINT's own sprite palette (blue/orange/purple/red) rather
+  than inventing new ones. Body/titlebar backgrounds stay the same
+  neutral dark shade for every window; only the bright accent role
+  varies. See `docs/BUILD_LOG.md`'s entry for the same date.
 
 - **Audio: an 8-channel SID-like chip emulation.** C64 SID (MOS 6581/8580)
   as the inspiration -- its oscillators/waveforms/filter/envelope model --

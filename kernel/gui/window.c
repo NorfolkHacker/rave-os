@@ -11,8 +11,12 @@
 /* androidacid.com's "black and acid green" palette -- flat-RGB values
  * derived from the site's actual CSS custom properties, alpha-composited
  * onto its #050607 background by hand since this kernel only does opaque
- * fills (see kernel.c's backdrop_color() comment for the same math). */
-#define WINDOW_BORDER_COLOR 0x00FF66  /* --hard */
+ * fills (see kernel.c's backdrop_color() comment for the same math).
+ * The border/control-hover accent itself is no longer one fixed value
+ * here -- each window carries its own win->accent_color (set once at
+ * init in kmain(), reusing PAINT's own already-vetted palette colors)
+ * so windows read as visually distinct at a glance; body/titlebar stay
+ * this same neutral dark shade for every window regardless. */
 #define WINDOW_TITLEBAR_COLOR 0x0F1F17 /* a shade brighter than the body, so the bar still reads as separate without needing a second border */
 #define WINDOW_BODY_COLOR 0x0B1712    /* --panel over --bg, brightened slightly for legibility at low res -- the literal composite (~0x070C09) was nearly indistinguishable from the backdrop */
 #define WINDOW_TITLE_TEXT_COLOR 0xD4E6DB /* --text at 0.9 alpha over --bg */
@@ -37,8 +41,7 @@
 #define WINDOW_CONTROL_MARGIN 4 /* gap from the titlebar's right edge to the close control */
 #define WINDOW_CONTROL_GAP 4    /* gap between the minimize and close controls */
 #define WINDOW_CONTROL_RADIUS 3
-#define WINDOW_CONTROL_BORDER_COLOR 0x00FF66      /* --hard, hovered */
-#define WINDOW_CONTROL_BORDER_COLOR_IDLE 0x1F2E27 /* dim, not hovered */
+#define WINDOW_CONTROL_BORDER_COLOR_IDLE 0x1F2E27 /* dim, not hovered -- same regardless of the window's own accent */
 #define WINDOW_CONTROL_FILL_COLOR 0x0A1A12
 #define WINDOW_CONTROL_HOVER_COLOR 0x123322
 #define WINDOW_CONTROL_GLYPH_COLOR 0xD4E6DB
@@ -55,8 +58,8 @@ static void window_minimize_rect(const struct window *win, int *x, int *y) {
     *y = close_y;
 }
 
-static void window_draw_minimize_control(int x, int y, int hovered) {
-    uint32_t border = hovered ? WINDOW_CONTROL_BORDER_COLOR : WINDOW_CONTROL_BORDER_COLOR_IDLE;
+static void window_draw_minimize_control(int x, int y, int hovered, uint32_t accent) {
+    uint32_t border = hovered ? accent : WINDOW_CONTROL_BORDER_COLOR_IDLE;
     uint32_t fill = hovered ? WINDOW_CONTROL_HOVER_COLOR : WINDOW_CONTROL_FILL_COLOR;
     int bar_w = 6;
 
@@ -67,8 +70,8 @@ static void window_draw_minimize_control(int x, int y, int hovered) {
                  WINDOW_CONTROL_GLYPH_COLOR);
 }
 
-static void window_draw_close_control(int x, int y, int hovered) {
-    uint32_t border = hovered ? WINDOW_CONTROL_BORDER_COLOR : WINDOW_CONTROL_BORDER_COLOR_IDLE;
+static void window_draw_close_control(int x, int y, int hovered, uint32_t accent) {
+    uint32_t border = hovered ? accent : WINDOW_CONTROL_BORDER_COLOR_IDLE;
     uint32_t fill = hovered ? WINDOW_CONTROL_HOVER_COLOR : WINDOW_CONTROL_FILL_COLOR;
     int gw = text_width("X", 1);
 
@@ -85,7 +88,7 @@ void window_draw(const struct window *win) {
     int min_x, min_y, close_x, close_y;
 
     gfx_fill_rounded_rect(win->x - 2, border_top, win->w + 4, border_height, WINDOW_OUTER_RADIUS,
-                          WINDOW_BORDER_COLOR);
+                          win->accent_color);
     gfx_fill_rounded_rect_ex(win->x, win->y - WINDOW_TITLEBAR_HEIGHT, win->w, WINDOW_TITLEBAR_HEIGHT,
                              WINDOW_INNER_RADIUS, GFX_CORNER_TL | GFX_CORNER_TR, WINDOW_TITLEBAR_COLOR);
     text_puts(win->x + 4, win->y - WINDOW_TITLEBAR_HEIGHT + 6, win->title, WINDOW_TITLE_TEXT_COLOR, 1);
@@ -94,8 +97,8 @@ void window_draw(const struct window *win) {
 
     window_minimize_rect(win, &min_x, &min_y);
     window_close_rect(win, &close_x, &close_y);
-    window_draw_minimize_control(min_x, min_y, win->minimize_hovered);
-    window_draw_close_control(close_x, close_y, win->close_hovered);
+    window_draw_minimize_control(min_x, min_y, win->minimize_hovered, win->accent_color);
+    window_draw_close_control(close_x, close_y, win->close_hovered, win->accent_color);
 }
 
 int window_titlebar_hit_test(const struct window *win, int px, int py) {

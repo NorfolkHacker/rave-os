@@ -2080,3 +2080,52 @@ real mechanism (and the investigation that found it) instead.
 Files: `kernel/kernel.c` (`struct paint` gains `grid_generation`;
 `forth_hook_pixel()` bumps it; `touched[WIN_KIND_PAINT]`'s diff and its
 `old_paint_*` locals updated; stale comment rewritten).
+
+## 2026-08-22 -- Per-window accent colors, closing out "256 colour"
+
+`docs/IDEAS.md`'s standing "256 colour" item was explicitly undecided
+between two directions: richer palette use within the existing
+true-color pipeline, or a real indexed/paletted mode. Brainstormed with
+the user -- the graphics pipeline was never actually hardware-limited
+to 256 colors (VBE mode `0x112` is 640x480x32bpp true color), so an
+indexed mode would only ever have been a deliberate retro-aesthetic
+constraint, not a technical necessity; richer palette use was the
+actual want. Narrowed further: every window/widget currently shares
+the exact same single accent color (`0x00FF66`, androidacid.com's
+`--hard` green) for borders, hover highlights, and the cursor -- the
+concrete goal was making the five window kinds visually distinguishable
+at a glance.
+
+Scoped to `window.c`'s own chrome only (the outer border and the
+minimize/close controls' hovered-state highlight) -- not the generic
+content widgets inside (buttons, console inputs, etc.), which are
+shared components used identically across every window and would need
+their own color parameter threaded through if changed too; the outer
+border alone already gives the "which window is this" cue. `struct
+window` gains `accent_color`, `window_draw()` uses it for the outer
+border and passes it to `window_draw_minimize_control()`/
+`window_draw_close_control()` for their hovered-state border color
+(idle/dim states and the body/titlebar backgrounds stay identical for
+every window regardless). The now-dead `WINDOW_BORDER_COLOR`/
+`WINDOW_CONTROL_BORDER_COLOR` `#define`s were deleted rather than left
+stale.
+
+Rather than inventing new hex values, each window kind reuses a color
+already vetted in PAINT's own sprite palette, keeping the same
+provenance discipline every other color in this codebase has held to:
+FORTH keeps the original accent green (it's the OS's first/primary
+window), FILES gets blue (`0x2979FF`), SHELL gets orange (`0xFF9500`),
+EDITOR gets purple (`0xB026FF`), PAINT gets red (`0xFF3B30`).
+
+Verified via a headless QEMU pass opening all five windows and sampling
+each one's border pixel directly: FORTH `(0,255,102)`, FILES
+`(41,121,255)`, SHELL `(255,149,0)`, EDITOR `(176,38,255)`, PAINT
+`(255,59,48)` -- all five distinct and exactly matching their assigned
+hex values.
+
+Files: `kernel/gui/window.h` (`struct window` gains `accent_color`,
+adds `<stdint.h>`); `kernel/gui/window.c` (`window_draw()`,
+`window_draw_minimize_control()`/`window_draw_close_control()` take/use
+the per-window accent instead of a fixed constant; dead `#define`s
+removed); `kernel/kernel.c` (each window's `.accent_color` set at
+init).

@@ -1,6 +1,8 @@
 #ifndef RAVEOS_WINDOW_H
 #define RAVEOS_WINDOW_H
 
+#include <stdint.h>
+
 #define WINDOW_TITLEBAR_HEIGHT 20
 
 /* A closed window has been dismissed entirely (becomes a desktop icon,
@@ -22,6 +24,7 @@ struct window {
     int state;
     int minimize_hovered;
     int close_hovered;
+    uint32_t accent_color; /* border + hovered-control highlight -- lets each window kind read as visually distinct at a glance, set once at init */
 };
 
 void window_draw(const struct window *win);

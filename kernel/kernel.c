@@ -1612,6 +1612,12 @@ void kmain(void) {
     windows[WIN_KIND_FORTH].w = 400;
     windows[WIN_KIND_FORTH].h = 180;
     windows[WIN_KIND_FORTH].title = "RAVE-OS FORTH";
+    /* Each window kind gets its own accent_color (border + hovered-control
+     * highlight, see window_draw()) so they read as visually distinct at a
+     * glance -- reusing PAINT's own already-vetted palette colors rather
+     * than inventing new ones. FORTH keeps the original androidacid.com
+     * accent green since it's the OS's own first/primary window. */
+    windows[WIN_KIND_FORTH].accent_color = 0x00FF66;
     /* Closed at boot, same as every other window now -- see the z_order
      * comment below for why. Opened via the start menu's FORTH item --
      * there's no desktop-icon fallback anymore (removed on request, since
@@ -1639,6 +1645,7 @@ void kmain(void) {
      * completely unchanged; only the new row appends below them. */
     windows[WIN_KIND_FILES].h = 278;
     windows[WIN_KIND_FILES].title = "RAVE-OS FILES";
+    windows[WIN_KIND_FILES].accent_color = 0x2979FF; /* blue, same as PAINT's own palette index 6 */
     /* Closed at boot -- opened via the start menu's FILES item (a plain
      * launch) or CONFIG/GAMES (which also navigate cwd -- see
      * open_files_at()). */
@@ -1728,6 +1735,7 @@ void kmain(void) {
     windows[WIN_KIND_SHELL].w = 400;
     windows[WIN_KIND_SHELL].h = 180;
     windows[WIN_KIND_SHELL].title = "RAVE-OS SHELL";
+    windows[WIN_KIND_SHELL].accent_color = 0xFF9500; /* orange, same as PAINT's own palette index 3 */
     /* Closed at boot, same as FORTH/FILES -- opened via the start
      * menu's SHELL item. */
     windows[WIN_KIND_SHELL].state = WINDOW_CLOSED;
@@ -1742,6 +1750,7 @@ void kmain(void) {
     windows[WIN_KIND_EDITOR].w = 400;
     windows[WIN_KIND_EDITOR].h = 180;
     windows[WIN_KIND_EDITOR].title = "RAVE-OS EDIT";
+    windows[WIN_KIND_EDITOR].accent_color = 0xB026FF; /* purple, same as PAINT's own palette index 7 */
     /* Closed at boot, same as every other window -- opened only via
      * SHELL's EDIT command (see handle_edit_command(), added in the
      * next task), no start-menu launcher (EDIT is deliberately
@@ -1769,6 +1778,7 @@ void kmain(void) {
     windows[WIN_KIND_PAINT].w = 272;
     windows[WIN_KIND_PAINT].h = 356;
     windows[WIN_KIND_PAINT].title = "RAVE-OS PAINT";
+    windows[WIN_KIND_PAINT].accent_color = 0xFF3B30; /* red, same as PAINT's own palette index 2 */
     /* Closed at boot, opened only via the PAINT Forth word (Task 3) --
      * no start-menu launcher, matching EDIT's own SHELL-only
      * precedent. */
