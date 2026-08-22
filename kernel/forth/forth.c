@@ -292,7 +292,7 @@ static void prim_pixel(struct forth_vm *vm) {
     if (!forth_pop(vm, &color) || !forth_pop(vm, &y) || !forth_pop(vm, &x)) {
         return;
     }
-    if (x < 0 || x >= 16 || y < 0 || y >= 16 || color < 0 || color >= 8) {
+    if (x < 0 || x >= 16 || y < 0 || y >= 16 || color < 0 || color >= 16) {
         forth_set_error(vm, "BAD PIXEL");
         return;
     }

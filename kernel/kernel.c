@@ -339,7 +339,7 @@ static void poll_mouse_state(void) {
 
 #define PAINT_GRID_SIZE 16
 #define PAINT_CELL_PX 16
-#define PAINT_PALETTE_COLORS 8
+#define PAINT_PALETTE_COLORS 16
 
 /* File-scope, same "hook-reachability" reasoning as mx/my above --
  * forth_hook_pixel()/forth_hook_paint_open()/forth_hook_current_color()
@@ -373,6 +373,7 @@ static int z_order[MAX_WINDOWS];
 
 static const uint32_t paint_palette[PAINT_PALETTE_COLORS] = {
     0x050607, 0xFFFFFF, 0xFF3B30, 0xFF9500, 0xFFEB3B, 0x00FF66, 0x2979FF, 0xB026FF,
+    0x8D6E4C, 0xFF4FA3, 0x18E0E0, 0x0A6E3D, 0x1A2E8C, 0x808080, 0x2B2B2B, 0xCC3300,
 };
 
 /* Clamps a window's position so its full outer bounds (border included)
