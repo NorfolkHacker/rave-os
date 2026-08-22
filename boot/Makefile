@@ -55,8 +55,17 @@ fs.img:
 # docs/BUILD_LOG.md / project memory, first hit and fixed for the Forth
 # console back on 2026-08-03, then silently reintroduced here because this
 # target never got the flag).
+# -device sb16 with no audiodev property: QEMU still fully answers the
+# card's I/O ports/DSP handshake/DMA/IRQ5 with no audiodev attached (a real
+# card doesn't need a live speaker plugged in to respond to programming
+# either) -- it just means no host audio comes out. To actually hear BEEP,
+# append your own backend by hand, e.g.:
+#   -audiodev pa,id=snd0 -device sb16,audiodev=snd0
+# (swap "pa" for "pipewire"/"alsa"/whatever your host provides -- left out
+# of the default target so `make run` never depends on a specific host
+# audio server being up).
 run: disk.img fs.img
-	$(QEMU) -accel kvm -display sdl -drive file=disk.img,format=raw,if=ide,bus=0,unit=0 -drive file=fs.img,format=raw,if=ide,bus=0,unit=1
+	$(QEMU) -accel kvm -display sdl -device sb16 -drive file=disk.img,format=raw,if=ide,bus=0,unit=0 -drive file=fs.img,format=raw,if=ide,bus=0,unit=1
 
 clean:
 	rm -f stage1.bin stage2.bin disk.img fs.img

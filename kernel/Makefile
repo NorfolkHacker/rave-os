@@ -31,7 +31,7 @@ INCLUDES := -I. -Iarch -Idrivers -Isched -Ifs -Iforth -Igfx -Igui
 # even though the target implies them too.
 CFLAGS := -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra $(INCLUDES)
 
-C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o fs.o editor.o serial.o scheduler.o
+C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o sb16.o fs.o editor.o serial.o scheduler.o
 
 all: kernel.bin
 
@@ -41,7 +41,7 @@ kernel_entry.o: arch/kernel_entry.asm
 context_switch.o: sched/context_switch.asm
 	$(AS) -f elf32 sched/context_switch.asm -o context_switch.o
 
-kernel.o: kernel.c gfx/graphics.h gfx/text.h drivers/mouse.h drivers/keyboard.h arch/interrupts.h gui/window.h gui/button.h gui/taskbar.h gui/startmenu.h gui/console_input.h gui/console_history.h gui/console_output.h forth/forth.h gui/shell.h arch/io.h drivers/ata.h fs/fs.h gui/editor.h forth/forth_hooks.h drivers/serial.h sched/scheduler.h
+kernel.o: kernel.c gfx/graphics.h gfx/text.h drivers/mouse.h drivers/keyboard.h arch/interrupts.h gui/window.h gui/button.h gui/taskbar.h gui/startmenu.h gui/console_input.h gui/console_history.h gui/console_output.h forth/forth.h gui/shell.h arch/io.h drivers/ata.h fs/fs.h gui/editor.h forth/forth_hooks.h drivers/serial.h sched/scheduler.h drivers/sb16.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 keyboard.o: drivers/keyboard.c drivers/keyboard.h
@@ -106,6 +106,9 @@ forth.o: forth/forth.c forth/forth.h forth/forth_hooks.h
 
 ata.o: drivers/ata.c drivers/ata.h arch/io.h
 	$(CC) $(CFLAGS) -c drivers/ata.c -o ata.o
+
+sb16.o: drivers/sb16.c drivers/sb16.h arch/io.h drivers/serial.h
+	$(CC) $(CFLAGS) -c drivers/sb16.c -o sb16.o
 
 fs.o: fs/fs.c fs/fs.h drivers/ata.h
 	$(CC) $(CFLAGS) -c fs/fs.c -o fs.o

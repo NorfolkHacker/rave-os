@@ -23,6 +23,7 @@
 #include "editor.h"
 #include "io.h"
 #include "ata.h"
+#include "sb16.h"
 #include "fs.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
@@ -1938,6 +1939,7 @@ void kmain(void) {
      * safe to run any time after interrupts_enable(), not tied to the
      * masked-PIC ordering the line above exists for. */
     ata_status = ata_selftest();
+    sb16_init();
     fs_status = fs_selftest();
     fs_bootstrap_dirs();
 
