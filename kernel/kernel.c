@@ -340,6 +340,12 @@ static void poll_mouse_state(void) {
 #define PAINT_GRID_SIZE 16
 #define PAINT_CELL_PX 16
 #define PAINT_PALETTE_COLORS 16
+#define PAINT_SWATCH_W 40
+#define PAINT_SWATCH_H 24
+#define PAINT_POPUP_COLS 4
+#define PAINT_POPUP_SWATCH 32
+#define PAINT_POPUP_GAP 4
+#define PAINT_POPUP_SIZE (PAINT_POPUP_COLS * PAINT_POPUP_SWATCH + (PAINT_POPUP_COLS - 1) * PAINT_POPUP_GAP)
 
 /* File-scope, same "hook-reachability" reasoning as mx/my above --
  * forth_hook_pixel()/forth_hook_paint_open()/forth_hook_current_color()
@@ -350,9 +356,11 @@ static void poll_mouse_state(void) {
  * that, it only additionally makes paint reachable from the hooks,
  * which aren't part of that pipeline at all. */
 struct paint {
-    int grid[PAINT_GRID_SIZE][PAINT_GRID_SIZE]; /* palette index 0..7 per cell, row-major */
-    int current_color;                          /* natively-selected palette swatch, 0..7 */
+    int grid[PAINT_GRID_SIZE][PAINT_GRID_SIZE]; /* palette index 0..15 per cell, row-major */
+    int current_color;                          /* natively-selected palette swatch, 0..15 */
     int opened_once;                             /* clears grid to all-zero only the first time PAINT ever opens */
+    int palette_popup_open;                      /* whether the palette-chooser popup is showing */
+    uint32_t palette_hidden_mask;                /* bit i set means color i is hidden from selection (Task 3) */
 };
 static struct paint paint;
 static struct button paint_save_btn;
@@ -528,11 +536,10 @@ static void draw_editor_group(const struct window *ed_win, const struct editor *
  * content is exactly two nested loops over fixed-size arrays). */
 static void draw_paint_group(const struct window *win, const struct paint *pt, const struct console_input *name_input,
                              const struct button *save_btn, const struct button *load_btn) {
-    int row, col, i;
+    int row, col;
     int canvas_x = win->x + 8;
     int canvas_y = win->y + 8;
     int palette_y = canvas_y + PAINT_GRID_SIZE * PAINT_CELL_PX + 4;
-    int swatch_w = (PAINT_GRID_SIZE * PAINT_CELL_PX) / PAINT_PALETTE_COLORS;
 
     window_draw(win);
 
@@ -543,16 +550,36 @@ static void draw_paint_group(const struct window *win, const struct paint *pt, c
         }
     }
 
-    for (i = 0; i < PAINT_PALETTE_COLORS; i++) {
-        int sx = canvas_x + i * swatch_w;
-        gfx_fill_rect(sx, palette_y, swatch_w, 24, paint_palette[i]);
-        if (i == pt->current_color) {
-            /* A 2px border in the OS's own hard accent marks the
-             * selected swatch -- same visual language FILES' own
-             * selected-row highlight already uses for "this one is
-             * chosen". */
-            gfx_fill_rect(sx, palette_y, swatch_w, 2, 0x00FF66);
-            gfx_fill_rect(sx, palette_y + 22, swatch_w, 2, 0x00FF66);
+    /* Current-color "well" -- always visible, shows what PIXEL paints
+     * with next. Clicking it opens the popup grid (paint_swatch_hit_test()/
+     * paint_popup_grid_hit_test()); the 1px accent border (same
+     * border-rect-behind-a-smaller-fill-rect technique
+     * console_input_draw() already uses) marks it as clickable. */
+    gfx_fill_rect(canvas_x - 1, palette_y - 1, PAINT_SWATCH_W + 2, PAINT_SWATCH_H + 2, 0x00FF66);
+    gfx_fill_rect(canvas_x, palette_y, PAINT_SWATCH_W, PAINT_SWATCH_H, paint_palette[pt->current_color]);
+
+    if (pt->palette_popup_open) {
+        int pi;
+
+        /* Overlays the canvas's own top-left corner rather than
+         * appearing below the swatch -- the window has no vertical
+         * room left below the swatch row (see the design spec), so a
+         * 140x140 popup temporarily covers part of the canvas while
+         * open, same as any floating color-picker dialog would. */
+        gfx_fill_rect(canvas_x - 2, canvas_y - 2, PAINT_POPUP_SIZE + 4, PAINT_POPUP_SIZE + 4, 0x00FF66);
+        gfx_fill_rect(canvas_x, canvas_y, PAINT_POPUP_SIZE, PAINT_POPUP_SIZE, 0x0B1712);
+
+        for (pi = 0; pi < PAINT_PALETTE_COLORS; pi++) {
+            int pcol = pi % PAINT_POPUP_COLS;
+            int prow = pi / PAINT_POPUP_COLS;
+            int sx = canvas_x + pcol * (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
+            int sy = canvas_y + prow * (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
+
+            gfx_fill_rect(sx, sy, PAINT_POPUP_SWATCH, PAINT_POPUP_SWATCH, paint_palette[pi]);
+            if (pi == pt->current_color) {
+                gfx_fill_rect(sx, sy, PAINT_POPUP_SWATCH, 2, 0x00FF66);
+                gfx_fill_rect(sx, sy + PAINT_POPUP_SWATCH - 2, PAINT_POPUP_SWATCH, 2, 0x00FF66);
+            }
         }
     }
 
@@ -605,7 +632,7 @@ void forth_hook_pixel(int x, int y, int color) {
  * genuinely current state) into a canvas-relative cell index -- -1 if
  * the window is closed, or the cursor isn't over the canvas region at
  * all (same 8px-margin offset draw_paint_group()/
- * paint_palette_hit_test() already use). */
+ * paint_swatch_hit_test() already use). */
 static int paint_mouse_cell(int *out_col, int *out_row) {
     int canvas_x, canvas_y, col, row;
 
@@ -671,25 +698,38 @@ int forth_hook_window_closed(void) {
     return windows[WIN_KIND_PAINT].state != WINDOW_OPEN;
 }
 
-/* Converts a click position into a palette swatch index (0..7), or -1
- * if the click missed the palette strip entirely. Mirrors
- * files_list_hit_test()'s own "convert a click into a logical index"
- * shape. */
-static int paint_palette_hit_test(const struct window *win, int px, int py) {
+/* Hit-tests the always-visible current-color swatch -- clicking it
+ * opens the popup grid (paint_popup_grid_hit_test()). */
+static int paint_swatch_hit_test(const struct window *win, int px, int py) {
+    int canvas_x = win->x + 8;
     int canvas_y = win->y + 8;
     int palette_y = canvas_y + PAINT_GRID_SIZE * PAINT_CELL_PX + 4;
-    int swatch_w = (PAINT_GRID_SIZE * PAINT_CELL_PX) / PAINT_PALETTE_COLORS;
-    int canvas_x = win->x + 8;
-    int idx;
+    return px >= canvas_x && px < canvas_x + PAINT_SWATCH_W && py >= palette_y && py < palette_y + PAINT_SWATCH_H;
+}
 
-    if (py < palette_y || py >= palette_y + 24) {
+/* Converts a click position into a popup swatch index (0..15), or -1
+ * if the click missed the grid entirely. Mirrors
+ * files_list_hit_test()'s own "convert a click into a logical index"
+ * shape -- same spirit the old paint_palette_hit_test() used for the
+ * strip it replaced. */
+static int paint_popup_grid_hit_test(const struct window *win, int px, int py) {
+    int canvas_x = win->x + 8;
+    int canvas_y = win->y + 8;
+    int col, row;
+
+    if (px < canvas_x || px >= canvas_x + PAINT_POPUP_SIZE || py < canvas_y || py >= canvas_y + PAINT_POPUP_SIZE) {
         return -1;
     }
-    idx = (px - canvas_x) / swatch_w;
-    if (idx < 0 || idx >= PAINT_PALETTE_COLORS) {
-        return -1;
-    }
-    return idx;
+    /* The bounds check above already guarantees col/row land in
+     * [0, PAINT_POPUP_COLS) -- PAINT_POPUP_SIZE is exactly
+     * PAINT_POPUP_COLS swatches plus the gaps between them, no
+     * trailing gap past the last column. A click inside a gap between
+     * swatches is attributed to the swatch just before it (integer
+     * division) -- same loose tolerance files_list_hit_test() already
+     * uses for its own row bands. */
+    col = (px - canvas_x) / (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
+    row = (py - canvas_y) / (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
+    return row * PAINT_POPUP_COLS + col;
 }
 
 /* Builds "/HOME/" + the filename field's own text, uppercased to match
@@ -1973,6 +2013,7 @@ void kmain(void) {
         int old_paint_save_btn_pressed = paint_save_btn.pressed;
         int old_paint_load_btn_hovered = paint_load_btn.hovered;
         int old_paint_load_btn_pressed = paint_load_btn.pressed;
+        int old_paint_palette_popup_open = paint.palette_popup_open;
         int old_paint_name_input_len = paint_name_input.len;
         int old_paint_name_input_cursor = paint_name_input.cursor;
         int old_paint_name_input_focused = paint_name_input.focused;
@@ -2183,6 +2224,14 @@ void kmain(void) {
                         raise_window(z_order, target);
                         if (window_titlebar_hit_test(&windows[target], cx, cy)) {
                             dragging_window = target;
+                            /* Dragging any window while PAINT's popup is
+                             * open would leave it rendered at a stale
+                             * position relative to a window that just
+                             * moved -- simplest fix is closing it
+                             * outright rather than threading a second
+                             * movable position through
+                             * move_window_content(). */
+                            paint.palette_popup_open = 0;
                         }
                     }
                 }
@@ -2405,14 +2454,30 @@ void kmain(void) {
                 }
                 save_btn.pressed = save_btn.hovered && left_held;
 
-                /* Clicking a palette swatch selects it -- no
-                 * confirmation, no separate "apply" step, matching
-                 * this window's otherwise all-immediate click
-                 * semantics. */
-                if (paint_is_topmost && click_edge) {
-                    int swatch = paint_palette_hit_test(&windows[WIN_KIND_PAINT], cx, cy);
-                    if (swatch >= 0) {
-                        paint.current_color = swatch;
+                /* Click routing for the palette-chooser popup: closed
+                 * + click on the swatch opens it; open + click on a
+                 * grid swatch selects it and closes the popup; open +
+                 * click on any *other* window (or the backdrop) closes
+                 * it without changing current_color, same "click
+                 * outside dismisses" convention the start menu's own
+                 * popup already uses. (Task 3 adds right-click
+                 * hide/restore and the "hidden swatches are a no-op"
+                 * rule to the grid-click branch below.) */
+                if (click_edge) {
+                    if (paint_is_topmost) {
+                        if (!paint.palette_popup_open) {
+                            if (paint_swatch_hit_test(&windows[WIN_KIND_PAINT], cx, cy)) {
+                                paint.palette_popup_open = 1;
+                            }
+                        } else {
+                            int swatch = paint_popup_grid_hit_test(&windows[WIN_KIND_PAINT], cx, cy);
+                            if (swatch >= 0) {
+                                paint.current_color = swatch;
+                            }
+                            paint.palette_popup_open = 0;
+                        }
+                    } else if (paint.palette_popup_open) {
+                        paint.palette_popup_open = 0;
                     }
                 }
 
@@ -2755,7 +2820,8 @@ void kmain(void) {
                                       (paint_save_btn.hovered != old_paint_save_btn_hovered) ||
                                       (paint_save_btn.pressed != old_paint_save_btn_pressed) ||
                                       (paint_load_btn.hovered != old_paint_load_btn_hovered) ||
-                                      (paint_load_btn.pressed != old_paint_load_btn_pressed);
+                                      (paint_load_btn.pressed != old_paint_load_btn_pressed) ||
+                                      (paint.palette_popup_open != old_paint_palette_popup_open);
             {
                 struct window_content wc = {
                     .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
