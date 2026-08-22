@@ -1734,3 +1734,46 @@ re-running the same host probe (`?` now shows a real bitmap) and
 
 Files: `kernel/gfx/font.c` (`G_QMARK` + `case '?'`);
 `kernel/tests/test_font.c` (new, host-built).
+
+## 2026-08-22 -- Home/End/Delete key support in the editor
+
+`docs/IDEAS.md` flagged this gap while designing the text editor:
+`keyboard.c` only decoded the 4 arrow keys as extended pseudo-characters,
+never Home, End, or Delete. Followed `superpowers:brainstorming`'s
+bounded path -- scoped to `editor.c` only, not every `console_input.c`
+field, since the editor is the widget that actually needs per-line
+navigation and forward-delete.
+
+`keyboard.h`/`keyboard.c` gained three more pseudo-characters
+(`KEY_HOME`/`KEY_END`/`KEY_DELETE`, next unused C0 codes after
+`KEY_RIGHT`) and three more `case` arms in `keyboard_poll_char()`'s
+extended-scancode switch, same pattern as the existing arrow keys.
+`editor.c` gained `editor_move_home()`/`editor_move_end()` (cursor to
+the start/end of its *current line*, reusing the existing
+`editor_line_start()`/`editor_line_end()` helpers -- not the whole
+buffer) and `editor_delete_forward()` (mirror image of
+`editor_feed_char()`'s `'\b'` branch: deletes the byte at the cursor
+instead of before it; deleting a `'\n'` merges lines naturally, no
+special case needed). `kernel.c`'s existing `ed.focused` dispatch chain
+got three more branches alongside its `KEY_UP`/`KEY_DOWN`/`KEY_LEFT`/
+`KEY_RIGHT` ones.
+
+Built via `superpowers:test-driven-development`: `kernel/tests/test_editor.c`
+(new, host-built, same convention as `test_font.c`/`test_scheduler.c`)
+written first against the not-yet-existing functions -- confirmed RED
+(implicit-declaration errors), then implemented until it went GREEN.
+Covers Home/End on a single line, on the middle line of a multi-line
+buffer (not the whole buffer), End on the last line (no trailing
+`'\n'`, so end-of-line is end-of-buffer), delete-forward mid-buffer,
+delete-forward merging two lines, and delete-forward as a no-op at
+end-of-buffer. `editor.c`'s buffer logic has no freestanding-only
+dependencies, but `editor_draw()` does call into `gfx_fill_rect()`/
+`text_puts()`/`text_width()` -- the test stubs those three as no-ops
+purely so the link succeeds, since no test here calls `editor_draw()`.
+Full kernel rebuild (`make clean && make`) still builds clean with no
+new warnings.
+
+Files: `kernel/drivers/keyboard.h`/`keyboard.c` (three new keys);
+`kernel/gui/editor.h`/`editor.c` (three new functions);
+`kernel/kernel.c` (three new dispatch branches); `kernel/tests/test_editor.c`
+(new, host-built).

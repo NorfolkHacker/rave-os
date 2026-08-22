@@ -6,10 +6,13 @@
  * prefix byte + a code byte -- see keyboard.c). Values are unused C0
  * control codes (DC1-DC4), chosen because nothing in this kernel already
  * treats them specially (unlike '\b'=8, '\n'=10). */
-#define KEY_UP    0x11
-#define KEY_DOWN  0x12
-#define KEY_LEFT  0x13
-#define KEY_RIGHT 0x14
+#define KEY_UP     0x11
+#define KEY_DOWN   0x12
+#define KEY_LEFT   0x13
+#define KEY_RIGHT  0x14
+#define KEY_HOME   0x15
+#define KEY_END    0x16
+#define KEY_DELETE 0x17
 
 /* Non-blocking: if a translated character is available right now, writes
  * it to *out and returns 1; otherwise returns 0 immediately. Drains and

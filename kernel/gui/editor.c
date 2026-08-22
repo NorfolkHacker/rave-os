@@ -136,6 +136,27 @@ void editor_move_line(struct editor *ed, int delta) {
     }
 }
 
+void editor_move_home(struct editor *ed) {
+    ed->cursor = editor_line_start(ed, ed->cursor);
+}
+
+void editor_move_end(struct editor *ed) {
+    ed->cursor = editor_line_end(ed, ed->cursor);
+}
+
+void editor_delete_forward(struct editor *ed) {
+    unsigned int i;
+
+    if (ed->cursor >= ed->len) {
+        return;
+    }
+    for (i = ed->cursor; i < ed->len - 1; i++) {
+        ed->buf[i] = ed->buf[i + 1];
+    }
+    ed->len--;
+    ed->buf[ed->len] = 0;
+}
+
 int editor_hit_test(const struct editor *ed, int px, int py) {
     return px >= ed->x && px < ed->x + ed->w && py >= ed->y && py < ed->y + ed->h;
 }

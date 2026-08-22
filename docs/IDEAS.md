@@ -43,16 +43,15 @@ not a queue.
   scratch-image byte editing. See `docs/BUILD_LOG.md`'s entries for both
   and their design specs under `docs/superpowers/specs/`.
 
-- **Home/End/Delete key support.** `keyboard.c` only decodes the 4 arrow
-  keys as extended pseudo-characters (`KEY_UP`/`KEY_DOWN`/`KEY_LEFT`/
-  `KEY_RIGHT`, `keyboard.h`) -- Home, End, and Delete aren't decoded at
-  all yet. Surfaced as a real gap while designing the text editor
-  (2026-08-16): the editor's own spec explicitly deferred these three
-  keys rather than add new scancode decoding with unverified
-  headless-QEMU support in the same stage. Would need `keyboard.c`'s
-  extended-scancode table extended, then wiring into whichever widgets
-  want them (the editor being the obvious first consumer, but
-  `console_input.c`'s fields could use Home/End too).
+- ~~**Home/End/Delete key support.**~~ Done, 2026-08-22 -- `keyboard.c`
+  now decodes all three as extended pseudo-characters, and the editor
+  handles them: `editor_move_home()`/`editor_move_end()` jump to the
+  start/end of the current line, `editor_delete_forward()` deletes at
+  the cursor. Scoped to the editor only (the "obvious first consumer"
+  this entry called out) -- `console_input.c`'s single-line fields
+  (Forth console, Shell console, FILES rename, PAINT filename) still
+  only handle arrow keys. See `docs/BUILD_LOG.md`'s entry for the same
+  date.
 
 - **A struct-based refactor of `kernel.c`'s five window-pipeline
   functions.** `move_window_content()`, `draw_window_by_index()`,

@@ -53,6 +53,20 @@ void editor_move_cursor(struct editor *ed, int delta);
  * first line or down from the last. */
 void editor_move_line(struct editor *ed, int delta);
 
+/* Moves the cursor to the start of its current line -- for KEY_HOME. */
+void editor_move_home(struct editor *ed);
+
+/* Moves the cursor to the end of its current line (just before that
+ * line's '\n', or ed->len on the last line) -- for KEY_END. */
+void editor_move_end(struct editor *ed);
+
+/* Deletes the byte at the cursor, shifting everything after it left by
+ * one -- mirror image of editor_feed_char()'s '\b' branch, which
+ * deletes the byte *before* the cursor instead. Deleting a '\n' merges
+ * the following line into the current one. A no-op at the end of the
+ * buffer. For KEY_DELETE. */
+void editor_delete_forward(struct editor *ed);
+
 int editor_hit_test(const struct editor *ed, int px, int py);
 
 void editor_draw(const struct editor *ed);

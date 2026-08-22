@@ -2575,6 +2575,12 @@ void kmain(void) {
                 editor_move_cursor(&ed, -1);
             } else if (ed.focused && c == KEY_RIGHT) {
                 editor_move_cursor(&ed, 1);
+            } else if (ed.focused && c == KEY_HOME) {
+                editor_move_home(&ed);
+            } else if (ed.focused && c == KEY_END) {
+                editor_move_end(&ed);
+            } else if (ed.focused && c == KEY_DELETE) {
+                editor_delete_forward(&ed);
             } else if (ed.focused) {
                 editor_feed_char(&ed, c);
             } else if (paint_name_input.focused && c == KEY_LEFT) {

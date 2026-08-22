@@ -23,10 +23,13 @@ static int rshift_held = 0;
  * sequence: 0xE0 followed by the actual make/break code. */
 static int pending_extended = 0;
 
-#define SC_EXT_UP    0x48
-#define SC_EXT_DOWN  0x50
-#define SC_EXT_LEFT  0x4B
-#define SC_EXT_RIGHT 0x4D
+#define SC_EXT_UP     0x48
+#define SC_EXT_DOWN   0x50
+#define SC_EXT_LEFT   0x4B
+#define SC_EXT_RIGHT  0x4D
+#define SC_EXT_HOME   0x47
+#define SC_EXT_END    0x4F
+#define SC_EXT_DELETE 0x53
 
 /* Index = make code. 0 means "no printable character" (ctrl, alt, esc,
  * capslock, function keys, etc. -- not handled yet). Covers the main
@@ -94,6 +97,9 @@ int keyboard_poll_char(char *out) {
                     case SC_EXT_DOWN:  key = KEY_DOWN;  break;
                     case SC_EXT_LEFT:  key = KEY_LEFT;  break;
                     case SC_EXT_RIGHT: key = KEY_RIGHT; break;
+                    case SC_EXT_HOME:   key = KEY_HOME;   break;
+                    case SC_EXT_END:    key = KEY_END;    break;
+                    case SC_EXT_DELETE: key = KEY_DELETE; break;
                     default: break; /* unhandled extended key -- drop it */
                 }
                 if (key != 0) {
