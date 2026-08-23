@@ -2269,9 +2269,15 @@ deliberately does not probe for or handle a real card configured
 differently, per this spec's own explicit scope cut.
 
 **Known minor gaps, deferred, not fixed here.** A final whole-branch
-review found five Minor findings, triaged and correctly parked rather
-than fixed under this task's narrower scope -- recorded here so they
-aren't silently dropped:
+review found six Minor findings total: three new ones, plus a
+re-verification of Task 2's own three (a duplicated `count` calculation
+and an unguarded `sample_rate` divide in `sb16_play_buffer()`, both
+`kernel/drivers/sb16.c` -- tracked in that task's own review, not
+repeated below since neither changed on re-review; and a missing
+re-entrancy guard, repeated below since the final review's re-check
+found the risk more concretely reachable than first thought). All were
+correctly parked rather than fixed under this task's narrower scope;
+the four below are recorded here so they aren't silently dropped:
 
 - `kernel/arch/isr.c` unmasks IRQ5 unconditionally, even when
   `sb16_init()` never found a card -- harmless on QEMU, but a real
