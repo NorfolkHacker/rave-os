@@ -223,3 +223,40 @@ int synth_envelope_advance_sample(struct synth_voice *v) {
     }
     return v->envelope_level;
 }
+
+void synth_render_half(unsigned char *buf, unsigned int len) {
+    unsigned int i;
+    int v;
+
+    for (i = 0; i < len; i++) {
+        int sum = 0;
+
+        for (v = 0; v < SYNTH_NUM_VOICES; v++) {
+            struct synth_voice *voice = &synth_voices[v];
+            unsigned int old_accum = voice->phase_accum;
+            unsigned int new_accum = old_accum + voice->phase_increment;
+            int wrapped = (new_accum < old_accum) ? 1 : 0;
+            int osc = synth_osc_sample(voice->waveform, old_accum,
+                                        voice->duty_threshold,
+                                        &voice->noise_lfsr, wrapped);
+            int level = synth_envelope_advance_sample(voice);
+
+            /* level is Q0.15 (0..32768): at full envelope this is an
+             * exact pass-through of osc (127*32768>>15 == 127). */
+            sum += (osc * level) >> 15;
+            voice->phase_accum = new_accum;
+        }
+
+        /* Must clamp before biasing to unsigned 8-bit: 8 simultaneously
+         * maxed-out voices sum to roughly +-1016, about 4x what a
+         * signed byte holds -- an unclamped sum would wrap into loud
+         * garbage instead of just clipping. */
+        if (sum > 127) {
+            sum = 127;
+        }
+        if (sum < -128) {
+            sum = -128;
+        }
+        buf[i] = (unsigned char)(sum + 128);
+    }
+}

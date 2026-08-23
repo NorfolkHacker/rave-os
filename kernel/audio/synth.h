@@ -38,4 +38,11 @@ int synth_osc_sample(enum synth_waveform wave, unsigned int phase_accum,
                       int phase_wrapped);
 int synth_envelope_advance_sample(struct synth_voice *v);
 
+/* Renders len bytes of 8-bit unsigned PCM (128 = silence) into buf,
+ * advancing every voice's oscillator phase and envelope by one sample
+ * per byte and mixing all SYNTH_NUM_VOICES together. Called from
+ * kmain()'s frame loop whenever sb16_stream_needs_refill() says a
+ * buffer half needs new data. */
+void synth_render_half(unsigned char *buf, unsigned int len);
+
 #endif

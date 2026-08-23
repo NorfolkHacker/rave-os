@@ -195,6 +195,56 @@ static void test_gate_on_off_transitions(void) {
     CHECK(synth_voices[0].envelope_stage == ENV_OFF, "gate-off from OFF stays OFF (does not restart release)");
 }
 
+static void test_mixer_clamps_max_voices(void) {
+    unsigned char buf[4];
+    int v;
+
+    synth_init();
+    for (v = 0; v < SYNTH_NUM_VOICES; v++) {
+        synth_set_voice_waveform(v, WAVE_PULSE);
+        synth_set_duty(v, 50);
+        synth_voices[v].phase_increment = 0;
+        synth_voices[v].envelope_stage = ENV_SUSTAIN;
+        synth_voices[v].envelope_level = SYNTH_ENV_FULL;
+        synth_voices[v].sustain_level = SYNTH_ENV_FULL;
+    }
+    synth_render_half(buf, 4);
+    CHECK(buf[0] == 255, "8 max-positive voices clamp to full-scale, no wraparound");
+
+    for (v = 0; v < SYNTH_NUM_VOICES; v++) {
+        synth_voices[v].phase_increment = 0;
+        synth_voices[v].duty_threshold = 0;
+    }
+    synth_render_half(buf, 4);
+    CHECK(buf[0] == 0, "8 max-negative voices clamp to zero, no wraparound");
+}
+
+static void test_mixer_silence_when_no_voices_gated(void) {
+    unsigned char buf[8];
+    unsigned int i;
+    synth_init();
+    for (i = 0; i < 8; i++) {
+        buf[i] = 0xFF;
+    }
+    synth_render_half(buf, 8);
+    for (i = 0; i < 8; i++) {
+        CHECK(buf[i] == 128, "silent (never-gated) voices render as mid-point 128");
+    }
+}
+
+static void test_mixer_single_voice_full_envelope_matches_oscillator(void) {
+    unsigned char buf[1];
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_SAW);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL;
+    synth_render_half(buf, 1);
+    CHECK(buf[0] == 0, "single full-envelope voice passes its oscillator sample through unscaled");
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -207,6 +257,9 @@ int main(void) {
     test_envelope_instant_on_zero_duration();
     test_envelope_never_stuck_at_extreme_duration();
     test_gate_on_off_transitions();
+    test_mixer_clamps_max_voices();
+    test_mixer_silence_when_no_voices_gated();
+    test_mixer_single_voice_full_envelope_matches_oscillator();
 
     if (failures == 0) {
         printf("PASS\n");
