@@ -44,6 +44,7 @@ void synth_init(void) {
         synth_voices[v].sustain_level = SYNTH_ENV_FULL << 8;
         synth_voices[v].release_rate = SYNTH_ENV_FULL << 8;
         synth_voices[v].ring_partner = -1;
+        synth_voices[v].filter_route = 0;
     }
 }
 
@@ -99,6 +100,13 @@ void synth_clear_ring_partner(int voice) {
         return;
     }
     synth_voices[voice].ring_partner = -1;
+}
+
+void synth_set_voice_filter_route(int voice, int routed) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    synth_voices[voice].filter_route = routed ? 1 : 0;
 }
 
 /* 16-bit Galois LFSR, maximal-length tap mask 0xB400. Ties the noise
@@ -294,12 +302,21 @@ int synth_envelope_advance_sample(struct synth_voice *v) {
     return v->envelope_level >> 8;
 }
 
+/* The one shared filter instance (matches "one shared filter", not one
+ * per voice, per the SID architecture this is scaled up from). Its
+ * lp/bp state persists across calls to synth_render_half() the same
+ * way each voice's phase_accum/envelope_level already do. */
+static struct synth_filter_state synth_filter;
+
 void synth_render_half(unsigned char *buf, unsigned int len) {
     unsigned int i;
     int v;
 
     for (i = 0; i < len; i++) {
-        int sum = 0;
+        int filtered_sum = 0;
+        int bypass_sum = 0;
+        int sum;
+        int filtered_out;
 
         for (v = 0; v < SYNTH_NUM_VOICES; v++) {
             struct synth_voice *voice = &synth_voices[v];
@@ -314,17 +331,31 @@ void synth_render_half(unsigned char *buf, unsigned int len) {
                                         &voice->noise_lfsr, wrapped,
                                         ring_active, ring_partner_accum);
             int level = synth_envelope_advance_sample(voice);
+            int contribution;
 
             /* level is Q0.15 (0..32768): at full envelope this is an
              * exact pass-through of osc (127*32768>>15 == 127). */
-            sum += (osc * level) >> 15;
+            contribution = (osc * level) >> 15;
+            if (voice->filter_route) {
+                filtered_sum += contribution;
+            } else {
+                bypass_sum += contribution;
+            }
             voice->phase_accum = new_accum;
         }
 
-        /* Must clamp before biasing to unsigned 8-bit: 8 simultaneously
-         * maxed-out voices sum to roughly +-1016, about 4x what a
-         * signed byte holds -- an unclamped sum would wrap into loud
-         * garbage instead of just clipping. */
+        filtered_out = synth_filter_process_sample(&synth_filter, filtered_sum,
+                                                     synth_filter_f_coeff[synth_filter_cutoff_index],
+                                                     synth_filter_q_coeff[synth_filter_res_index],
+                                                     synth_filter_mode_mask);
+        sum = filtered_out + bypass_sum;
+
+        /* Must clamp before biasing to unsigned 8-bit: unfiltered voices
+         * alone can already sum to roughly +-1016 (8 maxed-out voices),
+         * about 4x what a signed byte holds, and a resonant filter can
+         * amplify filtered_sum well past that near its cutoff on top --
+         * an unclamped sum would wrap into loud garbage instead of just
+         * clipping. */
         if (sum > 127) {
             sum = 127;
         }

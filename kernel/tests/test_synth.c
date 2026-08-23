@@ -490,6 +490,92 @@ static void test_ring_partner_setters(void) {
     CHECK(synth_voices[0].ring_partner == -1, "synth_clear_ring_partner turns ring mod back off");
 }
 
+static void test_render_half_default_filter_route_matches_unfiltered_behavior(void) {
+    unsigned char buf[4];
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_SAW);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    /* filter_route defaults to 0 (bypass) after synth_init() -- output
+     * should be identical to the pre-filter engine's behavior, proving
+     * adding the filter didn't change anything for voices that don't
+     * opt into it. */
+    synth_render_half(buf, 1);
+    CHECK(buf[0] == 0, "a bypass-routed voice's output is unaffected by the filter (matches the original single-voice-passthrough test)");
+}
+
+static void test_render_half_filter_route_changes_output(void) {
+    unsigned char buf_bypass[8];
+    unsigned char buf_filtered[8];
+    int i;
+    int differs = 0;
+
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_PULSE);
+    synth_set_duty(0, 50);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0x10000000u; /* a mid-range tone */
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    synth_set_filter_cutoff(64);
+    synth_set_filter_resonance(8);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_set_voice_filter_route(0, 0);
+    synth_render_half(buf_bypass, 8);
+
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_PULSE);
+    synth_set_duty(0, 50);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0x10000000u;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    synth_set_filter_cutoff(64);
+    synth_set_filter_resonance(8);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_set_voice_filter_route(0, 1);
+    synth_render_half(buf_filtered, 8);
+
+    for (i = 0; i < 8; i++) {
+        if (buf_bypass[i] != buf_filtered[i]) {
+            differs = 1;
+        }
+    }
+    CHECK(differs, "routing a voice through the filter produces different output than bypassing it, same source signal");
+}
+
+static void test_render_half_filter_state_persists_across_calls(void) {
+    unsigned char buf1[4];
+    unsigned char buf2[4];
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_PULSE);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    synth_set_filter_cutoff(220);
+    synth_set_filter_resonance(4);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_set_voice_filter_route(0, 1);
+    synth_render_half(buf1, 4);
+    synth_render_half(buf2, 4);
+    /* A low-pass ramping toward a held step input reaches its
+     * steady-state within buf1's own 4 samples at this cutoff; buf2's
+     * first sample continues from that converged state rather than
+     * restarting the ramp -- if the filter's internal state were reset
+     * each call instead of persisting (like each voice's phase_accum/
+     * envelope_level already do), buf2[0] would replay buf1[0]'s exact
+     * startup value instead of picking up where buf1 left off. */
+    CHECK(buf1[0] != buf2[0],
+          "the shared filter's internal state persists across synth_render_half() calls, not reset each time");
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -520,6 +606,9 @@ int main(void) {
     test_ring_mod_self_reference_is_harmless();
     test_ring_mod_has_no_effect_on_non_triangle_waveforms();
     test_ring_partner_setters();
+    test_render_half_default_filter_route_matches_unfiltered_behavior();
+    test_render_half_filter_route_changes_output();
+    test_render_half_filter_state_persists_across_calls();
 
     if (failures == 0) {
         printf("PASS\n");

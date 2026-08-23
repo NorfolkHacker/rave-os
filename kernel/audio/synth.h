@@ -36,6 +36,10 @@ struct synth_voice {
      * directly into the triangle generator's fold-direction bit,
      * not a generic effect. */
     int ring_partner;
+    /* 0 = straight to output (bypasses the shared filter); 1 = routed
+     * through it. Matches real SID's own per-voice filter routing bits,
+     * scaled to 8 voices. */
+    int filter_route;
 };
 
 extern struct synth_voice synth_voices[SYNTH_NUM_VOICES];
@@ -50,6 +54,7 @@ void synth_gate_on(int voice);
 void synth_gate_off(int voice);
 void synth_set_ring_partner(int voice, int partner);
 void synth_clear_ring_partner(int voice);
+void synth_set_voice_filter_route(int voice, int routed);
 
 /* ring_active/ring_partner_phase_accum only affect WAVE_TRIANGLE's fold
  * direction (real SID's ring mod is wired into the triangle generator
