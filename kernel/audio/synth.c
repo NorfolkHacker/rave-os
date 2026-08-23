@@ -38,10 +38,11 @@ void synth_init(void) {
         synth_voices[v].noise_lfsr = 0xACE1u + (unsigned int)v;
         synth_voices[v].envelope_stage = ENV_OFF;
         synth_voices[v].envelope_level = 0;
-        synth_voices[v].attack_rate = SYNTH_ENV_FULL;
-        synth_voices[v].decay_rate = SYNTH_ENV_FULL;
-        synth_voices[v].sustain_level = SYNTH_ENV_FULL;
-        synth_voices[v].release_rate = SYNTH_ENV_FULL;
+        /* Q8 scale -- see struct synth_voice's comment in synth.h. */
+        synth_voices[v].attack_rate = SYNTH_ENV_FULL << 8;
+        synth_voices[v].decay_rate = SYNTH_ENV_FULL << 8;
+        synth_voices[v].sustain_level = SYNTH_ENV_FULL << 8;
+        synth_voices[v].release_rate = SYNTH_ENV_FULL << 8;
     }
 }
 
@@ -125,30 +126,46 @@ int synth_osc_sample(enum synth_waveform wave, unsigned int phase_accum,
     }
 }
 
-/* Rate is "how much envelope_level (0..SYNTH_ENV_FULL) changes per
- * sample" to cover the requested duration -- clamped to at least 1 so
- * a very long requested duration still makes forward progress every
- * sample (worst case ~1.5s to complete a stage at this sample rate)
- * instead of a rate that rounds down to 0 and never finishes. Decay
- * time is simplified to "time from full scale to zero, stopped early
- * at the sustain level" rather than "time from full scale to sustain
- * specifically" -- a common, deliberate simplification (exact SID
- * decay-curve emulation is a much bigger DSP topic, out of scope). */
+/* Rate is "how much envelope_level (Q8 sub-units of 0..SYNTH_ENV_FULL)
+ * changes per sample" to cover the requested duration -- clamped to at
+ * least 1 q8-unit/sample so a very long requested duration still makes
+ * forward progress every sample (worst case ~380s to complete a stage
+ * at this sample rate and Q8 resolution: (SYNTH_ENV_FULL << 8) / 22050)
+ * instead of a rate that rounds down to 0 and never finishes. Working
+ * in Q8 sub-units (rather than plain 0..SYNTH_ENV_FULL units) is what
+ * keeps the integer division from collapsing to single digits -- and
+ * therefore badly distorting requested millisecond durations -- for
+ * any stage longer than roughly 200ms; see struct synth_voice's
+ * comment in synth.h. Decay time is simplified to "time from full
+ * scale to zero, stopped early at the sustain level" rather than
+ * "time from full scale to sustain specifically" -- a common,
+ * deliberate simplification (exact SID decay-curve emulation is a
+ * much bigger DSP topic, out of scope).
+ *
+ * duration_ms is clamped to 100000 (100s) before the samples
+ * calculation: `(unsigned)duration_ms * SYNTH_SAMPLE_RATE` overflows
+ * 32 bits above ~194783ms, at which point the wrapped product silently
+ * inverts a long requested duration into a near-instant one instead of
+ * a long one. 100000ms is comfortably below that threshold and far
+ * beyond any real musical use. */
 static int synth_calc_rate(int duration_ms) {
     unsigned int samples;
-    int rate;
+    int rate_q8;
     if (duration_ms <= 0) {
-        return SYNTH_ENV_FULL;
+        return SYNTH_ENV_FULL << 8;
+    }
+    if (duration_ms > 100000) {
+        duration_ms = 100000;
     }
     samples = ((unsigned int)duration_ms * SYNTH_SAMPLE_RATE) / 1000u;
     if (samples == 0) {
-        return SYNTH_ENV_FULL;
+        return SYNTH_ENV_FULL << 8;
     }
-    rate = SYNTH_ENV_FULL / (int)samples;
-    if (rate < 1) {
-        rate = 1;
+    rate_q8 = (SYNTH_ENV_FULL << 8) / (int)samples;
+    if (rate_q8 < 1) {
+        rate_q8 = 1;
     }
-    return rate;
+    return rate_q8;
 }
 
 void synth_set_adsr(int voice, int attack_ms, int decay_ms, int sustain_percent, int release_ms) {
@@ -165,12 +182,22 @@ void synth_set_adsr(int voice, int attack_ms, int decay_ms, int sustain_percent,
     v = &synth_voices[voice];
     v->attack_rate = synth_calc_rate(attack_ms);
     v->decay_rate = synth_calc_rate(decay_ms);
-    v->sustain_level = (sustain_percent * SYNTH_ENV_FULL) / 100;
+    /* Q8 scale to match envelope_level -- see synth.h. */
+    v->sustain_level = ((sustain_percent * SYNTH_ENV_FULL) / 100) << 8;
     v->release_rate = synth_calc_rate(release_ms);
 }
 
 void synth_gate_on(int voice) {
     if (clamp_voice(voice) < 0) {
+        return;
+    }
+    /* A voice with no ona ever set has phase_increment == 0: its phase
+     * accumulator never advances or wraps, so every waveform would
+     * output a constant, non-silent value for as long as the envelope
+     * stays nonzero -- a full-scale DC click/thump instead of silence.
+     * Silently no-op, matching this codebase's existing convention for
+     * a meaningless call (e.g. sb16_play_buffer()'s len == 0 case). */
+    if (synth_voices[voice].phase_increment == 0) {
         return;
     }
     synth_voices[voice].envelope_level = 0;
@@ -186,6 +213,13 @@ void synth_gate_off(int voice) {
     }
 }
 
+/* All arithmetic here operates on envelope_level/attack_rate/decay_rate/
+ * sustain_level/release_rate in Q8 sub-units (see synth.h's struct
+ * comment) -- the caller-visible 0..SYNTH_ENV_FULL scale is produced
+ * only at the very end, by the final `>> 8` on the return value.
+ * synth_render_half() and everything else outside this file is
+ * unaffected: it still sees the same 0..SYNTH_ENV_FULL result it
+ * always has. */
 int synth_envelope_advance_sample(struct synth_voice *v) {
     switch (v->envelope_stage) {
     case ENV_OFF:
@@ -193,8 +227,8 @@ int synth_envelope_advance_sample(struct synth_voice *v) {
         break;
     case ENV_ATTACK:
         v->envelope_level += v->attack_rate;
-        if (v->envelope_level >= SYNTH_ENV_FULL) {
-            v->envelope_level = SYNTH_ENV_FULL;
+        if (v->envelope_level >= (SYNTH_ENV_FULL << 8)) {
+            v->envelope_level = SYNTH_ENV_FULL << 8;
             v->envelope_stage = ENV_DECAY;
         }
         break;
@@ -221,7 +255,7 @@ int synth_envelope_advance_sample(struct synth_voice *v) {
         }
         break;
     }
-    return v->envelope_level;
+    return v->envelope_level >> 8;
 }
 
 void synth_render_half(unsigned char *buf, unsigned int len) {

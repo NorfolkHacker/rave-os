@@ -15,6 +15,16 @@ struct synth_voice {
     unsigned int duty_threshold;
     unsigned int noise_lfsr;
     enum synth_env_stage envelope_stage;
+    /* envelope_level, attack_rate, decay_rate, sustain_level, and
+     * release_rate are all in Q8 sub-units internally (i.e. scaled up
+     * by 256 from the public 0..SYNTH_ENV_FULL envelope scale) so that
+     * synth_calc_rate()'s integer division truncates on a much
+     * finer-grained quantity -- a plain 0..32768 rate collapses to
+     * single digits for any envelope stage longer than ~200ms, badly
+     * distorting requested millisecond durations. Only
+     * synth_envelope_advance_sample()'s return value (and anything
+     * outside synth.c) sees the un-scaled 0..SYNTH_ENV_FULL value;
+     * these struct fields never leave Q8 scale. */
     int envelope_level;
     int attack_rate;
     int decay_rate;

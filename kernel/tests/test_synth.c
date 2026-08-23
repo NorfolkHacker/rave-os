@@ -82,100 +82,153 @@ static void test_set_ona_bounds(void) {
     CHECK(synth_voices[0].phase_increment == 85704563u, "synth_set_ona ignores out-of-range ona (too high)");
 }
 
-static void test_envelope_attack_decay_sustain(void) {
-    struct synth_voice v;
+/* These tests drive envelope timing entirely through the public API
+ * (synth_init/synth_set_adsr/synth_gate_on/off + synth_voices[]) rather
+ * than hardcoding rate magic numbers calibrated to synth_calc_rate()'s
+ * internal formula -- that way a future change to the formula (e.g. the
+ * Q8 sub-unit fix) can't silently desync the tests from the real
+ * implementation the way the old hardcoded 148/74/33 rates did. */
+
+/* Counts how many synth_envelope_advance_sample() calls it takes voice 0
+ * to leave `from_stage`, up to a generous sample ceiling. Returns -1 if
+ * it never leaves within the ceiling. */
+static int samples_until_stage_change(int voice, enum synth_env_stage from_stage, int max_samples) {
     int i;
-    int reached_full = 0;
-    int reached_sustain = 0;
-
-    v.envelope_stage = ENV_ATTACK;
-    v.envelope_level = 0;
-    v.attack_rate = 148;   /* ~10ms at 22050Hz per synth_calc_rate's formula */
-    v.decay_rate = 74;     /* ~20ms */
-    v.sustain_level = (50 * SYNTH_ENV_FULL) / 100;
-    v.release_rate = 33;   /* ~40ms */
-
-    for (i = 0; i < 1000; i++) {
-        synth_envelope_advance_sample(&v);
-        if (v.envelope_stage == ENV_DECAY && !reached_full) {
-            reached_full = 1;
-        }
-        if (v.envelope_stage == ENV_SUSTAIN) {
-            reached_sustain = 1;
-            break;
+    for (i = 0; i < max_samples; i++) {
+        synth_envelope_advance_sample(&synth_voices[voice]);
+        if (synth_voices[voice].envelope_stage != from_stage) {
+            return i + 1;
         }
     }
-    CHECK(reached_full, "envelope reaches full scale and enters decay");
-    CHECK(reached_sustain, "envelope decays into sustain");
-    CHECK(v.envelope_level == v.sustain_level, "envelope holds at configured sustain level");
+    return -1;
+}
 
-    for (i = 0; i < 500; i++) {
-        synth_envelope_advance_sample(&v);
+static void test_envelope_attack_decay_sustain(void) {
+    int attack_samples;
+    int decay_samples;
+
+    synth_init();
+    synth_set_ona(0, 49);
+    synth_set_adsr(0, 10, 20, 50, 40);
+    synth_gate_on(0);
+
+    attack_samples = samples_until_stage_change(0, ENV_ATTACK, 5000);
+    CHECK(attack_samples > 0, "envelope reaches full scale and enters decay");
+    CHECK(synth_voices[0].envelope_stage == ENV_DECAY, "envelope is in DECAY right after ATTACK completes");
+
+    decay_samples = samples_until_stage_change(0, ENV_DECAY, 5000);
+    CHECK(decay_samples > 0, "envelope decays into sustain");
+    CHECK(synth_voices[0].envelope_stage == ENV_SUSTAIN, "envelope reaches SUSTAIN after DECAY completes");
+    CHECK(synth_voices[0].envelope_level == synth_voices[0].sustain_level,
+          "envelope holds at configured sustain level");
+
+    {
+        int i;
+        for (i = 0; i < 500; i++) {
+            synth_envelope_advance_sample(&synth_voices[0]);
+        }
     }
-    CHECK(v.envelope_stage == ENV_SUSTAIN, "envelope stays in sustain without gate-off");
-    CHECK(v.envelope_level == v.sustain_level, "sustain level does not drift");
+    CHECK(synth_voices[0].envelope_stage == ENV_SUSTAIN, "envelope stays in sustain without gate-off");
+    CHECK(synth_voices[0].envelope_level == synth_voices[0].sustain_level, "sustain level does not drift");
 }
 
 static void test_envelope_release_reaches_zero(void) {
-    struct synth_voice v;
-    int i;
-    int reached_off = 0;
+    synth_init();
+    synth_set_ona(0, 49);
+    synth_set_adsr(0, 1, 1, 50, 40);
+    synth_gate_on(0);
+    /* Drive it through ATTACK and DECAY into SUSTAIN first. */
+    samples_until_stage_change(0, ENV_ATTACK, 5000);
+    samples_until_stage_change(0, ENV_DECAY, 5000);
+    CHECK(synth_voices[0].envelope_stage == ENV_SUSTAIN, "voice reached sustain before release test begins");
 
-    v.envelope_stage = ENV_RELEASE;
-    v.envelope_level = (50 * SYNTH_ENV_FULL) / 100;
-    v.sustain_level = v.envelope_level;
-    v.release_rate = 33;
-
-    for (i = 0; i < 2000; i++) {
-        synth_envelope_advance_sample(&v);
-        if (v.envelope_stage == ENV_OFF) {
-            reached_off = 1;
-            break;
-        }
-    }
-    CHECK(reached_off, "release eventually reaches OFF");
-    CHECK(v.envelope_level == 0, "released envelope level is exactly zero");
+    synth_gate_off(0);
+    CHECK(samples_until_stage_change(0, ENV_RELEASE, 5000) > 0, "release eventually reaches OFF");
+    CHECK(synth_voices[0].envelope_stage == ENV_OFF, "release stage transitions all the way to OFF");
+    CHECK(synth_voices[0].envelope_level == 0, "released envelope level is exactly zero");
 }
 
 static void test_envelope_instant_on_zero_duration(void) {
-    struct synth_voice v;
-    v.envelope_stage = ENV_ATTACK;
-    v.envelope_level = 0;
-    v.attack_rate = SYNTH_ENV_FULL; /* synth_calc_rate(0) */
-    v.decay_rate = 1;
-    v.sustain_level = 0;
-    v.release_rate = 1;
-    synth_envelope_advance_sample(&v);
-    CHECK(v.envelope_level == SYNTH_ENV_FULL, "zero-duration attack reaches full scale in one sample");
-    CHECK(v.envelope_stage == ENV_DECAY, "zero-duration attack immediately enters decay");
+    int level;
+    synth_init();
+    synth_set_ona(0, 49);
+    synth_set_adsr(0, 0, 1, 0, 1);
+    synth_gate_on(0);
+    /* Check the function's return value (public 0..SYNTH_ENV_FULL
+     * scale), not the raw envelope_level struct field -- that field is
+     * Q8 sub-units internally, see synth.h's struct comment. */
+    level = synth_envelope_advance_sample(&synth_voices[0]);
+    CHECK(level == SYNTH_ENV_FULL, "zero-duration attack reaches full scale in one sample");
+    CHECK(synth_voices[0].envelope_stage == ENV_DECAY, "zero-duration attack immediately enters decay");
 }
 
 static void test_envelope_never_stuck_at_extreme_duration(void) {
-    int rate;
-    struct synth_voice v;
-    int i;
-    int reached_full = 0;
+    synth_init();
+    synth_set_ona(0, 49);
+    /* Even a duration well past the old ~1.5s hard ceiling must still
+     * make forward progress every sample and eventually complete. */
+    synth_set_adsr(0, 60000, 1, 0, 1);
+    synth_gate_on(0);
+    CHECK(samples_until_stage_change(0, ENV_ATTACK, 22050 * 90) > 0,
+          "even a very long requested attack duration eventually completes (rate never rounds to 0)");
+}
 
-    v.envelope_stage = ENV_ATTACK;
-    v.envelope_level = 0;
-    rate = SYNTH_ENV_FULL / (int)(((unsigned int)3600000u * SYNTH_SAMPLE_RATE) / 1000u);
-    if (rate < 1) {
-        rate = 1;
-    }
-    CHECK(rate >= 1, "synth_calc_rate-equivalent never computes a zero rate");
-    v.attack_rate = rate;
-    for (i = 0; i < SYNTH_ENV_FULL + 10; i++) {
-        synth_envelope_advance_sample(&v);
-        if (v.envelope_stage != ENV_ATTACK) {
-            reached_full = 1;
-            break;
-        }
-    }
-    CHECK(reached_full, "even a minimum rate=1 envelope eventually completes attack");
+/* Fix 1 regression coverage: synth_calc_rate()'s old plain (non-Q8)
+ * division badly distorted requested millisecond durations for any
+ * stage longer than ~200ms -- a requested 500ms attack actually took
+ * ~743ms (+49%), and anything >= ~1486ms was silently clamped to
+ * ~1486ms no matter what was requested (verified against the real code
+ * path). The Q8 fix must make both of those cases accurate. */
+static void test_envelope_500ms_attack_is_accurate(void) {
+    int samples;
+    double ms;
+    synth_init();
+    synth_set_ona(0, 49);
+    synth_set_adsr(0, 500, 1, 0, 1);
+    synth_gate_on(0);
+    samples = samples_until_stage_change(0, ENV_ATTACK, 22050 * 5);
+    CHECK(samples > 0, "500ms attack completes within a generous ceiling");
+    ms = (samples * 1000.0) / SYNTH_SAMPLE_RATE;
+    CHECK(ms >= 480.0 && ms <= 520.0, "500ms-requested attack completes within +-4% (was +49% / 743ms before the Q8 fix)");
+}
+
+static void test_envelope_5000ms_attack_is_not_clamped(void) {
+    int samples;
+    double ms;
+    synth_init();
+    synth_set_ona(0, 49);
+    synth_set_adsr(0, 5000, 1, 0, 1);
+    synth_gate_on(0);
+    samples = samples_until_stage_change(0, ENV_ATTACK, 22050 * 8);
+    CHECK(samples > 0, "5000ms attack completes within a generous ceiling");
+    ms = (samples * 1000.0) / SYNTH_SAMPLE_RATE;
+    CHECK(ms >= 4900.0 && ms <= 5100.0,
+          "5000ms-requested attack is actually achievable (was clamped to ~1486ms before the Q8 fix)");
+}
+
+/* Fix 3 regression coverage: (unsigned)duration_ms * SYNTH_SAMPLE_RATE
+ * overflows 32 bits above ~194783ms; just past that the product wraps
+ * into a small number, inverting a very long requested duration into a
+ * near-instant one. A clamp to 100000ms keeps duration_ms far below the
+ * overflow threshold. */
+static void test_envelope_overflow_duration_does_not_invert(void) {
+    int samples;
+    synth_init();
+    synth_set_ona(0, 49);
+    synth_set_adsr(0, 194784, 1, 0, 1);
+    synth_gate_on(0);
+    /* Pre-fix this completed in under 1ms (~20 samples); post-fix it
+     * should take a very long time (clamped at 100000ms, i.e. hundreds
+     * of thousands of samples) -- so just confirm it has NOT finished
+     * within a sample budget that would only be reachable by the
+     * overflow bug. */
+    samples = samples_until_stage_change(0, ENV_ATTACK, 2000);
+    CHECK(samples == -1, "an overflow-band requested duration does not collapse into a near-instant attack");
 }
 
 static void test_gate_on_off_transitions(void) {
     synth_init();
+    synth_set_ona(0, 49);
     synth_set_adsr(0, 10, 20, 50, 40);
     CHECK(synth_voices[0].envelope_stage == ENV_OFF, "voice starts with envelope OFF");
     synth_gate_on(0);
@@ -205,8 +258,11 @@ static void test_mixer_clamps_max_voices(void) {
         synth_set_duty(v, 50);
         synth_voices[v].phase_increment = 0;
         synth_voices[v].envelope_stage = ENV_SUSTAIN;
-        synth_voices[v].envelope_level = SYNTH_ENV_FULL;
-        synth_voices[v].sustain_level = SYNTH_ENV_FULL;
+        /* envelope_level/sustain_level are Q8 sub-units internally --
+         * see synth.h's struct comment -- so "full scale" here is
+         * SYNTH_ENV_FULL << 8, not SYNTH_ENV_FULL. */
+        synth_voices[v].envelope_level = SYNTH_ENV_FULL << 8;
+        synth_voices[v].sustain_level = SYNTH_ENV_FULL << 8;
     }
     synth_render_half(buf, 4);
     CHECK(buf[0] == 255, "8 max-positive voices clamp to full-scale, no wraparound");
@@ -239,10 +295,27 @@ static void test_mixer_single_voice_full_envelope_matches_oscillator(void) {
     synth_voices[0].phase_accum = 0;
     synth_voices[0].phase_increment = 0;
     synth_voices[0].envelope_stage = ENV_SUSTAIN;
-    synth_voices[0].envelope_level = SYNTH_ENV_FULL;
-    synth_voices[0].sustain_level = SYNTH_ENV_FULL;
+    /* Q8 sub-units internally -- see synth.h's struct comment. */
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
     synth_render_half(buf, 1);
     CHECK(buf[0] == 0, "single full-envelope voice passes its oscillator sample through unscaled");
+}
+
+/* Fix 2 regression coverage: synth_init() leaves phase_increment at 0
+ * for every voice, so a voice that's never had its ona set (i.e.
+ * `0 VOICE GATE-ON` typed at the console before any `ONA` call) must
+ * NOT be moved into ATTACK -- the phase accumulator would never
+ * advance or wrap, so every waveform would output a constant,
+ * non-silent value for as long as the envelope stayed nonzero: a
+ * full-scale DC click/thump instead of silence. */
+static void test_gate_on_no_ona_is_silent_no_op(void) {
+    synth_init();
+    synth_set_adsr(0, 10, 20, 50, 40);
+    CHECK(synth_voices[0].phase_increment == 0, "freshly-init voice has no ona set (phase_increment == 0)");
+    CHECK(synth_voices[0].envelope_stage == ENV_OFF, "voice starts with envelope OFF");
+    synth_gate_on(0);
+    CHECK(synth_voices[0].envelope_stage == ENV_OFF, "gate-on with no ona set stays OFF instead of entering ATTACK");
 }
 
 int main(void) {
@@ -256,7 +329,11 @@ int main(void) {
     test_envelope_release_reaches_zero();
     test_envelope_instant_on_zero_duration();
     test_envelope_never_stuck_at_extreme_duration();
+    test_envelope_500ms_attack_is_accurate();
+    test_envelope_5000ms_attack_is_not_clamped();
+    test_envelope_overflow_duration_does_not_invert();
     test_gate_on_off_transitions();
+    test_gate_on_no_ona_is_silent_no_op();
     test_mixer_clamps_max_voices();
     test_mixer_silence_when_no_voices_gated();
     test_mixer_single_voice_full_envelope_matches_oscillator();
