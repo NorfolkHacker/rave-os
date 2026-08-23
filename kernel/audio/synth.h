@@ -30,6 +30,12 @@ struct synth_voice {
     int decay_rate;
     int sustain_level;
     int release_rate;
+    /* -1 = ring mod off; 0-7 = ring-modulate this voice's triangle
+     * output against that voice's own phase. Meaningless for any
+     * other waveform -- matches real SID, whose ring mod is wired
+     * directly into the triangle generator's fold-direction bit,
+     * not a generic effect. */
+    int ring_partner;
 };
 
 extern struct synth_voice synth_voices[SYNTH_NUM_VOICES];
@@ -42,10 +48,17 @@ void synth_set_ona(int voice, int ona);
 void synth_set_adsr(int voice, int attack_ms, int decay_ms, int sustain_percent, int release_ms);
 void synth_gate_on(int voice);
 void synth_gate_off(int voice);
+void synth_set_ring_partner(int voice, int partner);
+void synth_clear_ring_partner(int voice);
 
+/* ring_active/ring_partner_phase_accum only affect WAVE_TRIANGLE's fold
+ * direction (real SID's ring mod is wired into the triangle generator
+ * specifically) -- pass ring_active=0 for every other waveform, or
+ * whenever the calling voice's ring_partner is -1. */
 int synth_osc_sample(enum synth_waveform wave, unsigned int phase_accum,
                       unsigned int duty_threshold, unsigned int *noise_lfsr,
-                      int phase_wrapped);
+                      int phase_wrapped, int ring_active,
+                      unsigned int ring_partner_phase_accum);
 int synth_envelope_advance_sample(struct synth_voice *v);
 
 #define SYNTH_FILTER_MODE_LP 1

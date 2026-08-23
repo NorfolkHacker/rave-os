@@ -22,34 +22,34 @@ static void test_ona_table(void) {
 
 static void test_waveform_saw(void) {
     unsigned int lfsr = 1;
-    CHECK(synth_osc_sample(WAVE_SAW, 0x00000000u, 128, &lfsr, 0) == -128, "saw at phase 0");
-    CHECK(synth_osc_sample(WAVE_SAW, 0x80000000u, 128, &lfsr, 0) == 0, "saw at phase midpoint");
-    CHECK(synth_osc_sample(WAVE_SAW, 0xFF000000u, 128, &lfsr, 0) == 127, "saw at phase near-end");
+    CHECK(synth_osc_sample(WAVE_SAW, 0x00000000u, 128, &lfsr, 0, 0, 0) == -128, "saw at phase 0");
+    CHECK(synth_osc_sample(WAVE_SAW, 0x80000000u, 128, &lfsr, 0, 0, 0) == 0, "saw at phase midpoint");
+    CHECK(synth_osc_sample(WAVE_SAW, 0xFF000000u, 128, &lfsr, 0, 0, 0) == 127, "saw at phase near-end");
 }
 
 static void test_waveform_triangle(void) {
     unsigned int lfsr = 1;
-    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0) == -128, "triangle at phase 0");
-    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x40000000u, 128, &lfsr, 0) == 0, "triangle at quarter phase");
-    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x80000000u, 128, &lfsr, 0) == 126, "triangle at phase midpoint (peak)");
-    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0xFF000000u, 128, &lfsr, 0) == -128, "triangle at phase near-end");
+    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 0, 0) == -128, "triangle at phase 0");
+    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x40000000u, 128, &lfsr, 0, 0, 0) == 0, "triangle at quarter phase");
+    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x80000000u, 128, &lfsr, 0, 0, 0) == 126, "triangle at phase midpoint (peak)");
+    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0xFF000000u, 128, &lfsr, 0, 0, 0) == -128, "triangle at phase near-end");
 }
 
 static void test_waveform_pulse(void) {
     unsigned int lfsr = 1;
-    CHECK(synth_osc_sample(WAVE_PULSE, 0x00000000u, 128, &lfsr, 0) == 127, "pulse below 50% duty");
-    CHECK(synth_osc_sample(WAVE_PULSE, 0x7F000000u, 128, &lfsr, 0) == 127, "pulse just below 50% duty");
-    CHECK(synth_osc_sample(WAVE_PULSE, 0x80000000u, 128, &lfsr, 0) == -128, "pulse at 50% duty threshold");
-    CHECK(synth_osc_sample(WAVE_PULSE, 0xFF000000u, 128, &lfsr, 0) == -128, "pulse near end");
+    CHECK(synth_osc_sample(WAVE_PULSE, 0x00000000u, 128, &lfsr, 0, 0, 0) == 127, "pulse below 50% duty");
+    CHECK(synth_osc_sample(WAVE_PULSE, 0x7F000000u, 128, &lfsr, 0, 0, 0) == 127, "pulse just below 50% duty");
+    CHECK(synth_osc_sample(WAVE_PULSE, 0x80000000u, 128, &lfsr, 0, 0, 0) == -128, "pulse at 50% duty threshold");
+    CHECK(synth_osc_sample(WAVE_PULSE, 0xFF000000u, 128, &lfsr, 0, 0, 0) == -128, "pulse near end");
 }
 
 static void test_waveform_noise(void) {
     unsigned int lfsr_a = 1, lfsr_b = 1;
     int i;
     int varied = 0;
-    int first = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1);
+    int first = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1, 0, 0);
     for (i = 0; i < 20; i++) {
-        int s = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1);
+        int s = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1, 0, 0);
         if (s != first) {
             varied = 1;
         }
@@ -59,15 +59,15 @@ static void test_waveform_noise(void) {
     lfsr_a = 12345;
     lfsr_b = 12345;
     for (i = 0; i < 10; i++) {
-        int sa = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1);
-        int sb = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_b, 1);
+        int sa = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1, 0, 0);
+        int sb = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_b, 1, 0, 0);
         CHECK(sa == sb, "noise is deterministic given the same seed");
     }
 
     lfsr_a = 999;
     {
-        int before = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 0);
-        int after = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 0);
+        int before = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 0, 0, 0);
+        int after = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 0, 0, 0);
         CHECK(before == after, "noise holds steady when phase does not wrap");
     }
 }
@@ -426,6 +426,70 @@ static void test_filter_never_exceeds_state_clamp_across_full_range(void) {
     CHECK(!any_exceeded, "internal filter state never exceeds its clamp across a sweep of the full cutoff/resonance/mode range");
 }
 
+static void test_ring_mod_changes_triangle_when_partner_msb_differs(void) {
+    unsigned int lfsr = 1;
+    /* own phase at pos8=0 (msb=0); partner at pos8=255 (msb=1) --
+     * ring mod should flip the fold direction relative to no ring mod. */
+    int without_ring = synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 0, 0);
+    int with_ring = synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 1, 0xFF000000u);
+    CHECK(without_ring != with_ring, "ring mod changes the triangle output when the partner's MSB differs from this voice's own");
+}
+
+static void test_ring_mod_no_effect_when_partner_msb_matches(void) {
+    unsigned int lfsr = 1;
+    /* own phase at pos8=0 (msb=0); partner also at pos8=0 (msb=0) --
+     * XORing two matching bits is 0, so ring mod should be a no-op here. */
+    int without_ring = synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 0, 0);
+    int with_ring = synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 1, 0x00000000u);
+    CHECK(without_ring == with_ring, "ring mod against a partner with the same MSB is a no-op, as XOR-of-equal-bits predicts");
+}
+
+static void test_ring_mod_self_reference_is_harmless(void) {
+    unsigned int lfsr = 1;
+    /* A voice ring-modulating against its own phase: XOR-with-self
+     * always clears the bit, so this must behave exactly like msb=0,
+     * not crash or produce a wildly out-of-range sample. */
+    int self_ring = synth_osc_sample(WAVE_TRIANGLE, 0xFF000000u, 128, &lfsr, 0, 1, 0xFF000000u);
+    CHECK(self_ring >= -128 && self_ring <= 127, "ring mod against itself stays in the valid sample range, no crash or overflow");
+    CHECK(self_ring == 126, "ring mod against itself always clears the fold bit (XOR of equal bits is 0), so tri_pos = lower7 = 127 here -> sample 126");
+}
+
+static void test_ring_mod_has_no_effect_on_non_triangle_waveforms(void) {
+    unsigned int lfsr_a = 42, lfsr_b = 42;
+    int saw_without = synth_osc_sample(WAVE_SAW, 0x00000000u, 128, &lfsr_a, 0, 0, 0);
+    int saw_with = synth_osc_sample(WAVE_SAW, 0x00000000u, 128, &lfsr_a, 0, 1, 0xFF000000u);
+    CHECK(saw_without == saw_with, "ring mod has no effect on sawtooth (only wired into the triangle generator)");
+
+    {
+        int pulse_without = synth_osc_sample(WAVE_PULSE, 0x00000000u, 128, &lfsr_a, 0, 0, 0);
+        int pulse_with = synth_osc_sample(WAVE_PULSE, 0x00000000u, 128, &lfsr_a, 0, 1, 0xFF000000u);
+        CHECK(pulse_without == pulse_with, "ring mod has no effect on pulse");
+    }
+
+    {
+        int noise_without = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1, 0, 0);
+        int noise_with = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_b, 1, 1, 0xFF000000u);
+        CHECK(noise_without == noise_with, "ring mod has no effect on noise (both advance the LFSR identically regardless of ring params)");
+    }
+}
+
+static void test_ring_partner_setters(void) {
+    synth_init();
+    CHECK(synth_voices[0].ring_partner == -1, "ring partner defaults to -1 (off) after synth_init()");
+
+    synth_set_ring_partner(0, 3);
+    CHECK(synth_voices[0].ring_partner == 3, "synth_set_ring_partner sets an in-range partner");
+
+    synth_set_ring_partner(0, -1);
+    CHECK(synth_voices[0].ring_partner == 3, "synth_set_ring_partner ignores an out-of-range (negative) partner, does not clear it");
+
+    synth_set_ring_partner(0, 8);
+    CHECK(synth_voices[0].ring_partner == 3, "synth_set_ring_partner ignores an out-of-range (too high) partner");
+
+    synth_clear_ring_partner(0);
+    CHECK(synth_voices[0].ring_partner == -1, "synth_clear_ring_partner turns ring mod back off");
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -451,6 +515,11 @@ int main(void) {
     test_filter_resonance_increases_peak_overshoot();
     test_filter_mode_zero_is_silent();
     test_filter_never_exceeds_state_clamp_across_full_range();
+    test_ring_mod_changes_triangle_when_partner_msb_differs();
+    test_ring_mod_no_effect_when_partner_msb_matches();
+    test_ring_mod_self_reference_is_harmless();
+    test_ring_mod_has_no_effect_on_non_triangle_waveforms();
+    test_ring_partner_setters();
 
     if (failures == 0) {
         printf("PASS\n");

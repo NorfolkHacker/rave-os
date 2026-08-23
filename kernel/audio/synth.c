@@ -43,6 +43,7 @@ void synth_init(void) {
         synth_voices[v].decay_rate = SYNTH_ENV_FULL << 8;
         synth_voices[v].sustain_level = SYNTH_ENV_FULL << 8;
         synth_voices[v].release_rate = SYNTH_ENV_FULL << 8;
+        synth_voices[v].ring_partner = -1;
     }
 }
 
@@ -83,6 +84,23 @@ void synth_set_ona(int voice, int ona) {
     synth_voices[voice].phase_increment = ona_phase_increment[ona - 1];
 }
 
+void synth_set_ring_partner(int voice, int partner) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    if (partner < 0 || partner > 7) {
+        return;
+    }
+    synth_voices[voice].ring_partner = partner;
+}
+
+void synth_clear_ring_partner(int voice) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    synth_voices[voice].ring_partner = -1;
+}
+
 /* 16-bit Galois LFSR, maximal-length tap mask 0xB400. Ties the noise
  * generator's pitch to the voice's own ona (like the real SID chip):
  * it only advances when the caller says this sample's phase_accum
@@ -101,17 +119,35 @@ static void noise_advance(unsigned int *lfsr) {
  * duty_threshold (0-255) only matters for WAVE_PULSE. noise_lfsr is
  * only read/advanced for WAVE_NOISE. phase_accum's top 8 bits
  * (pos8, 0-255) give this sample's position within the current
- * period for the three deterministic waveforms. */
+ * period for the three deterministic waveforms. ring_active/
+ * ring_partner_phase_accum only matter for WAVE_TRIANGLE -- see the
+ * WAVE_TRIANGLE case below and synth.h's doc comment. */
 int synth_osc_sample(enum synth_waveform wave, unsigned int phase_accum,
                       unsigned int duty_threshold, unsigned int *noise_lfsr,
-                      int phase_wrapped) {
+                      int phase_wrapped, int ring_active,
+                      unsigned int ring_partner_phase_accum) {
     unsigned int pos8 = (phase_accum >> 24) & 0xFFu;
 
     switch (wave) {
     case WAVE_SAW:
         return (int)pos8 - 128;
     case WAVE_TRIANGLE: {
-        unsigned int tri_pos = (pos8 < 128u) ? pos8 : (255u - pos8);
+        /* msb (pos8's own top bit) decides fold direction; lower7 is
+         * the position within that half-period. Ring mod XORs a
+         * partner voice's own top bit into that fold decision --
+         * exactly how real SID's ring mod is wired into the triangle
+         * generator. Behaviorally identical to the plain (pos8<128)
+         * form when ring_active is 0: msb=0 -> tri_pos=lower7
+         * (matches pos8<128's pos8==lower7); msb=1 -> tri_pos=
+         * 127-lower7 (matches pos8>=128's 255-pos8 = 127-lower7). */
+        unsigned int msb = (pos8 >> 7) & 1u;
+        unsigned int lower7 = pos8 & 0x7Fu;
+        unsigned int tri_pos;
+        if (ring_active) {
+            unsigned int partner_pos8 = (ring_partner_phase_accum >> 24) & 0xFFu;
+            msb ^= (partner_pos8 >> 7) & 1u;
+        }
+        tri_pos = msb ? (127u - lower7) : lower7;
         return (int)(tri_pos * 2u) - 128;
     }
     case WAVE_PULSE:
@@ -270,9 +306,13 @@ void synth_render_half(unsigned char *buf, unsigned int len) {
             unsigned int old_accum = voice->phase_accum;
             unsigned int new_accum = old_accum + voice->phase_increment;
             int wrapped = (new_accum < old_accum) ? 1 : 0;
+            int ring_active = (voice->ring_partner >= 0) ? 1 : 0;
+            unsigned int ring_partner_accum = ring_active
+                ? synth_voices[voice->ring_partner].phase_accum : 0u;
             int osc = synth_osc_sample(voice->waveform, old_accum,
                                         voice->duty_threshold,
-                                        &voice->noise_lfsr, wrapped);
+                                        &voice->noise_lfsr, wrapped,
+                                        ring_active, ring_partner_accum);
             int level = synth_envelope_advance_sample(voice);
 
             /* level is Q0.15 (0..32768): at full envelope this is an
