@@ -318,6 +318,114 @@ static void test_gate_on_no_ona_is_silent_no_op(void) {
     CHECK(synth_voices[0].envelope_stage == ENV_OFF, "gate-on with no ona set stays OFF instead of entering ATTACK");
 }
 
+static void test_filter_table_sanity(void) {
+    int i;
+    CHECK(synth_filter_f_coeff[0] == 93, "filter cutoff table starts at the expected 20Hz coefficient");
+    CHECK(synth_filter_f_coeff[255] == 13583, "filter cutoff table ends at the expected 3000Hz coefficient");
+    for (i = 1; i < 256; i++) {
+        CHECK(synth_filter_f_coeff[i] > synth_filter_f_coeff[i - 1], "filter cutoff table monotonically increasing");
+    }
+    CHECK(synth_filter_q_coeff[0] == 23174, "filter resonance table starts at the expected Q=0.707 coefficient");
+    CHECK(synth_filter_q_coeff[15] == 2048, "filter resonance table ends at the expected Q=8.0 coefficient");
+    for (i = 1; i < 16; i++) {
+        CHECK(synth_filter_q_coeff[i] < synth_filter_q_coeff[i - 1], "filter resonance table monotonically decreasing (higher index = higher resonance = lower q)");
+    }
+}
+
+static void test_filter_setters_clamp(void) {
+    synth_set_filter_cutoff(-5);
+    CHECK(synth_filter_cutoff_index == 0, "filter cutoff clamps negative input to 0");
+    synth_set_filter_cutoff(9999);
+    CHECK(synth_filter_cutoff_index == 255, "filter cutoff clamps out-of-range input to 255");
+    synth_set_filter_cutoff(100);
+    CHECK(synth_filter_cutoff_index == 100, "filter cutoff accepts an in-range value unchanged");
+
+    synth_set_filter_resonance(-1);
+    CHECK(synth_filter_res_index == 0, "filter resonance clamps negative input to 0");
+    synth_set_filter_resonance(999);
+    CHECK(synth_filter_res_index == 15, "filter resonance clamps out-of-range input to 15");
+
+    synth_set_filter_mode(-1);
+    CHECK(synth_filter_mode_mask == 0, "filter mode clamps negative input to 0");
+    synth_set_filter_mode(999);
+    CHECK(synth_filter_mode_mask == 7, "filter mode clamps out-of-range input to 7 (LP|BP|HP)");
+    synth_set_filter_mode(SYNTH_FILTER_MODE_BP);
+    CHECK(synth_filter_mode_mask == SYNTH_FILTER_MODE_BP, "filter mode accepts an in-range value unchanged");
+}
+
+static void test_filter_lowpass_step_response_converges(void) {
+    struct synth_filter_state st = {0, 0};
+    int i;
+    int f_coeff = synth_filter_f_coeff[64];  /* a moderate cutoff */
+    int q_coeff = synth_filter_q_coeff[0];   /* lowest resonance */
+    int last = 0;
+    int converged = 0;
+
+    for (i = 0; i < 2000; i++) {
+        int out = synth_filter_process_sample(&st, 1000, f_coeff, q_coeff, SYNTH_FILTER_MODE_LP);
+        if (i > 1000) {
+            int delta = out - last;
+            if (delta < 0) delta = -delta;
+            if (delta < 5) {
+                converged = 1;
+            }
+        }
+        last = out;
+    }
+    CHECK(converged, "low-pass output settles toward a steady value under a held step input");
+    CHECK(last > 500 && last < 1500, "settled low-pass output is in a sane range near the step input, not wildly off");
+}
+
+static void test_filter_resonance_increases_peak_overshoot(void) {
+    struct synth_filter_state st_low = {0, 0};
+    struct synth_filter_state st_high = {0, 0};
+    int i;
+    int f_coeff = synth_filter_f_coeff[200];
+    int peak_low = 0, peak_high = 0;
+
+    for (i = 0; i < 200; i++) {
+        int out_low = synth_filter_process_sample(&st_low, 1000, f_coeff, synth_filter_q_coeff[0], SYNTH_FILTER_MODE_LP);
+        int out_high = synth_filter_process_sample(&st_high, 1000, f_coeff, synth_filter_q_coeff[15], SYNTH_FILTER_MODE_LP);
+        if (out_low > peak_low) peak_low = out_low;
+        if (out_high > peak_high) peak_high = out_high;
+    }
+    CHECK(peak_high > peak_low, "higher resonance produces a larger peak overshoot than lower resonance at the same cutoff");
+}
+
+static void test_filter_mode_zero_is_silent(void) {
+    struct synth_filter_state st = {0, 0};
+    int i;
+    int all_zero = 1;
+    for (i = 0; i < 100; i++) {
+        int out = synth_filter_process_sample(&st, 1000, synth_filter_f_coeff[200], synth_filter_q_coeff[8], 0);
+        if (out != 0) {
+            all_zero = 0;
+        }
+    }
+    CHECK(all_zero, "filter mode 0 (no LP/BP/HP selected) produces silence regardless of input");
+}
+
+static void test_filter_never_exceeds_state_clamp_across_full_range(void) {
+    int cutoff_idx, res_idx, mode;
+    int any_exceeded = 0;
+    for (cutoff_idx = 0; cutoff_idx < 256; cutoff_idx += 17) {
+        for (res_idx = 0; res_idx < 16; res_idx++) {
+            for (mode = 1; mode <= 7; mode++) {
+                struct synth_filter_state st = {0, 0};
+                int i;
+                for (i = 0; i < 500; i++) {
+                    synth_filter_process_sample(&st, 1016, synth_filter_f_coeff[cutoff_idx], synth_filter_q_coeff[res_idx], mode);
+                    if (st.lp > SYNTH_FILTER_STATE_MAX || st.lp < -SYNTH_FILTER_STATE_MAX ||
+                        st.bp > SYNTH_FILTER_STATE_MAX || st.bp < -SYNTH_FILTER_STATE_MAX) {
+                        any_exceeded = 1;
+                    }
+                }
+            }
+        }
+    }
+    CHECK(!any_exceeded, "internal filter state never exceeds its clamp across a sweep of the full cutoff/resonance/mode range");
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -337,6 +445,12 @@ int main(void) {
     test_mixer_clamps_max_voices();
     test_mixer_silence_when_no_voices_gated();
     test_mixer_single_voice_full_envelope_matches_oscillator();
+    test_filter_table_sanity();
+    test_filter_setters_clamp();
+    test_filter_lowpass_step_response_converges();
+    test_filter_resonance_increases_peak_overshoot();
+    test_filter_mode_zero_is_silent();
+    test_filter_never_exceeds_state_clamp_across_full_range();
 
     if (failures == 0) {
         printf("PASS\n");

@@ -48,6 +48,44 @@ int synth_osc_sample(enum synth_waveform wave, unsigned int phase_accum,
                       int phase_wrapped);
 int synth_envelope_advance_sample(struct synth_voice *v);
 
+#define SYNTH_FILTER_MODE_LP 1
+#define SYNTH_FILTER_MODE_BP 2
+#define SYNTH_FILTER_MODE_HP 4
+#define SYNTH_FILTER_STATE_MAX 65536
+
+struct synth_filter_state {
+    int lp;
+    int bp;
+};
+
+extern const int synth_filter_f_coeff[256];
+extern const int synth_filter_q_coeff[16];
+
+/* Current global filter settings -- set by synth_set_filter_cutoff()/
+ * _resonance()/_mode() below, read by synth_render_half() (via the
+ * f_coeff/q_coeff table lookups) once the filter is wired into the
+ * mixer. Exposed here (not static in synth.c) the same way
+ * synth_voices[] already is, so host tests can verify each setter's
+ * clamping directly. */
+extern int synth_filter_cutoff_index;
+extern int synth_filter_res_index;
+extern int synth_filter_mode_mask;
+
+void synth_set_filter_cutoff(int cutoff);
+void synth_set_filter_resonance(int resonance);
+void synth_set_filter_mode(int mode_mask);
+
+/* One Chamberlin state-variable filter step: updates *st in place and
+ * returns the sum of whichever of low/band/high-pass outputs mode_mask
+ * selects (bits: SYNTH_FILTER_MODE_LP/BP/HP, any combination). f_coeff/
+ * q_coeff are Q14 fixed-point (looked up from synth_filter_f_coeff[]/
+ * synth_filter_q_coeff[] by the caller). Clamps its own internal state
+ * to +-SYNTH_FILTER_STATE_MAX -- an aggressive cutoff+resonance
+ * combination could otherwise grow this recursive state without bound
+ * and eventually corrupt the whole mixed output, not just distort. */
+int synth_filter_process_sample(struct synth_filter_state *st, int input,
+                                 int f_coeff, int q_coeff, int mode_mask);
+
 /* Renders len bytes of 8-bit unsigned PCM (128 = silence) into buf,
  * advancing every voice's oscillator phase and envelope by one sample
  * per byte and mixing all SYNTH_NUM_VOICES together. Called from

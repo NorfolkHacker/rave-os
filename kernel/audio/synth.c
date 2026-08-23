@@ -294,3 +294,127 @@ void synth_render_half(unsigned char *buf, unsigned int len) {
         buf[i] = (unsigned char)(sum + 128);
     }
 }
+
+/* Cutoff-to-frequency-coefficient table: Q14 fixed-point f = 2*sin(pi*fc/fs)
+ * for fc log-spaced 20Hz-3000Hz (index 0-255), fs = SYNTH_SAMPLE_RATE.
+ * The 3000Hz upper bound is deliberately conservative -- comfortably
+ * under fs/6 (~3675Hz), the range where this simple (non-oversampled)
+ * state-variable topology stays numerically well-behaved. No floating
+ * point exists in this kernel, so this table (like ona_phase_increment[])
+ * is generated once on the host and committed as a literal -- exact
+ * Python: `round(2.0 * math.sin(math.pi * (20.0 * (3000.0/20.0) **
+ * (i/255.0)) / 22050.0) * 16384)` for i in 0..255. */
+const int synth_filter_f_coeff[256] = {
+    93, 95, 97, 99, 101, 103, 105, 107,
+    109, 111, 114, 116, 118, 121, 123, 125,
+    128, 130, 133, 136, 138, 141, 144, 147,
+    150, 153, 156, 159, 162, 165, 168, 172,
+    175, 179, 182, 186, 189, 193, 197, 201,
+    205, 209, 213, 217, 222, 226, 231, 235,
+    240, 245, 249, 254, 259, 265, 270, 275,
+    281, 286, 292, 298, 304, 310, 316, 322,
+    328, 335, 342, 348, 355, 362, 369, 377,
+    384, 392, 400, 408, 416, 424, 432, 441,
+    450, 459, 468, 477, 486, 496, 506, 516,
+    526, 537, 547, 558, 569, 581, 592, 604,
+    616, 628, 640, 653, 666, 679, 693, 707,
+    721, 735, 749, 764, 780, 795, 811, 827,
+    843, 860, 877, 894, 912, 930, 949, 968,
+    987, 1006, 1026, 1047, 1067, 1089, 1110, 1132,
+    1155, 1178, 1201, 1225, 1249, 1274, 1299, 1325,
+    1351, 1378, 1405, 1433, 1461, 1490, 1520, 1550,
+    1581, 1612, 1644, 1677, 1710, 1744, 1779, 1814,
+    1850, 1886, 1924, 1962, 2001, 2040, 2081, 2122,
+    2164, 2207, 2251, 2295, 2341, 2387, 2435, 2483,
+    2532, 2582, 2633, 2685, 2738, 2793, 2848, 2904,
+    2962, 3020, 3080, 3141, 3203, 3267, 3331, 3397,
+    3464, 3533, 3603, 3674, 3746, 3820, 3896, 3973,
+    4051, 4131, 4213, 4296, 4380, 4467, 4555, 4645,
+    4736, 4830, 4925, 5022, 5120, 5221, 5324, 5429,
+    5535, 5644, 5755, 5868, 5983, 6100, 6220, 6342,
+    6466, 6593, 6722, 6853, 6987, 7123, 7262, 7404,
+    7548, 7695, 7845, 7998, 8153, 8311, 8472, 8637,
+    8804, 8974, 9147, 9324, 9504, 9687, 9873, 10062,
+    10255, 10452, 10652, 10855, 11062, 11272, 11486, 11704,
+    11926, 12151, 12380, 12613, 12850, 13090, 13335, 13583,
+};
+
+/* Resonance-to-Q14-feedback-coefficient table, index 0-15 matching
+ * SID's own 4-bit resonance register. Q sweeps 0.707 (heavily damped,
+ * index 0) to 8.0 (sharp resonant peak, index 15), q = 1/Q. Exact
+ * Python: `round((1.0 / (0.707 + i * (8.0 - 0.707) / 15.0)) * 16384)`
+ * for i in 0..15. */
+const int synth_filter_q_coeff[16] = {
+    23174, 13731, 9756, 7566, 6178, 5221, 4521, 3986, 3564, 3223, 2942, 2706, 2505, 2331, 2181, 2048,
+};
+
+int synth_filter_cutoff_index = 128;
+int synth_filter_res_index = 0;
+int synth_filter_mode_mask = SYNTH_FILTER_MODE_LP;
+
+void synth_set_filter_cutoff(int cutoff) {
+    if (cutoff < 0) {
+        cutoff = 0;
+    }
+    if (cutoff > 255) {
+        cutoff = 255;
+    }
+    synth_filter_cutoff_index = cutoff;
+}
+
+void synth_set_filter_resonance(int resonance) {
+    if (resonance < 0) {
+        resonance = 0;
+    }
+    if (resonance > 15) {
+        resonance = 15;
+    }
+    synth_filter_res_index = resonance;
+}
+
+void synth_set_filter_mode(int mode_mask) {
+    if (mode_mask < 0) {
+        mode_mask = 0;
+    }
+    if (mode_mask > 7) {
+        mode_mask = 7;
+    }
+    synth_filter_mode_mask = mode_mask;
+}
+
+int synth_filter_process_sample(struct synth_filter_state *st, int input,
+                                 int f_coeff, int q_coeff, int mode_mask) {
+    int hp = input - st->lp - ((q_coeff * st->bp) >> 14);
+    int bp_new = st->bp + ((f_coeff * hp) >> 14);
+    int lp_new = st->lp + ((f_coeff * bp_new) >> 14);
+
+    if (lp_new > SYNTH_FILTER_STATE_MAX) {
+        lp_new = SYNTH_FILTER_STATE_MAX;
+    }
+    if (lp_new < -SYNTH_FILTER_STATE_MAX) {
+        lp_new = -SYNTH_FILTER_STATE_MAX;
+    }
+    if (bp_new > SYNTH_FILTER_STATE_MAX) {
+        bp_new = SYNTH_FILTER_STATE_MAX;
+    }
+    if (bp_new < -SYNTH_FILTER_STATE_MAX) {
+        bp_new = -SYNTH_FILTER_STATE_MAX;
+    }
+
+    st->lp = lp_new;
+    st->bp = bp_new;
+
+    {
+        int out = 0;
+        if (mode_mask & SYNTH_FILTER_MODE_LP) {
+            out += lp_new;
+        }
+        if (mode_mask & SYNTH_FILTER_MODE_BP) {
+            out += bp_new;
+        }
+        if (mode_mask & SYNTH_FILTER_MODE_HP) {
+            out += hp;
+        }
+        return out;
+    }
+}
