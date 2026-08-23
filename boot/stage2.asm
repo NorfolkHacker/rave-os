@@ -45,21 +45,34 @@ start:
     call print_string
 
     ; Load the kernel across as many 64KB real-mode segments as it takes.
-    ; A single INT 13h AH=02h call only advances the 16-bit BX offset as
-    ; it fills the buffer -- it never carries into ES -- so one call
-    ; asking for more than SEGMENT_CHUNK_SECTORS (64KB / 512 = 128, one
-    ; full segment) would silently wrap BX back to 0 partway through and
-    ; overwrite the start of the buffer instead of extending it, with
-    ; carry left clear (no reported error). Splitting into chunks that
-    ; each start at offset 0 of their own segment (ES bumped by 0x1000 =
-    ; 64KB between chunks) keeps every individual read inside one
-    ; segment no matter how large KERNEL_SECTORS grows as the kernel
-    ; itself grows -- this used to only work by luck, staying under the
-    ; 128-sector limit by a shrinking margin (kernel.bin is already over
-    ; half that at time of writing).
+    ; Uses INT 13h AH=42h ("extended read", LBA addressing via a Disk
+    ; Address Packet) rather than AH=02h's legacy CHS addressing: CHS's
+    ; sector field is only 6 bits (max 63), and a real/emulated BIOS
+    ; refuses a single CHS read that would cross a track boundary --
+    ; harmless while the kernel was small enough that
+    ; KERNEL_START_SECTOR + KERNEL_SECTORS stayed under ~63, but this
+    ; kernel's on-disk footprint (no relation to RAM/.bss size -- see
+    ; kernel/Makefile's own comment on that) grew past that with this
+    ; project's accumulated feature set, and CHS has no way to express a
+    ; multi-track transfer in one call at all (unlike the ES:BX
+    ; wraparound below, chunking alone can't fix a hard 63-sector
+    ; ceiling on the chunk size itself). AH=42h addresses purely by
+    ; linear sector number instead, sidestepping the whole CHS geometry
+    ; question -- universally supported by SeaBIOS (and every real BIOS
+    ; since the mid-1990s) for hard-disk boot drives.
+    ; A single INT 13h read call still only advances the 16-bit BX/DAP
+    ; offset as it fills the buffer -- it never carries into ES -- so one
+    ; call asking for more than SEGMENT_CHUNK_SECTORS (64KB / 512 = 128,
+    ; one full segment) would silently wrap the offset back to 0 partway
+    ; through and overwrite the start of the buffer instead of extending
+    ; it. Splitting into chunks that each start at offset 0 of their own
+    ; segment (ES bumped by 0x1000 = 64KB between chunks) keeps every
+    ; individual read inside one segment no matter how large
+    ; KERNEL_SECTORS grows as the kernel itself grows.
     mov ax, KERNEL_SEGMENT
     mov es, ax
-    mov cl, KERNEL_START_SECTOR
+    mov eax, KERNEL_START_SECTOR - 1   ; DAP's LBA is 0-indexed; disk sector numbers here are 1-indexed
+    mov [dap_lba_lo], eax
     mov word [sectors_left], KERNEL_SECTORS
 
 .load_chunk:
@@ -72,24 +85,27 @@ start:
 .chunk_size_ok:
     mov [this_chunk], ax
 
-    mov ah, 0x02               ; BIOS function: read sectors (CHS addressing)
-    mov al, byte [this_chunk]
-    mov ch, 0                  ; cylinder 0
-    ; cl already holds this chunk's starting sector number
-    mov dh, 0                  ; head 0
+    mov byte [dap_size], 0x10
+    mov byte [dap_reserved], 0
+    mov ax, [this_chunk]
+    mov [dap_count], ax
+    mov word [dap_offset], 0    ; buffer offset, always 0 -- start of this chunk's segment
+    mov ax, es
+    mov [dap_segment], ax
+    mov dword [dap_lba_hi], 0
+
+    mov ah, 0x42               ; BIOS function: extended read (LBA addressing)
     mov dl, [boot_drive]
-    xor bx, bx                 ; ES:BX destination, BX=0 -- start of this chunk's segment
+    mov si, dap
     int 0x13
     jc disk_error
-    cmp al, byte [this_chunk]  ; AL is updated with sectors actually transferred --
-    jne disk_error              ; a short read without carry set is still a failure
 
     mov ax, [sectors_left]
     sub ax, [this_chunk]
     mov [sectors_left], ax
 
-    mov al, byte [this_chunk]
-    add cl, al                  ; next chunk's starting sector number
+    movzx eax, word [this_chunk]
+    add [dap_lba_lo], eax       ; next chunk's starting LBA
 
     mov ax, es
     add ax, 0x1000               ; next chunk's segment, 64KB further up
@@ -189,6 +205,21 @@ vbe_error:
 boot_drive db 0
 sectors_left dw 0   ; sectors still to load, decremented as load_chunk consumes them
 this_chunk   dw 0    ; size of the chunk load_chunk is currently reading/just read
+
+; INT 13h AH=42h's "Disk Address Packet" -- the fixed 16-byte structure
+; that call reads its arguments from (SI must point here), rather than
+; register arguments the way AH=02h's CHS read used. Fields refilled
+; before every .load_chunk iteration; dap_lba_hi always stays 0 (this
+; kernel is always well under the 4-billion-sector reach of the low
+; 32 bits alone).
+dap:
+dap_size     db 0   ; packet size, always 0x10
+dap_reserved db 0   ; always 0
+dap_count    dw 0   ; sectors to transfer this call
+dap_offset   dw 0   ; destination buffer offset
+dap_segment  dw 0   ; destination buffer segment
+dap_lba_lo   dd 0   ; starting LBA (0-indexed), low 32 bits
+dap_lba_hi   dd 0   ; starting LBA, high 32 bits -- always 0
 
 ; --- Global Descriptor Table: flat model, one code + one data segment,
 ; both base 0 / limit 4GB, so segmentation is effectively a no-op and all
