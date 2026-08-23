@@ -2308,3 +2308,170 @@ primitive-table entry); `kernel/kernel.c` (`sb16_init()` call, `beep_tone[]`,
 build rule and dependencies); `boot/Makefile` (`-device sb16` on the `run`
 target). Plan: `docs/superpowers/plans/2026-08-22-sb16-audio-driver.md`.
 Spec: `docs/superpowers/specs/2026-08-22-sb16-audio-driver-design.md`.
+
+## 2026-08-23 -- A real SID-like synthesizer: 8 voices, 4 waveforms, ADSR, continuous streaming
+
+Picked up `docs/IDEAS.md`'s Audio entry's sub-project (B) -- the actual
+multi-voice synthesizer that the 2026-08-22 SB16 driver deliberately
+left unbuilt, only proving hardware output worked at all via one
+hardcoded `BEEP` tone. Built as four SDD tasks against a design spec
+(`docs/superpowers/specs/2026-08-23-sid-synth-design.md`, plan at
+`docs/superpowers/plans/2026-08-23-sid-synth.md`), each landing in its
+own commit and host-tested before the next began.
+
+**Task 1: the ona-number table and the oscillator (`6e59b3a`).** A new
+`kernel/audio/synth.c`/`.h` pair, entirely self-contained (no floating
+point anywhere, matching this kernel's existing `-mgeneral-regs-only`
+constraint). An 88-key piano ona-number table gives each key's exact DDS
+phase increment precomputed for `SYNTH_SAMPLE_RATE` = 22050Hz, so
+`synth_set_ona()` just looks up a table entry rather than doing any
+runtime frequency math. `synth_osc_sample()` renders one sample for
+whichever of 4 waveforms a voice is set to -- pulse (duty-cycle
+configurable 1-99% via `synth_set_duty()`), saw, triangle, and noise (a
+16-bit Galois LFSR, verified maximal-length: cycles through all 65535
+non-zero states without ever landing on 0). `struct synth_voice` and
+`SYNTH_NUM_VOICES` (8) round out the per-voice state. New
+`kernel/tests/test_synth.c` joins the existing host-only suite
+(`test_font.c`/`test_scheduler.c`/`test_context_switch.c`/
+`test_editor.c`) -- PASS, zero warnings, both under host `gcc -m32` and
+under `i686-elf-gcc -mgeneral-regs-only` freestanding compilation.
+
+**Task 2: the ADSR envelope (`86e4f63`).** Extends the same two files:
+`enum synth_env_stage` (OFF/ATTACK/DECAY/SUSTAIN/RELEASE) plus five new
+per-voice fields (`envelope_level`, the four stage rates, `sustain_level`),
+`synth_set_adsr()` to configure attack/decay/release in milliseconds and
+sustain as a percentage, `synth_gate_on()`/`synth_gate_off()` to trigger
+the state machine, and `synth_envelope_advance_sample()` -- the core
+per-sample stage-transition logic, producing a Q0.15 level (0..32768)
+the mixer will scale each voice's oscillator output by. `synth_calc_rate()`
+converts a millisecond duration into a per-sample increment, clamped to a
+minimum of 1 so even pathologically long durations still make forward
+progress rather than sticking. `test_synth.c` grew 5 more tests (attack->
+decay->sustain progression, release-to-exactly-zero, zero-duration attack,
+extreme-duration non-stuck progress, gate on/off idempotency) -- PASS.
+
+**Task 3: the 8-voice mixer (`d19fced`).** Appends `synth_render_half()`
+to `synth.c` -- the function the rest of the system is built around: for
+each output byte, it advances every voice's phase accumulator and
+envelope by one sample, scales each voice's oscillator sample by its
+Q0.15 envelope level (`(osc * level) >> 15`), sums all 8 voices, clamps
+the sum to `[-128, 127]` *before* biasing to unsigned 8-bit (`+128`, so
+128 = silence) -- clamping pre-bias is what prevents wraparound
+distortion when multiple voices peak simultaneously. 3 more tests cover
+max-voice clamping, all-ungated silence, and single-voice passthrough --
+PASS. This closes out the host-testable portion of the work: Tasks 1-3
+together produced a synthesis core fully exercised on the build machine,
+with zero Critical/Important review findings across all three tasks.
+
+**Task 4: continuous streaming and the FORTH control surface (`8dab18e`,
+plus fixes in `a050970`/`8f2e6a1`).** The prior SB16 driver only did
+one-shot, single-cycle DMA playback (`sb16_play_buffer()`, used by
+`BEEP`) -- wrong shape for a synthesizer that needs to keep producing
+audio indefinitely. Added true auto-init (looping) DMA: `dma_program_channel1()`
+now takes an explicit mode byte (`DMA1_CHAN1_MODE_AUTOINIT_READ` = 0x59
+vs. the existing single-cycle 0x49), and `sb16_start_stream()` programs
+the DSP for 8-bit auto-init output (`SB16_CMD_SET_BLOCK_SIZE` 0x48, then
+`SB16_CMD_8BIT_AUTOINIT_OUTPUT` 0x1C) over a 2048-byte, 4096-aligned
+double buffer (`audio_stream_buf`, two 1024-byte halves). `sb16_irq_ack()`
+now, on every IRQ5, clears the DMA flip-flop and reads the channel's
+current-address register directly (port `0x02`) to derive which half
+just finished playing, rather than trusting a software toggle.
+`kmain()`'s per-frame loop calls `sb16_stream_needs_refill()` ->
+`synth_render_half()` -> `sb16_stream_refill_done()` unconditionally
+every frame, including the idle `hlt` path. Seven new bare Forth words
+(`VOICE`/`WAVE`/`DUTY`/`ONA`/`ADSR`/`GATE-ON`/`GATE-OFF`) wrap the
+`synth_set_*`/`synth_gate_*` calls, matching `BEEP`/`PIXEL`'s existing
+bounds-checked-pop-then-delegate-to-a-hook shape exactly.
+
+**A real, pre-existing bootloader bug, found and fixed along the way.**
+Task 4's own kernel binary grew (~2.4KB) past a threshold that broke
+booting entirely: `boot/stage2.asm`'s kernel-load loop used CHS disk
+addressing (`INT 13h AH=02h`), which has a hard 63-sector-per-track
+ceiling, and `kernel.bin` had reached 132 sectors. An A/B test in a
+scratch worktree proved this predates Task 4 -- the pre-Task-4 kernel was
+already 126 sectors, already past the CHS ceiling, and only "worked" by
+accident of QEMU's default small-disk CHS-translation heuristic tolerating
+it; forcing standard 63-sectors/track geometry on that same untouched
+126-sector image reproduced the identical `Disk read error!` failure.
+Task 4's own growth just tipped it over. Fixed by switching to LBA
+extended reads (`INT 13h AH=42h` via a Disk Address Packet), the standard
+fix for this bug class, universally supported since mid-1990s BIOSes --
+committed separately (`a050970`) from Task 4's own 6-file commit. A
+follow-up review caught that the LBA rewrite had dropped the old CHS
+code's short-read check (only the carry flag was being tested, not the
+DAP's actual transferred-count field) -- worth calling out because
+`SEGMENT_CHUNK_SECTORS` (128) is one sector over the documented Phoenix
+EDD 127-block-per-call limit, so a stricter real BIOS could have silently
+short-read into a truncated kernel image instead of a loud halt. Re-added
+in the fix round (`8f2e6a1`).
+
+**Verified via headless QEMU** (not host-testable -- this is real
+DMA/DSP/IRQ hardware I/O), following the same monitor-socket-driven
+navigation this project has used since the PAINT work: booted with
+`-device sb16 -audiodev wav,...`, drove the FORTH console to run
+`0 VOICE 1 WAVE 49 ONA 10 50 50 500 ADSR GATE-ON`, then `GATE-OFF`, and
+inspected the resulting WAV. The original pass (before the fix round)
+captured `frames=1845001 sampwidth=2 framerate=44100`: continuous
+non-silence across the full ~30.2s sustain (~650 refill cycles of the
+1024-sample/22050Hz ≈46.4ms double-buffer, zero dropouts), then a smooth
+~380ms monotonic release fade to silence after `GATE-OFF`. That pass's
+review caught 5 Important findings (below), fixed in `8f2e6a1`, then
+re-verified with a fresh pass: `frames=2835799 sampwidth=2 framerate=44100`.
+The first ~93ms is now true flat silence rather than a startup DC-thump
+(the `.bss`-zeroed buffer had been playing raw `0x00` -- full-scale --
+instead of the `0x80` silence level, for one buffering period before the
+first real refill; fixed by pre-filling both halves with 128 before
+starting the stream). A `BEEP` sent mid-stream during a ~53s continuous
+sustain produced zero measurable dip (minimum deviation 16046 in the
+window around `BEEP`'s actual timestamp, against a 255 measurement
+floor) -- confirming the new guard that makes `BEEP` a no-op while the
+synth stream is active actually holds.
+
+**A real-hardware verification pass is still pending**, the same bar the
+2026-08-22 SB16 entry above was held to, for the same three QEMU-blind
+reasons on record there (DSP reset timing margins, unprogrammed mixer
+volume, non-default ISA jumpers) -- plus one new one specific to this
+feature: continuous auto-init DMA's refill timing is exactly the kind of
+thing QEMU is least likely to surface a real-hardware glitch in (a
+refill landing a few frames late might be tolerated by QEMU's emulated
+timing but audibly click on a real card).
+
+**Known minor gaps, deferred, not fixed here.** Task 4's two review
+rounds surfaced a number of Minor findings, all correctly parked rather
+than fixed under this task's scope:
+
+- The DSP time-constant formula rounds 22050Hz to an actual output rate
+  of 22222Hz, making every note ~13 cents sharp -- undercuts the ona
+  table's exact-precision intent, but it's the same formula `BEEP`
+  already used, not a new defect.
+- No EDD-extensions presence check (`INT 13h AH=41h`) before the
+  bootloader's new LBA read path (`AH=42h`) is used.
+- The bootloader's segment tracking across `INT 13h` calls relies on an
+  undocumented (though empirically-confirmed) BIOS guarantee that ES is
+  preserved.
+- Two stale/inaccurate comments in `boot/stage2.asm`: one claims all DAP
+  fields refresh every loop iteration, when `dap_lba_lo` deliberately
+  accumulates; one references CHS sector numbering that no longer fully
+  applies.
+- `BEEP` becomes permanently and silently inert (no error) once any
+  synth word has run -- the SB16 driver only supports one DMA consumer
+  at a time, and the synth stream, once started, never stops.
+- `sb16_stream_refill_done()`'s buffer-pointer guard against the
+  lost-wakeup race (finding 4) is itself a narrower test-then-clear
+  TOCTOU with no `cli`/`sti` -- shrinks the original window from ~ms to
+  ~ns, not fully eliminated.
+- The same function's pointer-to-half mapping treats any non-base
+  pointer as "half 1" rather than validating against the real second-half
+  address -- correct for the only real caller, not defensively validated.
+
+Files: `kernel/audio/synth.c`/`.h` (new); `kernel/tests/test_synth.c`
+(new); `kernel/drivers/sb16.c`/`.h` (auto-init DMA mode, `sb16_start_stream()`/
+`sb16_stream_needs_refill()`/`sb16_stream_refill_done()`, hardware-derived
+half-tracking, `BEEP`-vs-stream guard); `kernel/kernel.c` (`synth_init()`
+call, double-buffer state, 7 `forth_hook_synth_*` functions, per-frame
+refill in the frame loop, silence pre-fill); `kernel/forth/forth_hooks.h`
+(7 new declarations); `kernel/forth/forth.c` (7 new primitives:
+`VOICE`/`WAVE`/`DUTY`/`ONA`/`ADSR`/`GATE-ON`/`GATE-OFF`); `kernel/Makefile`
+(`-Iaudio`, `synth.o` wiring); `boot/stage2.asm` (CHS->LBA kernel-load
+fix, short-read check). Plan: `docs/superpowers/plans/2026-08-23-sid-synth.md`.
+Spec: `docs/superpowers/specs/2026-08-23-sid-synth-design.md`.

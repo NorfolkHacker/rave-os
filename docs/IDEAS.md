@@ -79,6 +79,21 @@ not a queue.
   future specs, not started, and not what shipped here. See
   `docs/BUILD_LOG.md`'s entry for the same date.
 
+  (B) has now also shipped, 2026-08-23 (see
+  `docs/superpowers/specs/2026-08-23-sid-synth-design.md` and
+  `docs/BUILD_LOG.md`'s entry for the same date): `kernel/audio/synth.c`/
+  `.h` now implements the real oscillators, envelope, and mixing this
+  entry originally asked for -- 8 independent voices, 4 waveforms
+  (pulse/saw/triangle/noise), an 88-key ona-number note table addressing
+  exact DDS phase increments for 22050Hz, a full ADSR envelope state
+  machine per voice, and an 8-voice software mixer, streamed continuously
+  through the SB16 driver via auto-init DMA and driven manually from the
+  FORTH console with 7 new words (`VOICE`/`WAVE`/`DUTY`/`ONA`/`ADSR`/
+  `GATE-ON`/`GATE-OFF`). (C) -- a real control surface / note-sequencing
+  language beyond those manual words -- and the resonant filter this
+  entry also originally described both remain unbuilt, separate future
+  work.
+
 - ~~**Upgrade the FILES window.**~~ Done, 2026-08-16 -- both candidates
   this entry originally floated shipped the same day. Multi-select +
   clipboard-style CUT/COPY/PASTE landed in FILES (plus `mv`/`cp` in
