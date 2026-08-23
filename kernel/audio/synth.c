@@ -36,6 +36,12 @@ void synth_init(void) {
          * a distinct fixed seed per voice also keeps multiple noise
          * voices from sounding perfectly correlated. */
         synth_voices[v].noise_lfsr = 0xACE1u + (unsigned int)v;
+        synth_voices[v].envelope_stage = ENV_OFF;
+        synth_voices[v].envelope_level = 0;
+        synth_voices[v].attack_rate = SYNTH_ENV_FULL;
+        synth_voices[v].decay_rate = SYNTH_ENV_FULL;
+        synth_voices[v].sustain_level = SYNTH_ENV_FULL;
+        synth_voices[v].release_rate = SYNTH_ENV_FULL;
     }
 }
 
@@ -117,4 +123,103 @@ int synth_osc_sample(enum synth_waveform wave, unsigned int phase_accum,
     default:
         return 0;
     }
+}
+
+/* Rate is "how much envelope_level (0..SYNTH_ENV_FULL) changes per
+ * sample" to cover the requested duration -- clamped to at least 1 so
+ * a very long requested duration still makes forward progress every
+ * sample (worst case ~1.5s to complete a stage at this sample rate)
+ * instead of a rate that rounds down to 0 and never finishes. Decay
+ * time is simplified to "time from full scale to zero, stopped early
+ * at the sustain level" rather than "time from full scale to sustain
+ * specifically" -- a common, deliberate simplification (exact SID
+ * decay-curve emulation is a much bigger DSP topic, out of scope). */
+static int synth_calc_rate(int duration_ms) {
+    unsigned int samples;
+    int rate;
+    if (duration_ms <= 0) {
+        return SYNTH_ENV_FULL;
+    }
+    samples = ((unsigned int)duration_ms * SYNTH_SAMPLE_RATE) / 1000u;
+    if (samples == 0) {
+        return SYNTH_ENV_FULL;
+    }
+    rate = SYNTH_ENV_FULL / (int)samples;
+    if (rate < 1) {
+        rate = 1;
+    }
+    return rate;
+}
+
+void synth_set_adsr(int voice, int attack_ms, int decay_ms, int sustain_percent, int release_ms) {
+    struct synth_voice *v;
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    if (sustain_percent < 0) {
+        sustain_percent = 0;
+    }
+    if (sustain_percent > 100) {
+        sustain_percent = 100;
+    }
+    v = &synth_voices[voice];
+    v->attack_rate = synth_calc_rate(attack_ms);
+    v->decay_rate = synth_calc_rate(decay_ms);
+    v->sustain_level = (sustain_percent * SYNTH_ENV_FULL) / 100;
+    v->release_rate = synth_calc_rate(release_ms);
+}
+
+void synth_gate_on(int voice) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    synth_voices[voice].envelope_level = 0;
+    synth_voices[voice].envelope_stage = ENV_ATTACK;
+}
+
+void synth_gate_off(int voice) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    if (synth_voices[voice].envelope_stage != ENV_OFF) {
+        synth_voices[voice].envelope_stage = ENV_RELEASE;
+    }
+}
+
+int synth_envelope_advance_sample(struct synth_voice *v) {
+    switch (v->envelope_stage) {
+    case ENV_OFF:
+        v->envelope_level = 0;
+        break;
+    case ENV_ATTACK:
+        v->envelope_level += v->attack_rate;
+        if (v->envelope_level >= SYNTH_ENV_FULL) {
+            v->envelope_level = SYNTH_ENV_FULL;
+            v->envelope_stage = ENV_DECAY;
+        }
+        break;
+    case ENV_DECAY:
+        if (v->envelope_level > v->sustain_level) {
+            v->envelope_level -= v->decay_rate;
+            if (v->envelope_level <= v->sustain_level) {
+                v->envelope_level = v->sustain_level;
+                v->envelope_stage = ENV_SUSTAIN;
+            }
+        } else {
+            v->envelope_stage = ENV_SUSTAIN;
+        }
+        break;
+    case ENV_SUSTAIN:
+        v->envelope_level = v->sustain_level;
+        break;
+    case ENV_RELEASE:
+        if (v->envelope_level > v->release_rate) {
+            v->envelope_level -= v->release_rate;
+        } else {
+            v->envelope_level = 0;
+            v->envelope_stage = ENV_OFF;
+        }
+        break;
+    }
+    return v->envelope_level;
 }

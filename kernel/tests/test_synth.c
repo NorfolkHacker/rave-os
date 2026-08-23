@@ -82,6 +82,119 @@ static void test_set_ona_bounds(void) {
     CHECK(synth_voices[0].phase_increment == 85704563u, "synth_set_ona ignores out-of-range ona (too high)");
 }
 
+static void test_envelope_attack_decay_sustain(void) {
+    struct synth_voice v;
+    int i;
+    int reached_full = 0;
+    int reached_sustain = 0;
+
+    v.envelope_stage = ENV_ATTACK;
+    v.envelope_level = 0;
+    v.attack_rate = 148;   /* ~10ms at 22050Hz per synth_calc_rate's formula */
+    v.decay_rate = 74;     /* ~20ms */
+    v.sustain_level = (50 * SYNTH_ENV_FULL) / 100;
+    v.release_rate = 33;   /* ~40ms */
+
+    for (i = 0; i < 1000; i++) {
+        synth_envelope_advance_sample(&v);
+        if (v.envelope_stage == ENV_DECAY && !reached_full) {
+            reached_full = 1;
+        }
+        if (v.envelope_stage == ENV_SUSTAIN) {
+            reached_sustain = 1;
+            break;
+        }
+    }
+    CHECK(reached_full, "envelope reaches full scale and enters decay");
+    CHECK(reached_sustain, "envelope decays into sustain");
+    CHECK(v.envelope_level == v.sustain_level, "envelope holds at configured sustain level");
+
+    for (i = 0; i < 500; i++) {
+        synth_envelope_advance_sample(&v);
+    }
+    CHECK(v.envelope_stage == ENV_SUSTAIN, "envelope stays in sustain without gate-off");
+    CHECK(v.envelope_level == v.sustain_level, "sustain level does not drift");
+}
+
+static void test_envelope_release_reaches_zero(void) {
+    struct synth_voice v;
+    int i;
+    int reached_off = 0;
+
+    v.envelope_stage = ENV_RELEASE;
+    v.envelope_level = (50 * SYNTH_ENV_FULL) / 100;
+    v.sustain_level = v.envelope_level;
+    v.release_rate = 33;
+
+    for (i = 0; i < 2000; i++) {
+        synth_envelope_advance_sample(&v);
+        if (v.envelope_stage == ENV_OFF) {
+            reached_off = 1;
+            break;
+        }
+    }
+    CHECK(reached_off, "release eventually reaches OFF");
+    CHECK(v.envelope_level == 0, "released envelope level is exactly zero");
+}
+
+static void test_envelope_instant_on_zero_duration(void) {
+    struct synth_voice v;
+    v.envelope_stage = ENV_ATTACK;
+    v.envelope_level = 0;
+    v.attack_rate = SYNTH_ENV_FULL; /* synth_calc_rate(0) */
+    v.decay_rate = 1;
+    v.sustain_level = 0;
+    v.release_rate = 1;
+    synth_envelope_advance_sample(&v);
+    CHECK(v.envelope_level == SYNTH_ENV_FULL, "zero-duration attack reaches full scale in one sample");
+    CHECK(v.envelope_stage == ENV_DECAY, "zero-duration attack immediately enters decay");
+}
+
+static void test_envelope_never_stuck_at_extreme_duration(void) {
+    int rate;
+    struct synth_voice v;
+    int i;
+    int reached_full = 0;
+
+    v.envelope_stage = ENV_ATTACK;
+    v.envelope_level = 0;
+    rate = SYNTH_ENV_FULL / (int)(((unsigned int)3600000u * SYNTH_SAMPLE_RATE) / 1000u);
+    if (rate < 1) {
+        rate = 1;
+    }
+    CHECK(rate >= 1, "synth_calc_rate-equivalent never computes a zero rate");
+    v.attack_rate = rate;
+    for (i = 0; i < SYNTH_ENV_FULL + 10; i++) {
+        synth_envelope_advance_sample(&v);
+        if (v.envelope_stage != ENV_ATTACK) {
+            reached_full = 1;
+            break;
+        }
+    }
+    CHECK(reached_full, "even a minimum rate=1 envelope eventually completes attack");
+}
+
+static void test_gate_on_off_transitions(void) {
+    synth_init();
+    synth_set_adsr(0, 10, 20, 50, 40);
+    CHECK(synth_voices[0].envelope_stage == ENV_OFF, "voice starts with envelope OFF");
+    synth_gate_on(0);
+    CHECK(synth_voices[0].envelope_stage == ENV_ATTACK, "gate-on moves OFF voice to ATTACK");
+    synth_gate_off(0);
+    CHECK(synth_voices[0].envelope_stage == ENV_RELEASE, "gate-off moves an active voice to RELEASE");
+    synth_gate_off(0);
+    CHECK(synth_voices[0].envelope_stage == ENV_RELEASE, "gate-off is a no-op from RELEASE (stays RELEASE)");
+    {
+        int i;
+        for (i = 0; i < 2000 && synth_voices[0].envelope_stage != ENV_OFF; i++) {
+            synth_envelope_advance_sample(&synth_voices[0]);
+        }
+    }
+    CHECK(synth_voices[0].envelope_stage == ENV_OFF, "release fully completes back to OFF");
+    synth_gate_off(0);
+    CHECK(synth_voices[0].envelope_stage == ENV_OFF, "gate-off from OFF stays OFF (does not restart release)");
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -89,6 +202,11 @@ int main(void) {
     test_waveform_pulse();
     test_waveform_noise();
     test_set_ona_bounds();
+    test_envelope_attack_decay_sustain();
+    test_envelope_release_reaches_zero();
+    test_envelope_instant_on_zero_duration();
+    test_envelope_never_stuck_at_extreme_duration();
+    test_gate_on_off_transitions();
 
     if (failures == 0) {
         printf("PASS\n");
