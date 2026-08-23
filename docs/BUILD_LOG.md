@@ -2463,6 +2463,29 @@ than fixed under this task's scope:
 - The same function's pointer-to-half mapping treats any non-base
   pointer as "half 1" rather than validating against the real second-half
   address -- correct for the only real caller, not defensively validated.
+- Each `forth_hook_synth_*` function calls `audio_ensure_stream_started()`
+  unconditionally before its own range check runs, so an out-of-range
+  `VOICE`/`WAVE` call still starts the DMA stream even though the call
+  itself gets rejected -- harmless (the stream just renders silence with
+  nothing gated on), but the ordering is backwards from "validate, then
+  act."
+- `stream_base_low16` (the fix round's new hardware-tracking base, cached
+  once in `sb16_start_stream()` and read by `sb16_irq_ack()`) is a plain,
+  non-`volatile` static with no explicit memory-barrier ordering against
+  `stream_active` -- safe as built, since this Makefile applies no `-O`
+  flag and so has no compiler-reordering risk in practice, but it's the
+  same structural assumption the pre-existing `stream_buf_base`/
+  `stream_half_len` publication already relied on, just one more instance.
+
+A few smaller, non-blocking asides the fix-round re-review noted outside
+its own diff's scope, left untouched as out-of-scope rather than gaps in
+what shipped: a stray `BEEP` immediately followed by a synth word can
+truncate the beep and trigger one spurious early refill (self-corrects
+under the new hardware-tracked half-detection); `audio_stream_started`
+gets set unconditionally even with no SB16 card present; and
+`forth_hook_synth_gate_off()` is the one synth hook that skips
+`audio_ensure_stream_started()` (consistent, since gating an ungated
+voice off is meaningless, but asymmetric with the other six hooks).
 
 Files: `kernel/audio/synth.c`/`.h` (new); `kernel/tests/test_synth.c`
 (new); `kernel/drivers/sb16.c`/`.h` (auto-init DMA mode, `sb16_start_stream()`/
