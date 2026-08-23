@@ -58,12 +58,26 @@ not a queue.
   neutral dark shade for every window; only the bright accent role
   varies. See `docs/BUILD_LOG.md`'s entry for the same date.
 
-- **Audio: an 8-channel SID-like chip emulation.** C64 SID (MOS 6581/8580)
-  as the inspiration -- its oscillators/waveforms/filter/envelope model --
-  but with 8 voices instead of the real chip's 3. No audio subsystem
-  exists in this kernel at all yet (no sound card driver, no PC speaker
-  output, nothing) -- this would be a new subsystem from scratch, not an
-  extension of something existing.
+- ~~**Audio: an 8-channel SID-like chip emulation.**~~ Done, 2026-08-22 --
+  but only the foundational piece. Decomposed with the user into three
+  independent sub-projects (see
+  `docs/superpowers/specs/2026-08-22-sb16-audio-driver-design.md`): (A) a
+  real hardware audio output path, (B) the actual multi-voice SID-like
+  software synthesizer this entry originally described (oscillators,
+  waveforms, filter, envelope, 8 voices), (C) a control surface/
+  note-sequencing language to drive it. This entry's original premise --
+  "no audio subsystem exists in this kernel at all yet (no sound card
+  driver, no PC speaker output, nothing)" -- is no longer true: (A)
+  shipped as a `kernel/drivers/sb16.c`/`.h` Sound Blaster 16 driver
+  (DSP reset/detect handshake, 8237 DMA controller channel 1 programmed
+  for single-cycle 8-bit playback, an IRQ5 completion handler) and a new
+  bare Forth word `BEEP` that plays one hardcoded 400Hz square-wave test
+  tone through it -- proof this kernel can drive real (emulated) hardware
+  audio output end to end, verified via headless QEMU inspecting the
+  actual WAV samples produced. (B), the real synthesizer, and (C), any
+  control surface for it, are both still entirely unbuilt -- separate
+  future specs, not started, and not what shipped here. See
+  `docs/BUILD_LOG.md`'s entry for the same date.
 
 - ~~**Upgrade the FILES window.**~~ Done, 2026-08-16 -- both candidates
   this entry originally floated shipped the same day. Multi-select +

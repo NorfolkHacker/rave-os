@@ -2176,3 +2176,129 @@ the host-`gcc`-built one, not just that it compiles.
 
 Files: `toolchain/build-cross.sh` (new); `kernel/Makefile`
 (`CC`/`LD`/`OBJCOPY`, `CFLAGS`).
+
+## 2026-08-22 -- A minimal SB16 driver + `BEEP`: this kernel's first real audio output
+
+Picked up `docs/IDEAS.md`'s long-standing "Audio" entry, which wanted an
+8-channel SID-like software synthesizer eventually but ran into a harder
+truth first: this kernel had never produced a single sound, programmed
+DMA, or enumerated any device beyond PS/2 keyboard/mouse and PIO-only ATA
+disk access. Decomposed with the user into three independent
+sub-projects (see
+`docs/superpowers/specs/2026-08-22-sb16-audio-driver-design.md`): (A) a
+real hardware audio output path, (B) the actual multi-voice synthesizer,
+(C) a control surface/note-sequencing language. This entry covers (A)
+alone, done as two SDD tasks (plan at
+`docs/superpowers/plans/2026-08-22-sb16-audio-driver.md`) -- proving
+sound can come out of real (emulated) hardware at all, with no synthesis
+yet.
+
+**Task 1: reset, detect.** A new `kernel/drivers/sb16.c`/`.h` pair,
+following `ata.c`'s plain-polling driver shape. `sb16_init()` does the
+classic DSP reset handshake against the hardcoded classic SB16 defaults
+(I/O base `0x220`, IRQ 5, 8-bit DMA channel 1 -- both QEMU's `-device
+sb16` and every real ISA SB16's own defaults, so hardcoding rather than
+probing follows the same "this kernel assumes fixed hardware" precedent
+already set by the one VBE mode and PS/2-only input): write then clear
+the reset bit, hold it via the same `outb(0x80, 0)` i/o-wait trick
+`pic.c` already uses, poll the DSP's read-status port, and check the
+card hands back its own `0xAA` acknowledgement byte. Logs `SB16: OK` or
+`SB16: NOT FOUND` to serial and sets a static `sb16_present` flag Task 2
+reads; called once from `kmain()` right after `ata_selftest()`. Wired
+into `kernel/Makefile`, and `boot/Makefile`'s `run` target grew
+`-device sb16` (with a comment on how to attach a real host `-audiodev`
+backend by hand, since a bare `-device sb16` with no audiodev still
+fully answers the card's ports/DSP handshake with no host sound needed).
+
+**Task 2: DMA playback, IRQ5, and `BEEP`.** `sb16_play_buffer(buf, len,
+sample_rate)` programs the 8237 DMA controller's channel 1 (mask, clear
+flip-flop, mode byte `0x49` for single-cycle memory-to-device transfer,
+address/count/page registers, unmask), sets the DSP's sample rate via
+the classic time-constant formula, and sends the 8-bit single-cycle
+output command -- fire-and-forget, returns immediately while playback
+continues in the background. A new `irq5_sb16()` handler in
+`kernel/arch/isr.c` mirrors `irq1_keyboard()`/`irq12_mouse()`'s exact
+shape (`__attribute__((interrupt))`, `pic_send_eoi_master()` since IRQ5
+is a master-PIC vector like IRQ1) and calls `sb16_irq_ack()` -- reading
+the DSP's own ack port, required before the card will raise IRQ5 again.
+`interrupts_init()`'s vector loop gained a `vector == 5` arm and
+`interrupts_enable()` gained `pic_clear_mask(5)`, both following the
+identical pattern IRQ1/IRQ12 already established. `BEEP` mirrors
+`PAINT`'s own bare-word shape exactly: `forth_hooks.h` declares
+`forth_hook_beep()`, `forth.c`'s `prim_beep()` calls it, and `kernel.c`
+implements it -- on first call it generates a fixed 400Hz square wave
+(2000 samples at 8000Hz, 250ms, values 160/96 around the 128 midpoint)
+into a `.bss` buffer (`aligned(4096)`, so a run of at most 4096 bytes
+can never straddle the 64KB physical-address boundary ISA DMA can't
+cross) and plays it via `sb16_play_buffer()`. No oscillators, mixing,
+multiple voices, envelopes, or filters -- exactly one hardcoded test
+tone, played once per call, by design (that's sub-project B).
+
+**Verified headlessly, both tasks.** Task 1: booted with `-device sb16`
+and grepped the serial log for `SB16: OK` (found, exit 0); booted again
+with no `-device sb16` at all and grepped for `SB16: NOT FOUND` (found,
+exit 0) -- confirming detection genuinely depends on the hardware being
+there, not a hardcoded success path. Task 2: launched QEMU headless with
+`-device sb16,audiodev=snd0 -audiodev wav,id=snd0,path=...` (QEMU's
+`wav` backend writes the emulated card's actual output samples to a real
+`.wav` file -- the audio equivalent of this project's screendump-and-
+sample-pixels technique), drove the FORTH console via the monitor socket
+to type `BEEP`, waited for the 250ms tone to finish, then quit cleanly so
+the WAV header finalized. Inspecting the resulting file: `frames=10840
+sampwidth=2 max_deviation_from_silence=8447`, `PASS` -- frames greater
+than zero and a deviation from silence (8447) far above the pass
+threshold (5), confirming real, non-silent audio actually came out of
+the DMA/DSP path, not just that `BEEP` ran without crashing.
+
+**A real-hardware verification pass is still pending.** Both tasks were
+verified against QEMU only, and this project's own established
+convention (see the 2026-08-17/18 PAINT entries) is to never call
+hardware-facing work fully proven on headless emulation alone -- there
+are specifically three things QEMU cannot exercise here, worth recording
+now so a future session doesn't have to rediscover them: (a) the DSP
+reset pulse's actual timing margins -- QEMU doesn't model real timing at
+all, so the handshake's hold/settle delays are unverified against a real
+card's tolerances; (b) mixer volume -- this driver never programs the
+SB16 mixer chip (ports `0x224`/`0x225`) at all, relying entirely on the
+card's post-reset default master/voice volume, which happens to be
+audible in QEMU but may not be on real hardware, i.e. "the driver is
+programmed correctly and the output is still inaudible" is a real
+possible outcome on a real card; (c) non-default ISA PnP IRQ/DMA jumper
+settings -- this driver's hardcoded `0x220`/IRQ5/DMA1 approach
+deliberately does not probe for or handle a real card configured
+differently, per this spec's own explicit scope cut.
+
+**Known minor gaps, deferred, not fixed here.** A final whole-branch
+review found five Minor findings, triaged and correctly parked rather
+than fixed under this task's narrower scope -- recorded here so they
+aren't silently dropped:
+
+- `kernel/arch/isr.c` unmasks IRQ5 unconditionally, even when
+  `sb16_init()` never found a card -- harmless on QEMU, but a real
+  shared-IRQ5 device (some ISA NICs/LPT ports have historically shared
+  IRQ5) could trigger the handler spuriously on real hardware. Cheap
+  future fix: gate `sb16_irq_ack()` on `sb16_present`.
+- `sb16_play_buffer()`'s doc comment doesn't state that its buffer
+  argument must stay valid and unmodified until IRQ5 fires
+  (fire-and-forget semantics) -- not a live bug today, since the only
+  caller is a static `.bss` buffer, but will matter once a future
+  synthesizer feature might pass a non-static buffer.
+- No re-entrancy guard: `sb16_play_buffer()` can genuinely be called
+  again while a previous transfer is still in flight -- this kernel's
+  cooperative scheduler can run `BEEP` from up to 4 concurrent Forth
+  program slots, and a tight script loop can call it at frame rate, not
+  just human keystroke rate. Verified benign for now (no corruptible
+  driver state, distinct DMA-ack vs. DSP-write ports), but will become
+  load-bearing once auto-init/looping playback is ever added.
+- SB16 detection (found/not-found) isn't logged to `/VAR/LOG` the way
+  ATA and filesystem status already are -- would make the pending
+  real-hardware pass easier to diagnose without a serial capture setup.
+
+Files: `kernel/drivers/sb16.c`/`.h` (new); `kernel/arch/isr.c` (`irq5_sb16()`,
+IDT vector arm, `pic_clear_mask(5)`); `kernel/forth/forth_hooks.h`
+(`forth_hook_beep()`); `kernel/forth/forth.c` (`prim_beep()`, `BEEP`
+primitive-table entry); `kernel/kernel.c` (`sb16_init()` call, `beep_tone[]`,
+`beep_tone_generate()`, `forth_hook_beep()`); `kernel/Makefile` (`sb16.o`
+build rule and dependencies); `boot/Makefile` (`-device sb16` on the `run`
+target). Plan: `docs/superpowers/plans/2026-08-22-sb16-audio-driver.md`.
+Spec: `docs/superpowers/specs/2026-08-22-sb16-audio-driver-design.md`.
