@@ -576,6 +576,34 @@ static void test_render_half_filter_state_persists_across_calls(void) {
           "the shared filter's internal state persists across synth_render_half() calls, not reset each time");
 }
 
+static void test_synth_init_resets_filter_state(void) {
+    unsigned char buf[4];
+    int i;
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_PULSE);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    synth_set_filter_cutoff(220);
+    synth_set_filter_resonance(4);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_set_voice_filter_route(0, 1);
+    synth_render_half(buf, 4);
+    /* filter state is now perturbed (non-{0,0}) */
+
+    synth_init();
+    synth_voices[0].envelope_stage = ENV_OFF;
+    for (i = 0; i < 4; i++) {
+        buf[i] = 0xFF;
+    }
+    synth_render_half(buf, 4);
+    for (i = 0; i < 4; i++) {
+        CHECK(buf[i] == 128, "synth_init() resets the shared filter's state, not just per-voice state -- a silent bypass render right after re-init must be true silence, not residual filter ringing");
+    }
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -609,6 +637,7 @@ int main(void) {
     test_render_half_default_filter_route_matches_unfiltered_behavior();
     test_render_half_filter_route_changes_output();
     test_render_half_filter_state_persists_across_calls();
+    test_synth_init_resets_filter_state();
 
     if (failures == 0) {
         printf("PASS\n");

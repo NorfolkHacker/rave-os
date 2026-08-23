@@ -2,6 +2,13 @@
 
 struct synth_voice synth_voices[SYNTH_NUM_VOICES];
 
+/* The one shared filter instance (matches "one shared filter", not one
+ * per voice, per the SID architecture this is scaled up from). Its
+ * lp/bp state persists across calls to synth_render_half() the same
+ * way each voice's phase_accum/envelope_level already do -- reset only
+ * by synth_init(), not per-call. */
+static struct synth_filter_state synth_filter;
+
 /* Standard 88-key piano numbering, ona 49 = A4 = 440.0Hz
  * (freq(n) = 440 * 2^((n-49)/12)). Each entry is a Q-format DDS phase
  * increment for a 32-bit phase accumulator at SYNTH_SAMPLE_RATE:
@@ -46,6 +53,8 @@ void synth_init(void) {
         synth_voices[v].ring_partner = -1;
         synth_voices[v].filter_route = 0;
     }
+    synth_filter.lp = 0;
+    synth_filter.bp = 0;
 }
 
 static int clamp_voice(int voice) {
@@ -301,12 +310,6 @@ int synth_envelope_advance_sample(struct synth_voice *v) {
     }
     return v->envelope_level >> 8;
 }
-
-/* The one shared filter instance (matches "one shared filter", not one
- * per voice, per the SID architecture this is scaled up from). Its
- * lp/bp state persists across calls to synth_render_half() the same
- * way each voice's phase_accum/envelope_level already do. */
-static struct synth_filter_state synth_filter;
 
 void synth_render_half(unsigned char *buf, unsigned int len) {
     unsigned int i;
