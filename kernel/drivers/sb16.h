@@ -20,9 +20,15 @@ int sb16_init(void);
  * for some power-of-two N >= len (an N-aligned address plus a run of at
  * most N bytes can never straddle a 64KB line, since 65536 is itself a
  * multiple of every power-of-two N used here). No-op if sb16_init() never
- * found a card, or if len is 0. Fire-and-forget: returns immediately:
- * playback continues in the background and the card raises IRQ5 on
- * completion (arch/isr.c's handler calls sb16_irq_ack()). */
+ * found a card, len is 0, or a continuous stream (sb16_start_stream())
+ * is currently active -- this driver has no safe way to interleave a
+ * one-shot single-cycle transfer with an active auto-init loop on the
+ * same DMA channel (it would hijack the channel out of auto-init mode,
+ * and stream_active would then never notice or recover), so BEEP is
+ * simply refused while a synth stream is running rather than silently
+ * killing it. Fire-and-forget: returns immediately: playback continues
+ * in the background and the card raises IRQ5 on completion (arch/isr.c's
+ * handler calls sb16_irq_ack()). */
 void sb16_play_buffer(const unsigned char *buf, unsigned int len, unsigned int sample_rate);
 
 /* Called by arch/isr.c's IRQ5 handler once playback finishes -- reads the
@@ -46,12 +52,20 @@ void sb16_start_stream(unsigned char *buf, unsigned int half_len, unsigned int s
  * *buf_out and *len_out (pointing at exactly the half that just finished
  * playing) if so, 0 otherwise. Call once per kmain() frame; if it
  * returns 1, render fresh samples into *buf_out and then call
- * sb16_stream_refill_done(). */
+ * sb16_stream_refill_done(buf_out). */
 int sb16_stream_needs_refill(unsigned char **buf_out, unsigned int *len_out);
 
-/* Clears the flag sb16_stream_needs_refill() set. Must be called after
- * every refill, or the same half keeps being reported as needing
- * refill (harmless -- it just re-renders redundantly -- but wasteful). */
-void sb16_stream_refill_done(void);
+/* Clears the flag sb16_stream_needs_refill() set for the half at buf
+ * (pass back exactly the *buf_out sb16_stream_needs_refill() just
+ * returned) -- but only if that half is still the one currently
+ * pending a refill. Guards against a lost wakeup: if IRQ5 fires again
+ * (advancing to the other half) while a refill is already in
+ * progress, an unconditional clear would silently discard that new,
+ * still-unserviced request, leaving that half stale for a whole
+ * refill period. Comparing against buf first means the flag is only
+ * ever cleared when it actually corresponds to the request just
+ * serviced -- if it doesn't match, sb16_stream_needs_refill() will
+ * correctly report the newer request again next call. */
+void sb16_stream_refill_done(unsigned char *buf);
 
 #endif

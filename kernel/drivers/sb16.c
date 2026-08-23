@@ -46,6 +46,22 @@
 
 static int sb16_present = 0;
 
+/* Streaming (auto-init) state, declared up here rather than down next to
+ * sb16_start_stream()/etc. so sb16_play_buffer() (an ordinary one-shot
+ * transfer, further down) can see stream_active and refuse to run while
+ * a continuous stream owns DMA channel 1 -- see sb16_play_buffer()'s own
+ * doc comment in sb16.h for why interleaving the two would be unsafe.
+ * stream_base_low16 is the low 16 bits of the streaming buffer's
+ * physical address, cached once at sb16_start_stream() time so
+ * sb16_irq_ack() can turn a raw DMA current-address reading into an
+ * offset within the buffer without redoing that cast every IRQ. */
+static unsigned char *stream_buf_base = 0;
+static unsigned int stream_half_len = 0;
+static unsigned int stream_base_low16 = 0;
+static int stream_active = 0;
+static volatile int stream_refill_flag = 0;
+static volatile int stream_refill_half = 0;
+
 /* Same 4-dummy-reads settle trick ata.c's ata_delay_400ns() uses, and the
  * same single outb(0x80, 0) trick pic.c's io_wait() uses (an unused port,
  * so the write has no side effect beyond costing a few microseconds on
@@ -131,7 +147,7 @@ void sb16_play_buffer(const unsigned char *buf, unsigned int len, unsigned int s
     unsigned int count;
     unsigned char time_constant;
 
-    if (!sb16_present || len == 0) {
+    if (!sb16_present || len == 0 || stream_active) {
         return;
     }
 
@@ -151,13 +167,6 @@ void sb16_play_buffer(const unsigned char *buf, unsigned int len, unsigned int s
     sb16_dsp_write((unsigned char)((count >> 8) & 0xFF));
 }
 
-static unsigned char *stream_buf_base = 0;
-static unsigned int stream_half_len = 0;
-static int stream_active = 0;
-static volatile int stream_refill_flag = 0;
-static volatile int stream_refill_half = 0;
-static int stream_next_half_to_refill = 0;
-
 void sb16_start_stream(unsigned char *buf, unsigned int half_len, unsigned int sample_rate) {
     unsigned char time_constant;
     unsigned int block_count;
@@ -168,8 +177,8 @@ void sb16_start_stream(unsigned char *buf, unsigned int half_len, unsigned int s
 
     stream_buf_base = buf;
     stream_half_len = half_len;
+    stream_base_low16 = (unsigned int)(unsigned long)buf & 0xFFFFu;
     stream_refill_flag = 0;
-    stream_next_half_to_refill = 0;
 
     dma_program_channel1((unsigned int)(unsigned long)buf, half_len * 2u, DMA1_CHAN1_MODE_AUTOINIT_READ);
 
@@ -202,18 +211,47 @@ int sb16_stream_needs_refill(unsigned char **buf_out, unsigned int *len_out) {
     return 1;
 }
 
-void sb16_stream_refill_done(void) {
-    stream_refill_flag = 0;
+void sb16_stream_refill_done(unsigned char *buf) {
+    int half = (buf == stream_buf_base) ? 0 : 1;
+    if (stream_refill_half == half) {
+        stream_refill_flag = 0;
+    }
 }
 
 void sb16_irq_ack(void) {
     inb(SB16_DSP_READ_STATUS); /* reading this port is what acks the 8-bit IRQ */
     if (stream_active) {
-        /* DMA always starts by playing from the base address (half 0)
-         * first, so the first IRQ corresponds to half 0 finishing --
-         * this toggle stays in lockstep with that from then on. */
+        unsigned int lo, hi, cur_low16, offset_in_buf;
+
+        /* Which half just finished playing is derived fresh from the
+         * DMA controller's own current-address register every IRQ,
+         * rather than tracked with a pure software toggle -- a toggle
+         * has no way to notice or recover if a single IRQ5 is ever
+         * lost (the 8259 only latches one pending edge per line, so
+         * two IRQ5s arriving during a long `cli` region collapse into
+         * one), and would then stay permanently desynced from the
+         * hardware, tearing every subsequent refill with no resync
+         * path. Reading the address register instead is
+         * self-correcting on every single IRQ, so a lost interrupt
+         * can never cause more than one stale refill.
+         *
+         * Same flip-flop-clear-then-read-low-then-high convention
+         * dma_program_channel1() already uses to program the address;
+         * only the low 16 bits are needed to place the current
+         * position within our buffer, since sb16_start_stream()'s own
+         * doc comment guarantees the buffer never crosses a 64KB
+         * physical boundary. If the DMA controller is currently
+         * transferring out of the first half, the second half is the
+         * one that just finished playing (and vice versa) -- auto-init
+         * playback always proceeds first-half-then-second-half, never
+         * the other order. */
+        outb(DMA1_CLEAR_FF_REG, 0);
+        lo = inb(DMA1_CHAN1_ADDR_REG);
+        hi = inb(DMA1_CHAN1_ADDR_REG);
+        cur_low16 = lo | (hi << 8);
+        offset_in_buf = (cur_low16 - stream_base_low16) & 0xFFFFu;
+
         stream_refill_flag = 1;
-        stream_refill_half = stream_next_half_to_refill;
-        stream_next_half_to_refill ^= 1;
+        stream_refill_half = (offset_in_buf < stream_half_len) ? 1 : 0;
     }
 }

@@ -100,6 +100,20 @@ start:
     int 0x13
     jc disk_error
 
+    ; AH=42h writes the sectors actually transferred back into the DAP's
+    ; own count field (offset 2) -- mirrors the old CHS code's
+    ; `cmp al, [this_chunk]` short-read check (AH=02h returned its count
+    ; in AL instead). A short read without carry set is still a failure:
+    ; SEGMENT_CHUNK_SECTORS (128) is one sector over the documented
+    ; Phoenix EDD per-call limit of 127 (0x7F) -- SeaBIOS doesn't enforce
+    ; that limit, but a stricter real BIOS could silently short-read
+    ; instead of failing outright, which would otherwise produce a
+    ; truncated kernel image and an undiagnosable crash after handoff
+    ; instead of this loud, intended halt.
+    mov ax, [dap_count]
+    cmp ax, [this_chunk]
+    jne disk_error
+
     mov ax, [sectors_left]
     sub ax, [this_chunk]
     mov [sectors_left], ax

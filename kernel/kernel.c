@@ -641,6 +641,21 @@ static int synth_current_voice = 0;
  * is gated) rather than starting/stopping DMA per note. */
 static void audio_ensure_stream_started(void) {
     if (!audio_stream_started) {
+        unsigned int i;
+
+        /* audio_stream_buf lives in .bss, zeroed to 0x00 at boot -- but
+         * this driver's silence level is 0x80 (8-bit unsigned PCM
+         * midpoint; see synth_render_half()'s own doc comment in
+         * synth.h). sb16_start_stream() below commands the DSP to
+         * start playing immediately, and the first real refill can
+         * only happen after the first IRQ fires (one whole half-buffer
+         * later) -- without this fill, DMA would spend that whole
+         * first half-buffer's worth of playback time streaming raw
+         * 0x00 (full-scale) instead of silence, an audible startup
+         * thump. */
+        for (i = 0; i < AUDIO_STREAM_HALF_LEN * 2u; i++) {
+            audio_stream_buf[i] = 128;
+        }
         sb16_start_stream(audio_stream_buf, AUDIO_STREAM_HALF_LEN, SYNTH_SAMPLE_RATE);
         audio_stream_started = 1;
     }
@@ -2909,7 +2924,7 @@ void kmain(void) {
             unsigned int refill_len;
             if (sb16_stream_needs_refill(&refill_buf, &refill_len)) {
                 synth_render_half(refill_buf, refill_len);
-                sb16_stream_refill_done();
+                sb16_stream_refill_done(refill_buf);
             }
         }
 
