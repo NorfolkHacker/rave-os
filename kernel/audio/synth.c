@@ -384,9 +384,9 @@ void synth_set_filter_mode(int mode_mask) {
 
 int synth_filter_process_sample(struct synth_filter_state *st, int input,
                                  int f_coeff, int q_coeff, int mode_mask) {
-    int hp = input - st->lp - ((q_coeff * st->bp) >> 14);
-    int bp_new = st->bp + ((f_coeff * hp) >> 14);
-    int lp_new = st->lp + ((f_coeff * bp_new) >> 14);
+    int hp = input - st->lp - (int)(((long long)q_coeff * st->bp) >> 14);
+    int bp_new = st->bp + (int)(((long long)f_coeff * hp) >> 14);
+    int lp_new = st->lp + (int)(((long long)f_coeff * bp_new) >> 14);
 
     if (lp_new > SYNTH_FILTER_STATE_MAX) {
         lp_new = SYNTH_FILTER_STATE_MAX;
