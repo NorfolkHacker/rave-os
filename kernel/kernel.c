@@ -24,6 +24,7 @@
 #include "io.h"
 #include "ata.h"
 #include "sb16.h"
+#include "synth.h"
 #include "fs.h"
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
@@ -628,6 +629,23 @@ static void draw_paint_group(const struct window *win, const struct paint *pt, c
 static unsigned char beep_tone[BEEP_SAMPLES] __attribute__((aligned(4096)));
 static int beep_tone_ready = 0;
 
+#define AUDIO_STREAM_HALF_LEN 1024u
+
+static unsigned char audio_stream_buf[AUDIO_STREAM_HALF_LEN * 2u] __attribute__((aligned(4096)));
+static int audio_stream_started = 0;
+static int synth_current_voice = 0;
+
+/* Lazily starts the continuous audio stream on the first synth Forth
+ * word call -- mirrors BEEP's own lazy tone-generation pattern. Once
+ * started, the stream runs forever (rendering silence when no voice
+ * is gated) rather than starting/stopping DMA per note. */
+static void audio_ensure_stream_started(void) {
+    if (!audio_stream_started) {
+        sb16_start_stream(audio_stream_buf, AUDIO_STREAM_HALF_LEN, SYNTH_SAMPLE_RATE);
+        audio_stream_started = 1;
+    }
+}
+
 static void beep_tone_generate(void) {
     unsigned int half_period = BEEP_SAMPLE_RATE / (2u * BEEP_FREQ_HZ);
     unsigned int i;
@@ -642,6 +660,46 @@ void forth_hook_beep(void) {
         beep_tone_generate();
     }
     sb16_play_buffer(beep_tone, BEEP_SAMPLES, BEEP_SAMPLE_RATE);
+}
+
+void forth_hook_synth_voice(int voice) {
+    audio_ensure_stream_started();
+    if (voice < 0 || voice >= SYNTH_NUM_VOICES) {
+        return;
+    }
+    synth_current_voice = voice;
+}
+
+void forth_hook_synth_wave(int wave) {
+    audio_ensure_stream_started();
+    if (wave < WAVE_PULSE || wave > WAVE_NOISE) {
+        return;
+    }
+    synth_set_voice_waveform(synth_current_voice, (enum synth_waveform)wave);
+}
+
+void forth_hook_synth_duty(int duty_percent) {
+    audio_ensure_stream_started();
+    synth_set_duty(synth_current_voice, duty_percent);
+}
+
+void forth_hook_synth_ona(int ona) {
+    audio_ensure_stream_started();
+    synth_set_ona(synth_current_voice, ona);
+}
+
+void forth_hook_synth_adsr(int attack_ms, int decay_ms, int sustain_percent, int release_ms) {
+    audio_ensure_stream_started();
+    synth_set_adsr(synth_current_voice, attack_ms, decay_ms, sustain_percent, release_ms);
+}
+
+void forth_hook_synth_gate_on(void) {
+    audio_ensure_stream_started();
+    synth_gate_on(synth_current_voice);
+}
+
+void forth_hook_synth_gate_off(void) {
+    synth_gate_off(synth_current_voice);
 }
 
 void forth_hook_paint_open(void) {
@@ -1972,6 +2030,7 @@ void kmain(void) {
      * masked-PIC ordering the line above exists for. */
     ata_status = ata_selftest();
     sb16_init();
+    synth_init();
     fs_status = fs_selftest();
     fs_bootstrap_dirs();
 
@@ -2844,6 +2903,15 @@ void kmain(void) {
         }
 
         scheduler_tick();
+
+        {
+            unsigned char *refill_buf;
+            unsigned int refill_len;
+            if (sb16_stream_needs_refill(&refill_buf, &refill_len)) {
+                synth_render_half(refill_buf, refill_len);
+                sb16_stream_refill_done();
+            }
+        }
 
         if (had_event || scheduler_any_active()) {
             int touched[MAX_WINDOWS];

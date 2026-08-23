@@ -30,4 +30,28 @@ void sb16_play_buffer(const unsigned char *buf, unsigned int len, unsigned int s
  * the next sb16_play_buffer() call. Nothing else needs calling this. */
 void sb16_irq_ack(void);
 
+/* Programs the 8237 DMA controller and SB16 DSP for continuous
+ * auto-init (looping) 8-bit playback over a double buffer: buf must be
+ * 2*half_len bytes, and (same 64KB-boundary rule as sb16_play_buffer())
+ * must never cross a 64KB physical boundary -- give it
+ * __attribute__((aligned(N))) for a power-of-two N >= 2*half_len.
+ * No-op if sb16_init() never found a card, half_len is 0, or a stream
+ * is already running (only one stream at a time -- this driver has no
+ * way to stop one once started). Once running, IRQ5 fires once per
+ * half-buffer completion -- see sb16_stream_needs_refill(). */
+void sb16_start_stream(unsigned char *buf, unsigned int half_len, unsigned int sample_rate);
+
+/* Polls whether a buffer half needs new samples written into it before
+ * the card catches up and plays stale data again. Returns 1 and fills
+ * *buf_out and *len_out (pointing at exactly the half that just finished
+ * playing) if so, 0 otherwise. Call once per kmain() frame; if it
+ * returns 1, render fresh samples into *buf_out and then call
+ * sb16_stream_refill_done(). */
+int sb16_stream_needs_refill(unsigned char **buf_out, unsigned int *len_out);
+
+/* Clears the flag sb16_stream_needs_refill() set. Must be called after
+ * every refill, or the same half keeps being reported as needing
+ * refill (harmless -- it just re-renders redundantly -- but wasteful). */
+void sb16_stream_refill_done(void);
+
 #endif

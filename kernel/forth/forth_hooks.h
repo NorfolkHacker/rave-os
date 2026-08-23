@@ -37,4 +37,19 @@ void forth_hook_yield(void);
  * condition (PLOOP's is MOUSE-RIGHT-DOWN?). */
 int forth_hook_window_closed(void);
 
+/* Sub-project (B): the 8-voice synthesizer's manual control surface.
+ * VOICE selects which of the 8 voices WAVE/DUTY/ONA/ADSR/GATE-ON/
+ * GATE-OFF act on -- the same "select a context, then act on it" shape
+ * PAINT's own current_color selection already uses in this codebase,
+ * just driven by a Forth word instead of a mouse click since there's
+ * no picker UI for voices. See
+ * docs/superpowers/specs/2026-08-23-sid-synth-design.md. */
+void forth_hook_synth_voice(int voice);
+void forth_hook_synth_wave(int wave);
+void forth_hook_synth_duty(int duty_percent);
+void forth_hook_synth_ona(int ona);
+void forth_hook_synth_adsr(int attack_ms, int decay_ms, int sustain_percent, int release_ms);
+void forth_hook_synth_gate_on(void);
+void forth_hook_synth_gate_off(void);
+
 #endif

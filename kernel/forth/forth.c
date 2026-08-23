@@ -292,6 +292,72 @@ static void prim_beep(struct forth_vm *vm) {
     forth_hook_beep();
 }
 
+static void prim_synth_voice(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    if (n < 0 || n >= 8) {
+        forth_set_error(vm, "BAD VOICE");
+        return;
+    }
+    forth_hook_synth_voice((int)n);
+}
+
+static void prim_synth_wave(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    if (n < 0 || n > 3) {
+        forth_set_error(vm, "BAD WAVE");
+        return;
+    }
+    forth_hook_synth_wave((int)n);
+}
+
+/* Unlike VOICE/WAVE/ONA (discrete indices with a meaningless-outside-
+ * range value), DUTY is a percentage synth_set_duty() already clamps
+ * internally -- no hard Forth-level error, same "clamp gracefully"
+ * convention ADSR's percentage argument below also uses. */
+static void prim_synth_duty(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    forth_hook_synth_duty((int)n);
+}
+
+static void prim_synth_ona(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    if (n < 1 || n > 88) {
+        forth_set_error(vm, "BAD ONA");
+        return;
+    }
+    forth_hook_synth_ona((int)n);
+}
+
+static void prim_synth_adsr(struct forth_vm *vm) {
+    int32_t a, d, s, r;
+    if (!forth_pop(vm, &r) || !forth_pop(vm, &s) || !forth_pop(vm, &d) || !forth_pop(vm, &a)) {
+        return;
+    }
+    forth_hook_synth_adsr((int)a, (int)d, (int)s, (int)r);
+}
+
+static void prim_synth_gate_on(struct forth_vm *vm) {
+    (void)vm;
+    forth_hook_synth_gate_on();
+}
+
+static void prim_synth_gate_off(struct forth_vm *vm) {
+    (void)vm;
+    forth_hook_synth_gate_off();
+}
+
 static void prim_pixel(struct forth_vm *vm) {
     int32_t x, y, color;
     if (!forth_pop(vm, &color) || !forth_pop(vm, &y) || !forth_pop(vm, &x)) {
@@ -343,7 +409,11 @@ static const struct forth_word primitives[] = {
     {"+", prim_add},   {"-", prim_sub},  {"*", prim_mul},   {"/", prim_div}, {"DUP", prim_dup},
     {"DROP", prim_drop}, {"SWAP", prim_swap}, {"OVER", prim_over}, {"=", prim_eq}, {"<", prim_lt},
     {">", prim_gt}, {".", prim_dot}, {"CR", prim_cr}, {"@", prim_fetch}, {"!", prim_store},
-    {"PAINT", prim_paint}, {"BEEP", prim_beep}, {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
+    {"PAINT", prim_paint}, {"BEEP", prim_beep},
+    {"VOICE", prim_synth_voice}, {"WAVE", prim_synth_wave}, {"DUTY", prim_synth_duty},
+    {"ONA", prim_synth_ona}, {"ADSR", prim_synth_adsr},
+    {"GATE-ON", prim_synth_gate_on}, {"GATE-OFF", prim_synth_gate_off},
+    {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
     {"MOUSE-DOWN?", prim_mouse_down}, {"MOUSE-RIGHT-DOWN?", prim_mouse_right_down},
     {"WINDOW-CLOSED?", prim_window_closed},
     {"CURRENT-COLOR", prim_current_color},

@@ -32,10 +32,17 @@
  * ("read" transfer -- the DMA controller reads memory and writes the
  * device, i.e. playback), bits0-1 = 01 (channel 1). */
 #define DMA1_CHAN1_MODE_SINGLE_READ 0x49
+/* Same as above but bit4 = 1 (auto-init: the DMA controller reloads
+ * its original base address/count and keeps going instead of stopping
+ * at terminal count) -- this is what makes the double-buffer scheme
+ * below loop forever without software reprogramming DMA each time. */
+#define DMA1_CHAN1_MODE_AUTOINIT_READ 0x59
 
 #define SB16_CMD_SPEAKER_ON 0xD1
 #define SB16_CMD_SET_TIME_CONSTANT 0x40
 #define SB16_CMD_8BIT_SINGLE_CYCLE_OUTPUT 0x14
+#define SB16_CMD_SET_BLOCK_SIZE 0x48
+#define SB16_CMD_8BIT_AUTOINIT_OUTPUT 0x1C
 
 static int sb16_present = 0;
 
@@ -102,12 +109,12 @@ static void sb16_dsp_write(unsigned char val) {
     outb(SB16_DSP_WRITE, val);
 }
 
-static void dma_program_channel1(unsigned int phys_addr, unsigned int len) {
+static void dma_program_channel1(unsigned int phys_addr, unsigned int len, unsigned char mode_byte) {
     unsigned int count = len - 1;
 
     outb(DMA1_MASK_REG, DMA1_CHAN1_MASK_SET);
     outb(DMA1_CLEAR_FF_REG, 0);
-    outb(DMA1_MODE_REG, DMA1_CHAN1_MODE_SINGLE_READ);
+    outb(DMA1_MODE_REG, mode_byte);
 
     outb(DMA1_CHAN1_ADDR_REG, (unsigned char)(phys_addr & 0xFF));
     outb(DMA1_CHAN1_ADDR_REG, (unsigned char)((phys_addr >> 8) & 0xFF));
@@ -128,7 +135,7 @@ void sb16_play_buffer(const unsigned char *buf, unsigned int len, unsigned int s
         return;
     }
 
-    dma_program_channel1((unsigned int)(unsigned long)buf, len);
+    dma_program_channel1((unsigned int)(unsigned long)buf, len, DMA1_CHAN1_MODE_SINGLE_READ);
 
     sb16_dsp_write(SB16_CMD_SPEAKER_ON);
 
@@ -144,6 +151,69 @@ void sb16_play_buffer(const unsigned char *buf, unsigned int len, unsigned int s
     sb16_dsp_write((unsigned char)((count >> 8) & 0xFF));
 }
 
+static unsigned char *stream_buf_base = 0;
+static unsigned int stream_half_len = 0;
+static int stream_active = 0;
+static volatile int stream_refill_flag = 0;
+static volatile int stream_refill_half = 0;
+static int stream_next_half_to_refill = 0;
+
+void sb16_start_stream(unsigned char *buf, unsigned int half_len, unsigned int sample_rate) {
+    unsigned char time_constant;
+    unsigned int block_count;
+
+    if (!sb16_present || half_len == 0 || stream_active) {
+        return;
+    }
+
+    stream_buf_base = buf;
+    stream_half_len = half_len;
+    stream_refill_flag = 0;
+    stream_next_half_to_refill = 0;
+
+    dma_program_channel1((unsigned int)(unsigned long)buf, half_len * 2u, DMA1_CHAN1_MODE_AUTOINIT_READ);
+
+    sb16_dsp_write(SB16_CMD_SPEAKER_ON);
+
+    /* Same time-constant formula sb16_play_buffer() already uses. */
+    time_constant = (unsigned char)(256 - (1000000 / sample_rate));
+    sb16_dsp_write(SB16_CMD_SET_TIME_CONSTANT);
+    sb16_dsp_write(time_constant);
+
+    /* Auto-init playback needs the DSP's own block size set BEFORE the
+     * auto-init command is sent -- this is what makes it raise IRQ5
+     * once per half_len bytes instead of once per full loop. */
+    block_count = half_len - 1;
+    sb16_dsp_write(SB16_CMD_SET_BLOCK_SIZE);
+    sb16_dsp_write((unsigned char)(block_count & 0xFF));
+    sb16_dsp_write((unsigned char)((block_count >> 8) & 0xFF));
+
+    sb16_dsp_write(SB16_CMD_8BIT_AUTOINIT_OUTPUT);
+
+    stream_active = 1;
+}
+
+int sb16_stream_needs_refill(unsigned char **buf_out, unsigned int *len_out) {
+    if (!stream_refill_flag) {
+        return 0;
+    }
+    *buf_out = stream_buf_base + (stream_refill_half ? stream_half_len : 0u);
+    *len_out = stream_half_len;
+    return 1;
+}
+
+void sb16_stream_refill_done(void) {
+    stream_refill_flag = 0;
+}
+
 void sb16_irq_ack(void) {
     inb(SB16_DSP_READ_STATUS); /* reading this port is what acks the 8-bit IRQ */
+    if (stream_active) {
+        /* DMA always starts by playing from the base address (half 0)
+         * first, so the first IRQ corresponds to half 0 finishing --
+         * this toggle stays in lockstep with that from then on. */
+        stream_refill_flag = 1;
+        stream_refill_half = stream_next_half_to_refill;
+        stream_next_half_to_refill ^= 1;
+    }
 }
