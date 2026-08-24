@@ -2587,12 +2587,13 @@ GATE-ON`, `20 FILTER-CUTOFF 10 FILTER-RES 1 FILTER-MODE`, sustained,
 echoed back with zero error text. The resulting WAV (858605 frames,
 44100Hz, 16-bit stereo) showed a zero-crossing-rate of exactly 0.0 at
 cutoff=20/resonance=10/low-pass-only (raw samples flat at a constant
--16128 -- a cutoff far enough below the note's ~262Hz fundamental that
-the filter passes only DC) jumping to ~2635 once the cutoff opened to
-240 (raw samples showing a proper oscillating sawtooth) -- an
-unambiguous, large-magnitude proof the filter does real spectral work,
-not a no-op. Review: Spec ✅, Quality ✅, 0 Critical/Important, no fix
-round needed.
+-16128) jumping to ~2635 once the cutoff opened to 240 (raw samples
+showing a proper oscillating sawtooth) -- an unambiguous, large-
+magnitude proof the filter does real spectral work, not a no-op. (The
+flat -16128 reading itself turned out to be a real fixed-point
+truncation artifact, not "the filter passing only DC" as first
+characterized here -- see the final-review fix below.) Review: Spec ✅,
+Quality ✅, 0 Critical/Important, no fix round needed.
 
 **Host-tested throughout.** `kernel/tests/test_synth.c` grew from 18 to
 33 tests across Tasks 1-3 (Task 4 is Forth-wiring-only, no new C
@@ -2602,6 +2603,44 @@ tests), part of the same 5-suite host regression run
 PASS throughout, both under host `gcc -m32` and under
 `i686-elf-gcc -mgeneral-regs-only` freestanding compilation, with zero
 new compiler warnings.
+
+**Final whole-branch review: one Critical bug found and fixed
+(`c8a9374`).** A review of the complete
+branch (rather than each task's own diff in isolation) caught something
+none of the four task-scoped reviews could have: `synth_filter_process_
+sample()`'s Q14 recursion, computed with truncating (floor) right
+shifts, has spurious nonzero equilibria and small limit cycles a real
+analog state-variable filter doesn't -- under sustained zero input, the
+mathematically correct resting state is exactly `(lp=0, bp=0)`, but the
+truncation error can instead park the state on an exact repeating orbit
+a few units wide (e.g. cycling `(-2,7) -> (3,-2) -> (-5,5) -> (-7,1) ->
+(1,7) -> ...` forever at cutoff=193/resonance=13). Reproduced directly:
+after a single filtered note at the branch's own cutoff=20/resonance=10
+QEMU settings, `synth_render_half()` never returned to true silence --
+every subsequent frame, from any other voice, filtered or not, carried
+a permanent bias (measured: an unrelated unfiltered pulse voice, which
+should swing close to its full 0-255 range, clipped to 0-180 forever
+after the stuck note). Fixed by tracking the `(lp,bp)` pairs visited
+during the current unbroken run of zero-input samples (a small ring
+buffer, reset by any nonzero input or by `synth_init()`); if the state
+ever repeats one already seen, it has by definition stopped decaying,
+so it's forced the rest of the way to true `(0,0)` instead of orbiting
+forever. Verified two ways: an exhaustive host-side sweep (256 cutoffs
+x 16 resonances x 4 mode families x 6 perturbed seed states -- extremes,
+the exact stuck-cycle seed above, and the reviewer's own repro seed --
+98304 checks, all converge to exact zero within at most 17743 samples
+and stay there) and a direct before/after repro of the branch's own
+QEMU scenario (permanently-clipped voice: 0-180 before the fix, full
+0-255 range after). Two new regression tests added
+(`test_filter_process_sample_converges_to_true_zero_under_zero_input`,
+`test_render_half_returns_to_true_silence_after_filtered_note_release`),
+confirmed to fail against the pre-fix code (66/66 assertions fail) and
+pass against the fix. The fix only ever touches state on samples where
+the filter's input is exactly zero -- confirmed unchanged, byte-for-
+byte, is every other measurement this branch already made while a note
+is actually playing (nonzero input), including region A's own -16128
+reading above, which is unaffected by this fix (see the updated known
+gap below).
 
 **A real-hardware verification pass is still pending**, the same bar
 every prior piece of the audio subsystem has been held to.
@@ -2622,16 +2661,22 @@ every prior piece of the audio subsystem has been held to.
   together in the same call; no test covers a filter parameter changing
   mid-sustain (persistence is tested across two separate render calls
   with static parameters, not a live change between them).
-- Task 4: the task report's framing of Task 4's own WAV evidence --
-  region A's flat output as filter "convergence to DC average" -- is
-  imprecise; more likely a fixed-point integrator quantization stall
-  once `bp`'s magnitude gets small enough that `(f_coeff * bp) >> 14`
-  rounds to zero. A Task-1-filter-core characterization note, not a
-  Task 4 defect, and doesn't change the conclusion that the filter's
-  effect is real.
+- Task 4's WAV evidence, region A (cutoff=20/resonance=10/low-pass,
+  *while a note is actively playing*, not after release): confirmed via
+  direct repro that the filter settles to a small but nonzero, negative-
+  biased steady output rather than true silence, even though a
+  symmetric sawtooth's true DC average is near zero -- a real fixed-
+  point truncation bias distinct from (and *not* fixed by) the final-
+  review fix above, which only acts once the filter's input has gone
+  completely silent. Bounded and stable (doesn't grow, doesn't leak into
+  other voices while the note plays), and resolves cleanly once the note
+  releases thanks to the fix above -- but the bias itself, during active
+  playback at very low cutoffs, remains a known, deferred limitation of
+  this filter core's fixed-point precision, not fixed in this branch.
 
 Files: `kernel/audio/synth.c`/`.h` (filter core + tables, ring mod,
-mixer integration); `kernel/tests/test_synth.c` (18 -> 33 tests);
+mixer integration, final-review limit-cycle fix);
+`kernel/tests/test_synth.c` (18 -> 35 tests);
 `kernel/forth/forth_hooks.h` (6 new declarations); `kernel/kernel.c` (6
 new `forth_hook_synth_*` functions); `kernel/forth/forth.c` (6 new
 primitives: `FILTER-CUTOFF`/`FILTER-RES`/`FILTER-MODE`/`FILTER-ROUTE`/
