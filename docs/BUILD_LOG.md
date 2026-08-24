@@ -2614,8 +2614,10 @@ every prior piece of the audio subsystem has been held to.
   property of the plan's own design -- whichever voice's
   `synth_osc_sample()` call happens first in `synth_render_half()`'s
   loop uses the partner's *previous*-sample phase -- not an implementer
-  defect); no test coverage for the case where a voice's own MSB is 1
-  going into a self-reference ring mod.
+  defect); ring-mod tests only exercise own-MSB=0 cases, not own-MSB=1
+  XORed against a differing (non-self) partner MSB -- a coverage nicety,
+  since the algebra was already independently verified, not a
+  correctness gap.
 - Task 3: no test exercises a mix of filtered and bypassed voices summed
   together in the same call; no test covers a filter parameter changing
   mid-sustain (persistence is tested across two separate render calls
