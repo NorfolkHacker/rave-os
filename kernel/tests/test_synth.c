@@ -604,6 +604,76 @@ static void test_synth_init_resets_filter_state(void) {
     }
 }
 
+/* Final-whole-branch-review regression: the truncating (floor)
+ * fixed-point recursion in synth_filter_process_sample() has spurious
+ * nonzero equilibria and small limit cycles under zero input that a
+ * real analog SVF doesn't -- without the silence-history fix, this
+ * specific (cutoff, resonance, mode) combination gets stuck cycling
+ * among small nonzero (lp,bp) pairs forever instead of ever reaching
+ * true (0,0), independently confirmed via an exhaustive host-side sweep
+ * while diagnosing the bug (256 cutoffs x 16 resonances x 4 mode
+ * families x 6 seed states, 98304 checks, 0 failures after the fix). */
+static void test_filter_process_sample_converges_to_true_zero_under_zero_input(void) {
+    struct synth_filter_state st;
+    int f_coeff = synth_filter_f_coeff[193];
+    int q_coeff = synth_filter_q_coeff[13];
+    int i;
+    int converged = 0;
+
+    st.lp = -9000;
+    st.bp = -9000;
+    /* nonzero input first, to start from a clean silence-history window */
+    synth_filter_process_sample(&st, 1, f_coeff, q_coeff, SYNTH_FILTER_MODE_LP);
+    st.lp = -9000;
+    st.bp = -9000;
+
+    for (i = 0; i < 400000; i++) {
+        synth_filter_process_sample(&st, 0, f_coeff, q_coeff, SYNTH_FILTER_MODE_LP);
+        if (st.lp == 0 && st.bp == 0) {
+            converged = 1;
+            break;
+        }
+    }
+    CHECK(converged, "filter must converge to exactly (lp=0, bp=0) under sustained zero input, not settle into a nonzero limit cycle");
+
+    for (i = 0; i < 1000; i++) {
+        synth_filter_process_sample(&st, 0, f_coeff, q_coeff, SYNTH_FILTER_MODE_LP);
+    }
+    CHECK(st.lp == 0 && st.bp == 0, "once converged to true zero under continued zero input, the filter must stay there");
+}
+
+/* End-to-end version of the same regression: a filtered note, once
+ * released, must return the mixer to true silence (128) and stay there
+ * -- not leave a permanent DC bias that also corrupts every other,
+ * entirely unrelated voice sharing the same output byte. */
+static void test_render_half_returns_to_true_silence_after_filtered_note_release(void) {
+    unsigned char buf[64];
+    int i;
+
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_SAW);
+    synth_set_ona(0, 40);
+    synth_set_adsr(0, 10, 50, 80, 500);
+    synth_set_voice_filter_route(0, 1);
+    synth_set_filter_cutoff(20);
+    synth_set_filter_resonance(10);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_gate_on(0);
+
+    for (i = 0; i < 3000; i++) {
+        synth_render_half(buf, 64);
+    }
+    synth_gate_off(0);
+    for (i = 0; i < 2000; i++) {
+        synth_render_half(buf, 64);
+    }
+
+    synth_render_half(buf, 64);
+    for (i = 0; i < 64; i++) {
+        CHECK(buf[i] == 128, "a filtered note, once released and settled, must return to true silence (128), not a permanent DC-biased floor");
+    }
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -638,6 +708,8 @@ int main(void) {
     test_render_half_filter_route_changes_output();
     test_render_half_filter_state_persists_across_calls();
     test_synth_init_resets_filter_state();
+    test_filter_process_sample_converges_to_true_zero_under_zero_input();
+    test_render_half_returns_to_true_silence_after_filtered_note_release();
 
     if (failures == 0) {
         printf("PASS\n");

@@ -9,6 +9,16 @@ struct synth_voice synth_voices[SYNTH_NUM_VOICES];
  * by synth_init(), not per-call. */
 static struct synth_filter_state synth_filter;
 
+/* Tracks the (lp,bp) pairs visited during the current unbroken run of
+ * zero-input samples fed to the shared filter -- see
+ * synth_filter_process_sample()'s own doc comment for why. Reset by
+ * synth_init() for the same test/re-init-isolation reason synth_filter
+ * itself is. */
+#define SYNTH_FILTER_SILENCE_HISTORY_LEN 512
+static int synth_filter_silence_hist_lp[SYNTH_FILTER_SILENCE_HISTORY_LEN];
+static int synth_filter_silence_hist_bp[SYNTH_FILTER_SILENCE_HISTORY_LEN];
+static int synth_filter_silence_hist_count = 0;
+
 /* Standard 88-key piano numbering, ona 49 = A4 = 440.0Hz
  * (freq(n) = 440 * 2^((n-49)/12)). Each entry is a Q-format DDS phase
  * increment for a 32-bit phase accumulator at SYNTH_SAMPLE_RATE:
@@ -55,6 +65,7 @@ void synth_init(void) {
     }
     synth_filter.lp = 0;
     synth_filter.bp = 0;
+    synth_filter_silence_hist_count = 0;
 }
 
 static int clamp_voice(int voice) {
@@ -456,11 +467,51 @@ void synth_set_filter_mode(int mode_mask) {
     synth_filter_mode_mask = mode_mask;
 }
 
+/* FIXPOINT_LIMIT_CYCLE_FIX: a truncating (floor) fixed-point IIR
+ * recursion has spurious nonzero equilibria and small limit cycles the
+ * real analog SVF doesn't -- with zero input, the only physically
+ * correct resting state is (0,0), but this recursion's rounding error
+ * can park it on an exact repeating orbit instead of ever reaching
+ * true zero. Detected by remembering the (lp,bp) pairs visited during
+ * the current unbroken run of zero-input samples (see the
+ * synth_filter_silence_hist_* declarations near synth_filter's own,
+ * above): if the state repeats one already seen, it has (by definition)
+ * stopped decaying and is cycling forever, so force it the rest of the
+ * way to true silence. Any nonzero input resets the history, so this
+ * can never fire mid-note -- only once a release's whole filtered input
+ * has gone fully silent. */
 int synth_filter_process_sample(struct synth_filter_state *st, int input,
                                  int f_coeff, int q_coeff, int mode_mask) {
     int hp = input - st->lp - (int)(((long long)q_coeff * st->bp) >> 14);
     int bp_new = st->bp + (int)(((long long)f_coeff * hp) >> 14);
     int lp_new = st->lp + (int)(((long long)f_coeff * bp_new) >> 14);
+
+    if (input != 0) {
+        synth_filter_silence_hist_count = 0;
+    } else {
+        int k;
+        int seen = synth_filter_silence_hist_count < SYNTH_FILTER_SILENCE_HISTORY_LEN
+                       ? synth_filter_silence_hist_count
+                       : SYNTH_FILTER_SILENCE_HISTORY_LEN;
+        int matched = 0;
+        for (k = 0; k < seen; k++) {
+            if (synth_filter_silence_hist_lp[k] == lp_new &&
+                synth_filter_silence_hist_bp[k] == bp_new) {
+                matched = 1;
+                break;
+            }
+        }
+        if (matched) {
+            lp_new = 0;
+            bp_new = 0;
+            synth_filter_silence_hist_count = 0;
+        } else {
+            int slot = synth_filter_silence_hist_count % SYNTH_FILTER_SILENCE_HISTORY_LEN;
+            synth_filter_silence_hist_lp[slot] = lp_new;
+            synth_filter_silence_hist_bp[slot] = bp_new;
+            synth_filter_silence_hist_count++;
+        }
+    }
 
     if (lp_new > SYNTH_FILTER_STATE_MAX) {
         lp_new = SYNTH_FILTER_STATE_MAX;
