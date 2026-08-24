@@ -2498,3 +2498,141 @@ refill in the frame loop, silence pre-fill); `kernel/forth/forth_hooks.h`
 (`-Iaudio`, `synth.o` wiring); `boot/stage2.asm` (CHS->LBA kernel-load
 fix, short-read check). Plan: `docs/superpowers/plans/2026-08-23-sid-synth.md`.
 Spec: `docs/superpowers/specs/2026-08-23-sid-synth-design.md`.
+
+## 2026-08-24 -- A SID-style resonant filter and ring modulation, closing out sub-project (B)'s last gap
+
+Picked up the piece `docs/IDEAS.md`'s Audio entry explicitly deferred
+after the 2026-08-23 synth engine: the resonant filter, plus ring
+modulation as a natural SID-family addition the user asked for once the
+filter was underway. Built as four SDD tasks against a design spec
+(`docs/superpowers/specs/2026-08-23-sid-filter-ringmod-design.md`, plan
+at `docs/superpowers/plans/2026-08-23-sid-filter-ringmod.md`), each
+landing in its own commit and host-tested before the next began.
+
+**Task 1: the filter core and coefficient tables (`c63619d`, fixed in
+`7fc36db`).** A classic Chamberlin state-variable filter --
+`synth_filter_process_sample(struct synth_filter_state *st, int input,
+int f_coeff, int q_coeff, int mode_mask)` implementing the standard
+`hp = input - lp - q*bp; bp += f*hp; lp += f*bp` difference equations in
+Q14 fixed point, with `lp`/`bp` state clamped every sample to
+`±SYNTH_FILTER_STATE_MAX` (65536). Two literal coefficient tables:
+`synth_filter_f_coeff[256]` (cutoff, 20Hz-3000Hz log-spaced --
+`fs/6≈3675Hz` is this design's stability ceiling) and
+`synth_filter_q_coeff[16]` (resonance, Q=0.707-8.0). Three setters
+(`synth_set_filter_cutoff`/`_resonance`/`_mode`, all clamp-not-reject,
+matching `DUTY`'s existing convention) round out the public surface. A
+reviewer caught one Important finding: `f_coeff * hp`/`f_coeff *
+bp_new`/`q_coeff * st->bp` were computed as plain `int` before the
+`>>14` shift, an overflow risk if `lp`/`bp` sat near their clamp bounds
+-- fixed by widening to `(long long)` before each multiply, confirmed
+via disassembly to compile with zero libgcc dependency (`cltd`/`imul`/
+`mul`/`shrd`/`sar`, no `call` instructions -- native x86 32x32->64
+`IMUL` needs no freestanding helper). The coefficient tables and filter
+core were also empirically stability-swept while writing the plan: 256
+cutoffs x 16 resonances x 7 mode combinations x 5000 samples each (143M
+samples total), and the safety clamp never once triggered even at the
+most extreme setting. 6 new tests -- PASS.
+
+**Task 2: ring modulation (`fb72fe7`).** A per-voice `ring_partner`
+field (-1 = off, 0-7 = partner voice index) and two setters
+(`synth_set_ring_partner`/`synth_clear_ring_partner`). Real SID ring
+modulation only affects the triangle waveform specifically -- it's
+wired into the triangle generator's fold-direction MSB, not a generic
+multiply -- so `synth_osc_sample()`'s triangle case was rewritten:
+`msb = (pos8>>7)&1; lower7 = pos8&0x7F; if (ring_active) msb ^=
+(partner_pos8>>7)&1; tri_pos = msb ? (127-lower7) : lower7;`,
+algebraically identical to the prior `(pos8<128)?pos8:(255-pos8)` form
+when ring mod is off. Required updating all 17 pre-existing
+`synth_osc_sample()` call sites in `test_synth.c` for the new signature
+(flagged as its own explicit plan step, not folded silently into "add
+tests"). 5 new tests, including a self-reference case (a voice ring-
+modulated against itself) -- PASS, review clean, 0 Critical/Important.
+
+**Task 3: mixer integration (`d8c613c`, fixed in `0280c93`).** A
+per-voice `filter_route` field and `synth_set_voice_filter_route()`
+setter, plus a full rewrite of `synth_render_half()` splitting the
+8-voice sum into `filtered_sum` (routed voices) and `bypass_sum`
+(everyone else), running `filtered_sum` through
+`synth_filter_process_sample()` using the one shared filter instance
+(matching real SID's one-filter-for-all-voices architecture, scaled
+from 3 to 8 voices) before recombining. A reviewer asked for extra
+scrutiny and caught one Important finding: `synth_init()` reset every
+per-voice field but never reset the shared filter's own `lp`/`bp`
+state, masked only by call ordering (the real kernel calls
+`synth_init()` once at boot, before the filter is ever touched) --
+fixed by moving the `static struct synth_filter_state synth_filter;`
+declaration to file scope and explicitly zeroing it at the end of
+`synth_init()`'s per-voice loop. The new regression test was verified
+to actually discriminate: extracted the pre-fix code into a scratch
+build, confirmed the test genuinely fails against it (4/4 assertions
+fail) before confirming it passes against the fix. 3 new tests -- PASS.
+
+**Task 4: the FORTH control surface (`816962a`).** Six new bare words
+-- `FILTER-CUTOFF`, `FILTER-RES`, `FILTER-MODE`, `FILTER-ROUTE`,
+`RING-PARTNER`, `RING-OFF` -- wiring Forth primitives through
+`kernel.c` hooks to the setters Tasks 1-3 already built and tested.
+`FILTER-*` words clamp gracefully like `DUTY`; `RING-PARTNER` hard-
+rejects out-of-range voice indices (`BAD PARTNER`) like `VOICE`/`WAVE`/
+`ONA` do, since there's no voice 8. The implementing agent was
+terminated mid-task by an account-level session-limit error, not a code
+problem -- inspecting the worktree directly found its edits already
+complete and correct (including the cutoff/resonance wiring the agent's
+own last message had flagged as worth re-checking, confirmed not
+swapped), so the remaining build/test/verify/commit steps were finished
+directly rather than losing the work to a restart. Verified via
+headless QEMU: navigated the FORTH console (screendump-confirmed at
+each step), ran `0 VOICE 1 WAVE 40 ONA 10 50 80 500 ADSR 1 FILTER-ROUTE
+GATE-ON`, `20 FILTER-CUTOFF 10 FILTER-RES 1 FILTER-MODE`, sustained,
+`240 FILTER-CUTOFF`, sustained again, `GATE-OFF` -- all four lines
+echoed back with zero error text. The resulting WAV (858605 frames,
+44100Hz, 16-bit stereo) showed a zero-crossing-rate of exactly 0.0 at
+cutoff=20/resonance=10/low-pass-only (raw samples flat at a constant
+-16128 -- a cutoff far enough below the note's ~262Hz fundamental that
+the filter passes only DC) jumping to ~2635 once the cutoff opened to
+240 (raw samples showing a proper oscillating sawtooth) -- an
+unambiguous, large-magnitude proof the filter does real spectral work,
+not a no-op. Review: Spec ✅, Quality ✅, 0 Critical/Important, no fix
+round needed.
+
+**Host-tested throughout.** `kernel/tests/test_synth.c` grew from 18 to
+33 tests across Tasks 1-3 (Task 4 is Forth-wiring-only, no new C
+tests), part of the same 5-suite host regression run
+(`test_synth`/`test_context_switch`/`test_font`/`test_scheduler`/
+`test_editor`) this project has used since the concurrency work --
+PASS throughout, both under host `gcc -m32` and under
+`i686-elf-gcc -mgeneral-regs-only` freestanding compilation, with zero
+new compiler warnings.
+
+**A real-hardware verification pass is still pending**, the same bar
+every prior piece of the audio subsystem has been held to.
+
+**Known minor gaps, deferred, not fixed here:**
+
+- Task 1: one report-only inaccuracy in the original implementer's self-
+  report, no code impact.
+- Task 2: ring-mod's amplitude is voice-index-order-dependent (a
+  property of the plan's own design -- whichever voice's
+  `synth_osc_sample()` call happens first in `synth_render_half()`'s
+  loop uses the partner's *previous*-sample phase -- not an implementer
+  defect); no test coverage for the case where a voice's own MSB is 1
+  going into a self-reference ring mod.
+- Task 3: no test exercises a mix of filtered and bypassed voices summed
+  together in the same call; no test covers a filter parameter changing
+  mid-sustain (persistence is tested across two separate render calls
+  with static parameters, not a live change between them).
+- Task 4: the task report's framing of Task 4's own WAV evidence --
+  region A's flat output as filter "convergence to DC average" -- is
+  imprecise; more likely a fixed-point integrator quantization stall
+  once `bp`'s magnitude gets small enough that `(f_coeff * bp) >> 14`
+  rounds to zero. A Task-1-filter-core characterization note, not a
+  Task 4 defect, and doesn't change the conclusion that the filter's
+  effect is real.
+
+Files: `kernel/audio/synth.c`/`.h` (filter core + tables, ring mod,
+mixer integration); `kernel/tests/test_synth.c` (18 -> 33 tests);
+`kernel/forth/forth_hooks.h` (6 new declarations); `kernel/kernel.c` (6
+new `forth_hook_synth_*` functions); `kernel/forth/forth.c` (6 new
+primitives: `FILTER-CUTOFF`/`FILTER-RES`/`FILTER-MODE`/`FILTER-ROUTE`/
+`RING-PARTNER`/`RING-OFF`). Plan:
+`docs/superpowers/plans/2026-08-23-sid-filter-ringmod.md`. Spec:
+`docs/superpowers/specs/2026-08-23-sid-filter-ringmod-design.md`.
