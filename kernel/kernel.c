@@ -717,6 +717,35 @@ void forth_hook_synth_gate_off(void) {
     synth_gate_off(synth_current_voice);
 }
 
+void forth_hook_synth_filter_cutoff(int cutoff) {
+    audio_ensure_stream_started();
+    synth_set_filter_cutoff(cutoff);
+}
+
+void forth_hook_synth_filter_res(int resonance) {
+    audio_ensure_stream_started();
+    synth_set_filter_resonance(resonance);
+}
+
+void forth_hook_synth_filter_mode(int mode_mask) {
+    audio_ensure_stream_started();
+    synth_set_filter_mode(mode_mask);
+}
+
+void forth_hook_synth_filter_route(int routed) {
+    audio_ensure_stream_started();
+    synth_set_voice_filter_route(synth_current_voice, routed);
+}
+
+void forth_hook_synth_ring_partner(int partner) {
+    audio_ensure_stream_started();
+    synth_set_ring_partner(synth_current_voice, partner);
+}
+
+void forth_hook_synth_ring_off(void) {
+    synth_clear_ring_partner(synth_current_voice);
+}
+
 void forth_hook_paint_open(void) {
     serial_write_str("HOOK paint_open\n");
     if (!paint.opened_once) {

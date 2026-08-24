@@ -51,5 +51,11 @@ void forth_hook_synth_ona(int ona);
 void forth_hook_synth_adsr(int attack_ms, int decay_ms, int sustain_percent, int release_ms);
 void forth_hook_synth_gate_on(void);
 void forth_hook_synth_gate_off(void);
+void forth_hook_synth_filter_cutoff(int cutoff);
+void forth_hook_synth_filter_res(int resonance);
+void forth_hook_synth_filter_mode(int mode_mask);
+void forth_hook_synth_filter_route(int routed);
+void forth_hook_synth_ring_partner(int partner);
+void forth_hook_synth_ring_off(void);
 
 #endif
