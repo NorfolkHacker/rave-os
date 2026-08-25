@@ -134,6 +134,17 @@ completely unaware an arpeggio is even happening -- they already only
 ever look at `phase_accum`/the mixed sample, never at how
 `phase_increment` got set.
 
+Note this means `phase_increment` is a single shared destination for
+both `ONA` and the arpeggio -- there's no separate stored "plain ona"
+value to fall back to, since `synth_set_ona()` has always written
+straight into `phase_increment` with nothing kept alongside it.
+`ARP-OFF` therefore just stops future stepping (clears `arp_active`);
+`phase_increment` stays at whatever note the arpeggio was last on, not
+some remembered pre-arpeggio pitch. Getting a specific static pitch
+back after `ARP-OFF` means calling `ONA` again, the same way it always
+has -- this is a deliberate no-extra-state simplicity choice, not an
+oversight.
+
 ### `GATE-ON` must prime the first note, not just reset the index
 
 Today's `synth_gate_on()` silently no-ops if `phase_increment == 0`
@@ -175,7 +186,7 @@ pattern `WAVE`/`ONA`/`RING-PARTNER` already use):
 |---|---|---|
 | `ARP-NOTE` | `( note slot -- )` | Set `arp_notes[slot]` to `note` (slot 0-3, note 1-88) |
 | `ARP-ON` | `( count -- )` | Activate arpeggiation using the first `count` (2-4) loaded slots |
-| `ARP-OFF` | `( -- )` | Deactivate; voice reverts to its plain `ONA` pitch |
+| `ARP-OFF` | `( -- )` | Deactivate; stepping stops immediately |
 | `ARP-RATE` | `( ms -- )` | Set this voice's per-step duration in milliseconds |
 
 Validation follows this feature's own established split (see
@@ -215,9 +226,11 @@ added to the primitive table.
 - Release behavior: confirm stepping continues (phase_increment keeps
   changing) through the release stage after `GATE-OFF`, per this
   spec's chosen behavior.
-- `ARP-OFF` behavior: confirm pitch reverts to the voice's last plain
-  `ONA` value, and that a later `ARP-ON` (no new `ARP-NOTE` calls)
-  resumes with the previously-loaded notes intact.
+- `ARP-OFF` behavior: confirm stepping stops immediately (further
+  render calls don't change `phase_increment` further) while it stays
+  at whatever note the arpeggio was last on, and that a later `ARP-ON`
+  (no new `ARP-NOTE` calls) resumes with the previously-loaded notes
+  intact.
 - Interaction sanity: confirm ring modulation and filter routing both
   still work unmodified on an arpeggiating voice (this should require
   no special-casing at all if the design's "arp only ever touches
