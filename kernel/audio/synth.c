@@ -62,6 +62,22 @@ void synth_init(void) {
         synth_voices[v].release_rate = SYNTH_ENV_FULL << 8;
         synth_voices[v].ring_partner = -1;
         synth_voices[v].filter_route = 0;
+        {
+            int slot;
+            for (slot = 0; slot < SYNTH_ARP_NOTES; slot++) {
+                /* 1 (not 0) so a stray read while arp_active == 0 (it
+                 * never should be, but this stays a safe, valid ona
+                 * index regardless -- see the struct field's comment
+                 * on arp_active gating everything) can never index
+                 * ona_phase_increment[] out of bounds. */
+                synth_voices[v].arp_notes[slot] = 1;
+            }
+        }
+        synth_voices[v].arp_count = 0;
+        synth_voices[v].arp_active = 0;
+        synth_voices[v].arp_step = 0;
+        synth_voices[v].arp_step_rate = 1;
+        synth_voices[v].arp_step_counter = 0;
     }
     synth_filter.lp = 0;
     synth_filter.bp = 0;
@@ -127,6 +143,70 @@ void synth_set_voice_filter_route(int voice, int routed) {
         return;
     }
     synth_voices[voice].filter_route = routed ? 1 : 0;
+}
+
+/* Same "clamp duration, convert to samples, guard the zero case" shape
+ * synth_calc_rate() already uses for envelope timing -- but a plain
+ * sample countdown-to-threshold, not a per-sample increment added to
+ * an accumulating level, so no Q8 scaling here: the result is used
+ * directly as arp_step_rate. The 10000ms upper clamp is deliberately
+ * tighter than synth_calc_rate()'s 100000ms -- an arpeggio slower than
+ * 10 seconds/step stops sounding like an arpeggio at all. */
+static int synth_calc_arp_step_samples(int ms) {
+    unsigned int samples;
+    if (ms <= 0) {
+        /* Fastest possible step, one sample -- the arp equivalent of
+         * synth_calc_rate()'s own "duration_ms <= 0 means instant"
+         * guard, just returning a minimum step count directly instead
+         * of a maximum envelope rate. */
+        return 1;
+    }
+    if (ms > 10000) {
+        ms = 10000;
+    }
+    samples = ((unsigned int)ms * SYNTH_SAMPLE_RATE) / 1000u;
+    if (samples == 0) {
+        samples = 1;
+    }
+    return (int)samples;
+}
+
+void synth_set_arp_note(int voice, int slot, int note) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    if (slot < 0 || slot >= SYNTH_ARP_NOTES) {
+        return;
+    }
+    if (note < 1 || note > 88) {
+        return;
+    }
+    synth_voices[voice].arp_notes[slot] = note;
+}
+
+void synth_arp_on(int voice, int count) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    if (count < 2 || count > SYNTH_ARP_NOTES) {
+        return;
+    }
+    synth_voices[voice].arp_count = count;
+    synth_voices[voice].arp_active = 1;
+}
+
+void synth_arp_off(int voice) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    synth_voices[voice].arp_active = 0;
+}
+
+void synth_set_arp_rate(int voice, int ms) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    synth_voices[voice].arp_step_rate = synth_calc_arp_step_samples(ms);
 }
 
 /* 16-bit Galois LFSR, maximal-length tap mask 0xB400. Ties the noise
@@ -255,6 +335,19 @@ void synth_gate_on(int voice) {
     if (clamp_voice(voice) < 0) {
         return;
     }
+    /* An arpeggiating voice may legitimately have never had ONA set --
+     * its pitch comes entirely from arp_notes[]. Prime phase_increment
+     * from the pattern's first note (and restart the pattern at slot 0,
+     * matching the spec's "GATE-ON always restarts from note 0")
+     * before the phase_increment == 0 check below, or a voice that
+     * only ever used ARP-NOTE/ARP-ON would incorrectly hit that check
+     * and silently fail to gate on at all. */
+    if (synth_voices[voice].arp_active) {
+        synth_voices[voice].arp_step = 0;
+        synth_voices[voice].arp_step_counter = 0;
+        synth_voices[voice].phase_increment =
+            ona_phase_increment[synth_voices[voice].arp_notes[0] - 1];
+    }
     /* A voice with no ona ever set has phase_increment == 0: its phase
      * accumulator never advances or wraps, so every waveform would
      * output a constant, non-silent value for as long as the envelope
@@ -356,6 +449,27 @@ void synth_render_half(unsigned char *buf, unsigned int len) {
                 bypass_sum += contribution;
             }
             voice->phase_accum = new_accum;
+
+            /* Mechanically just "call the equivalent of ONA
+             * automatically, on a timer": phase_increment is the only
+             * thing that changes, so ring modulation and filter
+             * routing both keep working completely unaware an
+             * arpeggio is even happening. Runs after the phase
+             * accumulator's own advance above, so a step that fires
+             * this sample changes pitch starting next sample, not
+             * retroactively this one. arp_count is guaranteed >= 2
+             * whenever arp_active is 1 (synth_arp_on()'s own
+             * validation), so the modulo below can never divide by
+             * zero. */
+            if (voice->arp_active) {
+                voice->arp_step_counter++;
+                if (voice->arp_step_counter >= voice->arp_step_rate) {
+                    voice->arp_step_counter = 0;
+                    voice->arp_step = (voice->arp_step + 1) % voice->arp_count;
+                    voice->phase_increment =
+                        ona_phase_increment[voice->arp_notes[voice->arp_step] - 1];
+                }
+            }
         }
 
         filtered_out = synth_filter_process_sample(&synth_filter, filtered_sum,
