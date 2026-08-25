@@ -2725,7 +2725,7 @@ hard-errors on an out-of-range slot (0-3, `BAD ARP SLOT`) or note (1-88,
 `synth_set_arp_rate()` itself with no Forth-level check, matching
 `DUTY`/`FILTER-CUTOFF`'s convention; `ARP-OFF` takes no stack args and,
 like `RING-OFF`, does not call `audio_ensure_stream_started()` since it
-only silences an already-active voice. Verified via headless QEMU:
+only stops an effect on an already-running voice. Verified via headless QEMU:
 `0 VOICE 1 WAVE 1 ONA 10 50 80 500 ADSR GATE-ON` to gate a static
 low note, then `1 0 ARP-NOTE 40 1 ARP-NOTE 80 2 ARP-NOTE 3 ARP-ON
 2 ARP-RATE` to arm a 3-note (ona 1/40/80) pattern at a 2ms step rate,

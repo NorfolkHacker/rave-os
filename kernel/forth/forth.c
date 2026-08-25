@@ -424,6 +424,9 @@ static void prim_synth_arp_note(struct forth_vm *vm) {
         return;
     }
     if (slot < 0 || slot > 3) {
+        /* 3 == SYNTH_ARP_NOTES (synth.h) - 1; forth.c has no synth.h
+         * dependency so this is hard-coded, matching ONA's 88 and
+         * RING-PARTNER's 7 -- keep in sync if SYNTH_ARP_NOTES changes. */
         forth_set_error(vm, "BAD ARP SLOT");
         return;
     }
@@ -443,6 +446,9 @@ static void prim_synth_arp_on(struct forth_vm *vm) {
         return;
     }
     if (n < 2 || n > 4) {
+        /* 4 == SYNTH_ARP_NOTES (synth.h); forth.c has no synth.h
+         * dependency so this is hard-coded, matching ONA's 88 and
+         * RING-PARTNER's 7 -- keep in sync if SYNTH_ARP_NOTES changes. */
         forth_set_error(vm, "BAD ARP COUNT");
         return;
     }

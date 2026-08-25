@@ -790,8 +790,10 @@ static void test_arp_continues_stepping_through_release(void) {
     synth_set_arp_note(0, 1, 2);
     synth_arp_on(0, 2);
     synth_set_arp_rate(0, 1);
+    synth_set_adsr(0, 1, 1, 100, 500);
     synth_gate_on(0);
     synth_gate_off(0);
+    CHECK(synth_voices[0].envelope_stage == ENV_RELEASE, "voice is genuinely in the release stage at this checkpoint, not already OFF");
     for (i = 0; i < 21; i++) {
         synth_render_half(buf, 1);
     }

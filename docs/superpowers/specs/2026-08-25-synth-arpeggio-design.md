@@ -50,7 +50,7 @@ right, not a chord substitute.
 
 ### Per-voice state
 
-Four new fields on `struct synth_voice`:
+Six new fields on `struct synth_voice`:
 ```c
 int arp_notes[4];   /* absolute ona values, slots 0-3 */
 int arp_count;      /* how many of arp_notes[] are in play, 2-4 */
@@ -90,7 +90,11 @@ state was fixed to respect.
 static int synth_calc_arp_step_samples(int ms) {
     unsigned int samples;
     if (ms <= 0) {
-        ms = 1;
+        /* Fastest possible step, one sample -- the arp equivalent of
+         * synth_calc_rate()'s own "duration_ms <= 0 means instant"
+         * guard, just returning a minimum step count directly instead
+         * of a maximum envelope rate. */
+        return 1;
     }
     if (ms > 10000) {
         ms = 10000;
