@@ -2748,13 +2748,14 @@ zcr/sec = 1955.59 -- a sustained ~69.7x step change coincident with
 clamping, 2- and 4-note stepping order and wraparound, `GATE-ON`
 restart and ONA-less priming, stepping through release, `ARP-OFF`/
 `ARP-ON` resume without reloading notes, `synth_init()` state reset,
-and continued respect for filter routing and ring modulation), part of
-the same 5-suite host regression run
+and continued respect for filter routing and ring modulation) -- PASS
+under host `gcc -m32`, plus a clean `i686-elf-gcc -mgeneral-regs-only`
+freestanding rebuild, with zero new compiler warnings. Task 2 then
+re-ran the full 5-suite host regression suite
 (`test_synth`/`test_context_switch`/`test_font`/`test_scheduler`/
-`test_editor`) this project has used since the concurrency work -- all
-5 PASS in both tasks, both under host `gcc -m32` and under
-`i686-elf-gcc -mgeneral-regs-only` freestanding compilation, with zero
-new compiler warnings.
+`test_editor`) this project has used since the concurrency work, plus
+both the freestanding kernel and boot builds -- all PASS/clean, again
+zero new warnings.
 
 **A real-hardware verification pass is still pending**, the same bar
 every prior piece of the audio subsystem has been held to.
