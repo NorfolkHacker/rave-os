@@ -414,6 +414,63 @@ static void prim_synth_ring_off(struct forth_vm *vm) {
     forth_hook_synth_ring_off();
 }
 
+/* ARP-NOTE: both slot (0-3) and note (1-88) are discrete indices with
+ * a meaningless out-of-range value -- hard-error, matching ONA/
+ * RING-PARTNER's convention. slot in particular writing out of bounds
+ * would corrupt adjacent voice state, not just misbehave musically. */
+static void prim_synth_arp_note(struct forth_vm *vm) {
+    int32_t note, slot;
+    if (!forth_pop(vm, &slot) || !forth_pop(vm, &note)) {
+        return;
+    }
+    if (slot < 0 || slot > 3) {
+        /* 3 == SYNTH_ARP_NOTES (synth.h) - 1; forth.c has no synth.h
+         * dependency so this is hard-coded, matching ONA's 88 and
+         * RING-PARTNER's 7 -- keep in sync if SYNTH_ARP_NOTES changes. */
+        forth_set_error(vm, "BAD ARP SLOT");
+        return;
+    }
+    if (note < 1 || note > 88) {
+        forth_set_error(vm, "BAD ARP NOTE");
+        return;
+    }
+    forth_hook_synth_arp_note((int)note, (int)slot);
+}
+
+/* ARP-ON's count (2-4) is hard-rejected too -- letting an out-of-range
+ * count through would read arp_notes[] out of bounds in the render
+ * loop, not just misbehave musically. */
+static void prim_synth_arp_on(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    if (n < 2 || n > 4) {
+        /* 4 == SYNTH_ARP_NOTES (synth.h); forth.c has no synth.h
+         * dependency so this is hard-coded, matching ONA's 88 and
+         * RING-PARTNER's 7 -- keep in sync if SYNTH_ARP_NOTES changes. */
+        forth_set_error(vm, "BAD ARP COUNT");
+        return;
+    }
+    forth_hook_synth_arp_on((int)n);
+}
+
+static void prim_synth_arp_off(struct forth_vm *vm) {
+    (void)vm;
+    forth_hook_synth_arp_off();
+}
+
+/* ARP-RATE: like DUTY/FILTER-CUTOFF, synth_set_arp_rate() already
+ * clamps gracefully -- no hard Forth-level error, matching DUTY's own
+ * convention rather than VOICE/WAVE/ONA/ARP-NOTE/ARP-ON's. */
+static void prim_synth_arp_rate(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    forth_hook_synth_arp_rate((int)n);
+}
+
 static void prim_pixel(struct forth_vm *vm) {
     int32_t x, y, color;
     if (!forth_pop(vm, &color) || !forth_pop(vm, &y) || !forth_pop(vm, &x)) {
@@ -472,6 +529,8 @@ static const struct forth_word primitives[] = {
     {"FILTER-CUTOFF", prim_synth_filter_cutoff}, {"FILTER-RES", prim_synth_filter_res},
     {"FILTER-MODE", prim_synth_filter_mode}, {"FILTER-ROUTE", prim_synth_filter_route},
     {"RING-PARTNER", prim_synth_ring_partner}, {"RING-OFF", prim_synth_ring_off},
+    {"ARP-NOTE", prim_synth_arp_note}, {"ARP-ON", prim_synth_arp_on},
+    {"ARP-OFF", prim_synth_arp_off}, {"ARP-RATE", prim_synth_arp_rate},
     {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
     {"MOUSE-DOWN?", prim_mouse_down}, {"MOUSE-RIGHT-DOWN?", prim_mouse_right_down},
     {"WINDOW-CLOSED?", prim_window_closed},

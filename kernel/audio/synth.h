@@ -4,6 +4,7 @@
 #define SYNTH_SAMPLE_RATE 22050u
 #define SYNTH_NUM_VOICES 8
 #define SYNTH_ENV_FULL 32768
+#define SYNTH_ARP_NOTES 4
 
 enum synth_waveform { WAVE_PULSE = 0, WAVE_SAW = 1, WAVE_TRIANGLE = 2, WAVE_NOISE = 3 };
 enum synth_env_stage { ENV_OFF = 0, ENV_ATTACK = 1, ENV_DECAY = 2, ENV_SUSTAIN = 3, ENV_RELEASE = 4 };
@@ -40,6 +41,26 @@ struct synth_voice {
      * through it. Matches real SID's own per-voice filter routing bits,
      * scaled to 8 voices. */
     int filter_route;
+    /* Arpeggio: up to SYNTH_ARP_NOTES absolute ona values (arp_notes[]),
+     * cycled through up-only-with-wraparound while arp_active, using
+     * only the first arp_count slots. Independent of the voice's plain
+     * ona -- synth_set_ona() and the arpeggio's own stepping both write
+     * directly into phase_increment, the only thing that decides pitch;
+     * there is no separate stored "plain ona" value either one falls
+     * back to. arp_active is a flag independent of arp_notes/arp_count
+     * (mirrors ring_partner's own "activation independent of loaded
+     * configuration" shape, just as an explicit flag instead of a sign
+     * convention since 0 is a valid slot value here) so ARP-OFF then
+     * ARP-ON later doesn't require reloading notes. arp_step_rate/
+     * arp_step_counter are a plain sample countdown-to-threshold (not
+     * Q8-scaled like the envelope rates above -- see
+     * synth_calc_arp_step_samples()). */
+    int arp_notes[SYNTH_ARP_NOTES];
+    int arp_count;
+    int arp_active;
+    int arp_step;
+    int arp_step_rate;
+    int arp_step_counter;
 };
 
 extern struct synth_voice synth_voices[SYNTH_NUM_VOICES];
@@ -55,6 +76,10 @@ void synth_gate_off(int voice);
 void synth_set_ring_partner(int voice, int partner);
 void synth_clear_ring_partner(int voice);
 void synth_set_voice_filter_route(int voice, int routed);
+void synth_set_arp_note(int voice, int slot, int note);
+void synth_arp_on(int voice, int count);
+void synth_arp_off(int voice);
+void synth_set_arp_rate(int voice, int ms);
 
 /* ring_active/ring_partner_phase_accum only affect WAVE_TRIANGLE's fold
  * direction (real SID's ring mod is wired into the triangle generator

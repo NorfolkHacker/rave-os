@@ -106,6 +106,20 @@ not a queue.
   surface / note-sequencing language -- remains unbuilt, still separate
   future work.
 
+  A per-voice arpeggio effect has now also shipped, 2026-08-25 (see
+  `docs/superpowers/specs/2026-08-25-synth-arpeggio-design.md` and
+  `docs/BUILD_LOG.md`'s entry for the same date): each voice can hold an
+  explicit 2-4 note list (`ARP-NOTE`) that, once armed (`ARP-ON`),
+  cycles up-only with wraparound at a configurable, sample-accurate
+  millisecond rate (`ARP-RATE`), fully independent of the shared
+  filter/ring-mod machinery described just above -- an arpeggiating
+  voice can still be filter-routed or ring-modulated like any other.
+  This is a separate, self-contained addition, not part of (and does
+  not replace the need for) (C)'s still-unbuilt real note-sequencing
+  language -- there is no pattern/song sequencing, timing beyond a
+  single per-voice rate, or scripting here, just a fixed-length pitch
+  cycle per voice.
+
 - ~~**Upgrade the FILES window.**~~ Done, 2026-08-16 -- both candidates
   this entry originally floated shipped the same day. Multi-select +
   clipboard-style CUT/COPY/PASTE landed in FILES (plus `mv`/`cp` in

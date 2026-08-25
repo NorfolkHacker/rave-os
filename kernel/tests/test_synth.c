@@ -674,6 +674,212 @@ static void test_render_half_returns_to_true_silence_after_filtered_note_release
     }
 }
 
+static void test_arp_setters_validate(void) {
+    synth_init();
+    synth_set_arp_note(0, 0, 1);
+    synth_set_arp_note(0, -1, 5);
+    synth_set_arp_note(0, 4, 5);
+    synth_set_arp_note(0, 1, 0);
+    synth_set_arp_note(0, 1, 89);
+    CHECK(synth_voices[0].arp_notes[0] == 1, "valid ARP-NOTE call sets the slot");
+    CHECK(synth_voices[0].arp_notes[1] == 1, "out-of-range slot/note calls are silently ignored, slot 1 keeps its synth_init() default");
+
+    synth_arp_on(0, 1);
+    CHECK(synth_voices[0].arp_active == 0, "ARP-ON with count < 2 is rejected");
+    synth_arp_on(0, 5);
+    CHECK(synth_voices[0].arp_active == 0, "ARP-ON with count > 4 is rejected");
+    synth_arp_on(0, 3);
+    CHECK(synth_voices[0].arp_active == 1 && synth_voices[0].arp_count == 3, "ARP-ON with a valid count activates");
+
+    synth_arp_off(0);
+    CHECK(synth_voices[0].arp_active == 0, "ARP-OFF deactivates");
+}
+
+static void test_arp_rate_clamps_gracefully(void) {
+    synth_init();
+    synth_set_arp_rate(0, 0);
+    CHECK(synth_voices[0].arp_step_rate == 1, "0ms clamps up to the 1-sample minimum, not a divide-by-zero");
+    synth_set_arp_rate(0, -50);
+    CHECK(synth_voices[0].arp_step_rate == 1, "negative ms also clamps to the 1-sample minimum");
+    synth_set_arp_rate(0, 1);
+    CHECK(synth_voices[0].arp_step_rate == 22, "1ms converts to 22 samples at SYNTH_SAMPLE_RATE=22050");
+    synth_set_arp_rate(0, 1000000);
+    CHECK(synth_voices[0].arp_step_rate == 220500, "extreme ms clamps to the 10-second maximum (10000ms -> 220500 samples)");
+}
+
+static void test_arp_stepping_order_two_notes(void) {
+    unsigned char buf[1];
+    int i;
+    synth_init();
+    synth_set_arp_note(0, 0, 1);
+    synth_set_arp_note(0, 1, 2);
+    synth_arp_on(0, 2);
+    synth_set_arp_rate(0, 1);
+    synth_gate_on(0);
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[0], "arp primes phase_increment from note slot 0 at gate-on");
+    for (i = 0; i < 21; i++) {
+        synth_render_half(buf, 1);
+    }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[0], "phase_increment unchanged before the first step boundary (21 samples in)");
+    synth_render_half(buf, 1);
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[1], "phase_increment steps to note slot 1 at the 22nd sample");
+    for (i = 0; i < 21; i++) {
+        synth_render_half(buf, 1);
+    }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[1], "phase_increment unchanged before the second step boundary");
+    synth_render_half(buf, 1);
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[0], "phase_increment wraps back to note slot 0 after 2 steps");
+}
+
+static void test_arp_stepping_order_four_notes_wraps(void) {
+    unsigned char buf[1];
+    int i;
+    synth_init();
+    synth_set_arp_note(0, 0, 1);
+    synth_set_arp_note(0, 1, 2);
+    synth_set_arp_note(0, 2, 3);
+    synth_set_arp_note(0, 3, 4);
+    synth_arp_on(0, 4);
+    synth_set_arp_rate(0, 1);
+    synth_gate_on(0);
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[0], "primed at note slot 0");
+    for (i = 0; i < 22; i++) { synth_render_half(buf, 1); }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[1], "steps to slot 1 after 22 samples");
+    for (i = 0; i < 22; i++) { synth_render_half(buf, 1); }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[2], "steps to slot 2 after 44 samples");
+    for (i = 0; i < 22; i++) { synth_render_half(buf, 1); }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[3], "steps to slot 3 after 66 samples");
+    for (i = 0; i < 22; i++) { synth_render_half(buf, 1); }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[0], "wraps back to slot 0 after 88 samples (4 steps)");
+}
+
+static void test_gate_on_restarts_arp_from_note_zero(void) {
+    unsigned char buf[1];
+    int i;
+    synth_init();
+    synth_set_arp_note(0, 0, 1);
+    synth_set_arp_note(0, 1, 2);
+    synth_arp_on(0, 2);
+    synth_set_arp_rate(0, 1);
+    synth_gate_on(0);
+    for (i = 0; i < 22; i++) {
+        synth_render_half(buf, 1);
+    }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[1], "arp has stepped to note slot 1 before the gate is retriggered");
+    synth_gate_on(0);
+    CHECK(synth_voices[0].arp_step == 0, "GATE-ON resets the arp step index to 0");
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[0], "GATE-ON re-primes phase_increment from note slot 0");
+}
+
+static void test_gate_on_primes_arp_voice_that_never_had_ona(void) {
+    synth_init();
+    synth_set_arp_note(0, 0, 5);
+    synth_set_arp_note(0, 1, 9);
+    synth_arp_on(0, 2);
+    CHECK(synth_voices[0].phase_increment == 0, "freshly-init voice still has phase_increment == 0 before gate-on (ona never set)");
+    synth_gate_on(0);
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[4], "gate-on primes phase_increment from the arp's first note even though ona was never set");
+    CHECK(synth_voices[0].envelope_stage == ENV_ATTACK, "gate-on enters ATTACK for an arpeggiating voice, unlike a plain never-ona'd voice");
+}
+
+static void test_arp_continues_stepping_through_release(void) {
+    unsigned char buf[1];
+    int i;
+    synth_init();
+    synth_set_arp_note(0, 0, 1);
+    synth_set_arp_note(0, 1, 2);
+    synth_arp_on(0, 2);
+    synth_set_arp_rate(0, 1);
+    synth_set_adsr(0, 1, 1, 100, 500);
+    synth_gate_on(0);
+    synth_gate_off(0);
+    CHECK(synth_voices[0].envelope_stage == ENV_RELEASE, "voice is genuinely in the release stage at this checkpoint, not already OFF");
+    for (i = 0; i < 21; i++) {
+        synth_render_half(buf, 1);
+    }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[0], "still on note slot 0 just before the step boundary, even mid-release");
+    synth_render_half(buf, 1);
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[1], "arp keeps stepping to note slot 1 during release, per spec");
+}
+
+static void test_arp_off_stops_stepping(void) {
+    unsigned char buf[1];
+    int i;
+    synth_init();
+    synth_set_arp_note(0, 0, 1);
+    synth_set_arp_note(0, 1, 2);
+    synth_arp_on(0, 2);
+    synth_set_arp_rate(0, 1);
+    synth_gate_on(0);
+    for (i = 0; i < 22; i++) {
+        synth_render_half(buf, 1);
+    }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[1], "arp has stepped to note slot 1 before ARP-OFF");
+    synth_arp_off(0);
+    for (i = 0; i < 100; i++) {
+        synth_render_half(buf, 1);
+    }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[1], "phase_increment stays frozen at the last arp note once ARP-OFF stops stepping");
+}
+
+static void test_arp_on_after_off_resumes_with_loaded_notes(void) {
+    unsigned char buf[1];
+    int i;
+    synth_init();
+    synth_set_arp_note(0, 0, 1);
+    synth_set_arp_note(0, 1, 2);
+    synth_arp_on(0, 2);
+    synth_set_arp_rate(0, 1);
+    synth_arp_off(0);
+    synth_gate_on(0);
+    CHECK(synth_voices[0].phase_increment == 0, "arp inactive at gate-on, and ona was never set, so phase_increment stays 0");
+    CHECK(synth_voices[0].envelope_stage == ENV_OFF, "gate-on no-ops when arp is inactive and ona was never set (same as a plain never-ona'd voice)");
+    synth_arp_on(0, 2);
+    synth_gate_on(0);
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[0], "re-activating arp (no new ARP-NOTE calls) and gating on resumes with the previously-loaded notes");
+    for (i = 0; i < 22; i++) {
+        synth_render_half(buf, 1);
+    }
+    CHECK(synth_voices[0].phase_increment == ona_phase_increment[1], "stepping resumes normally after re-activation");
+}
+
+static void test_synth_init_resets_arp_state(void) {
+    synth_init();
+    synth_set_arp_note(0, 0, 10);
+    synth_arp_on(0, 3);
+    synth_set_arp_rate(0, 50);
+    synth_gate_on(0);
+    synth_init();
+    CHECK(synth_voices[0].arp_active == 0, "synth_init() resets arp_active");
+    CHECK(synth_voices[0].arp_count == 0, "synth_init() resets arp_count");
+    CHECK(synth_voices[0].arp_step == 0, "synth_init() resets arp_step");
+    CHECK(synth_voices[0].arp_step_counter == 0, "synth_init() resets arp_step_counter");
+    CHECK(synth_voices[0].arp_step_rate == 1, "synth_init() resets arp_step_rate to a safe default");
+    CHECK(synth_voices[0].arp_notes[0] == 1, "synth_init() resets arp_notes[] to the safe default");
+}
+
+static void test_arp_voice_still_respects_filter_route_and_ring_mod(void) {
+    unsigned char buf[1];
+    int i;
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_TRIANGLE);
+    synth_set_arp_note(0, 0, 40);
+    synth_set_arp_note(0, 1, 42);
+    synth_arp_on(0, 2);
+    synth_set_arp_rate(0, 1);
+    synth_set_voice_filter_route(0, 1);
+    synth_set_ring_partner(0, 1);
+    synth_set_voice_waveform(1, WAVE_PULSE);
+    synth_set_ona(1, 40);
+    synth_gate_on(0);
+    synth_gate_on(1);
+    for (i = 0; i < 50; i++) {
+        synth_render_half(buf, 1);
+    }
+    CHECK(synth_voices[0].filter_route == 1, "arpeggiating voice keeps its filter_route setting untouched by stepping");
+    CHECK(synth_voices[0].ring_partner == 1, "arpeggiating voice keeps its ring_partner setting untouched by stepping");
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -710,6 +916,17 @@ int main(void) {
     test_synth_init_resets_filter_state();
     test_filter_process_sample_converges_to_true_zero_under_zero_input();
     test_render_half_returns_to_true_silence_after_filtered_note_release();
+    test_arp_setters_validate();
+    test_arp_rate_clamps_gracefully();
+    test_arp_stepping_order_two_notes();
+    test_arp_stepping_order_four_notes_wraps();
+    test_gate_on_restarts_arp_from_note_zero();
+    test_gate_on_primes_arp_voice_that_never_had_ona();
+    test_arp_continues_stepping_through_release();
+    test_arp_off_stops_stepping();
+    test_arp_on_after_off_resumes_with_loaded_notes();
+    test_synth_init_resets_arp_state();
+    test_arp_voice_still_respects_filter_route_and_ring_mod();
 
     if (failures == 0) {
         printf("PASS\n");
