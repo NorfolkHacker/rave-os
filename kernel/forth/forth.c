@@ -358,6 +358,62 @@ static void prim_synth_gate_off(struct forth_vm *vm) {
     forth_hook_synth_gate_off();
 }
 
+/* FILTER-CUTOFF/-RES/-MODE/-ROUTE: like DUTY, the underlying
+ * synth_set_* setters already clamp gracefully -- no hard Forth-level
+ * error, matching DUTY's own convention rather than VOICE/WAVE/ONA's
+ * discrete-index-with-a-meaningless-out-of-range-value convention. */
+static void prim_synth_filter_cutoff(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    forth_hook_synth_filter_cutoff((int)n);
+}
+
+static void prim_synth_filter_res(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    forth_hook_synth_filter_res((int)n);
+}
+
+static void prim_synth_filter_mode(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    forth_hook_synth_filter_mode((int)n);
+}
+
+static void prim_synth_filter_route(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    forth_hook_synth_filter_route((int)n);
+}
+
+/* RING-PARTNER: a discrete voice index with a meaningless out-of-range
+ * value (there is no voice 8) -- matches VOICE/WAVE/ONA's hard-error
+ * convention, not DUTY's clamp-gracefully one. */
+static void prim_synth_ring_partner(struct forth_vm *vm) {
+    int32_t n;
+    if (!forth_pop(vm, &n)) {
+        return;
+    }
+    if (n < 0 || n > 7) {
+        forth_set_error(vm, "BAD PARTNER");
+        return;
+    }
+    forth_hook_synth_ring_partner((int)n);
+}
+
+static void prim_synth_ring_off(struct forth_vm *vm) {
+    (void)vm;
+    forth_hook_synth_ring_off();
+}
+
 static void prim_pixel(struct forth_vm *vm) {
     int32_t x, y, color;
     if (!forth_pop(vm, &color) || !forth_pop(vm, &y) || !forth_pop(vm, &x)) {
@@ -413,6 +469,9 @@ static const struct forth_word primitives[] = {
     {"VOICE", prim_synth_voice}, {"WAVE", prim_synth_wave}, {"DUTY", prim_synth_duty},
     {"ONA", prim_synth_ona}, {"ADSR", prim_synth_adsr},
     {"GATE-ON", prim_synth_gate_on}, {"GATE-OFF", prim_synth_gate_off},
+    {"FILTER-CUTOFF", prim_synth_filter_cutoff}, {"FILTER-RES", prim_synth_filter_res},
+    {"FILTER-MODE", prim_synth_filter_mode}, {"FILTER-ROUTE", prim_synth_filter_route},
+    {"RING-PARTNER", prim_synth_ring_partner}, {"RING-OFF", prim_synth_ring_off},
     {"PIXEL", prim_pixel}, {"MOUSE-X", prim_mouse_x}, {"MOUSE-Y", prim_mouse_y},
     {"MOUSE-DOWN?", prim_mouse_down}, {"MOUSE-RIGHT-DOWN?", prim_mouse_right_down},
     {"WINDOW-CLOSED?", prim_window_closed},

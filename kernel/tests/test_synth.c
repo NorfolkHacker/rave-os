@@ -22,34 +22,34 @@ static void test_ona_table(void) {
 
 static void test_waveform_saw(void) {
     unsigned int lfsr = 1;
-    CHECK(synth_osc_sample(WAVE_SAW, 0x00000000u, 128, &lfsr, 0) == -128, "saw at phase 0");
-    CHECK(synth_osc_sample(WAVE_SAW, 0x80000000u, 128, &lfsr, 0) == 0, "saw at phase midpoint");
-    CHECK(synth_osc_sample(WAVE_SAW, 0xFF000000u, 128, &lfsr, 0) == 127, "saw at phase near-end");
+    CHECK(synth_osc_sample(WAVE_SAW, 0x00000000u, 128, &lfsr, 0, 0, 0) == -128, "saw at phase 0");
+    CHECK(synth_osc_sample(WAVE_SAW, 0x80000000u, 128, &lfsr, 0, 0, 0) == 0, "saw at phase midpoint");
+    CHECK(synth_osc_sample(WAVE_SAW, 0xFF000000u, 128, &lfsr, 0, 0, 0) == 127, "saw at phase near-end");
 }
 
 static void test_waveform_triangle(void) {
     unsigned int lfsr = 1;
-    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0) == -128, "triangle at phase 0");
-    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x40000000u, 128, &lfsr, 0) == 0, "triangle at quarter phase");
-    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x80000000u, 128, &lfsr, 0) == 126, "triangle at phase midpoint (peak)");
-    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0xFF000000u, 128, &lfsr, 0) == -128, "triangle at phase near-end");
+    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 0, 0) == -128, "triangle at phase 0");
+    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x40000000u, 128, &lfsr, 0, 0, 0) == 0, "triangle at quarter phase");
+    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0x80000000u, 128, &lfsr, 0, 0, 0) == 126, "triangle at phase midpoint (peak)");
+    CHECK(synth_osc_sample(WAVE_TRIANGLE, 0xFF000000u, 128, &lfsr, 0, 0, 0) == -128, "triangle at phase near-end");
 }
 
 static void test_waveform_pulse(void) {
     unsigned int lfsr = 1;
-    CHECK(synth_osc_sample(WAVE_PULSE, 0x00000000u, 128, &lfsr, 0) == 127, "pulse below 50% duty");
-    CHECK(synth_osc_sample(WAVE_PULSE, 0x7F000000u, 128, &lfsr, 0) == 127, "pulse just below 50% duty");
-    CHECK(synth_osc_sample(WAVE_PULSE, 0x80000000u, 128, &lfsr, 0) == -128, "pulse at 50% duty threshold");
-    CHECK(synth_osc_sample(WAVE_PULSE, 0xFF000000u, 128, &lfsr, 0) == -128, "pulse near end");
+    CHECK(synth_osc_sample(WAVE_PULSE, 0x00000000u, 128, &lfsr, 0, 0, 0) == 127, "pulse below 50% duty");
+    CHECK(synth_osc_sample(WAVE_PULSE, 0x7F000000u, 128, &lfsr, 0, 0, 0) == 127, "pulse just below 50% duty");
+    CHECK(synth_osc_sample(WAVE_PULSE, 0x80000000u, 128, &lfsr, 0, 0, 0) == -128, "pulse at 50% duty threshold");
+    CHECK(synth_osc_sample(WAVE_PULSE, 0xFF000000u, 128, &lfsr, 0, 0, 0) == -128, "pulse near end");
 }
 
 static void test_waveform_noise(void) {
     unsigned int lfsr_a = 1, lfsr_b = 1;
     int i;
     int varied = 0;
-    int first = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1);
+    int first = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1, 0, 0);
     for (i = 0; i < 20; i++) {
-        int s = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1);
+        int s = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1, 0, 0);
         if (s != first) {
             varied = 1;
         }
@@ -59,15 +59,15 @@ static void test_waveform_noise(void) {
     lfsr_a = 12345;
     lfsr_b = 12345;
     for (i = 0; i < 10; i++) {
-        int sa = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1);
-        int sb = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_b, 1);
+        int sa = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1, 0, 0);
+        int sb = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_b, 1, 0, 0);
         CHECK(sa == sb, "noise is deterministic given the same seed");
     }
 
     lfsr_a = 999;
     {
-        int before = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 0);
-        int after = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 0);
+        int before = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 0, 0, 0);
+        int after = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 0, 0, 0);
         CHECK(before == after, "noise holds steady when phase does not wrap");
     }
 }
@@ -318,6 +318,362 @@ static void test_gate_on_no_ona_is_silent_no_op(void) {
     CHECK(synth_voices[0].envelope_stage == ENV_OFF, "gate-on with no ona set stays OFF instead of entering ATTACK");
 }
 
+static void test_filter_table_sanity(void) {
+    int i;
+    CHECK(synth_filter_f_coeff[0] == 93, "filter cutoff table starts at the expected 20Hz coefficient");
+    CHECK(synth_filter_f_coeff[255] == 13583, "filter cutoff table ends at the expected 3000Hz coefficient");
+    for (i = 1; i < 256; i++) {
+        CHECK(synth_filter_f_coeff[i] > synth_filter_f_coeff[i - 1], "filter cutoff table monotonically increasing");
+    }
+    CHECK(synth_filter_q_coeff[0] == 23174, "filter resonance table starts at the expected Q=0.707 coefficient");
+    CHECK(synth_filter_q_coeff[15] == 2048, "filter resonance table ends at the expected Q=8.0 coefficient");
+    for (i = 1; i < 16; i++) {
+        CHECK(synth_filter_q_coeff[i] < synth_filter_q_coeff[i - 1], "filter resonance table monotonically decreasing (higher index = higher resonance = lower q)");
+    }
+}
+
+static void test_filter_setters_clamp(void) {
+    synth_set_filter_cutoff(-5);
+    CHECK(synth_filter_cutoff_index == 0, "filter cutoff clamps negative input to 0");
+    synth_set_filter_cutoff(9999);
+    CHECK(synth_filter_cutoff_index == 255, "filter cutoff clamps out-of-range input to 255");
+    synth_set_filter_cutoff(100);
+    CHECK(synth_filter_cutoff_index == 100, "filter cutoff accepts an in-range value unchanged");
+
+    synth_set_filter_resonance(-1);
+    CHECK(synth_filter_res_index == 0, "filter resonance clamps negative input to 0");
+    synth_set_filter_resonance(999);
+    CHECK(synth_filter_res_index == 15, "filter resonance clamps out-of-range input to 15");
+
+    synth_set_filter_mode(-1);
+    CHECK(synth_filter_mode_mask == 0, "filter mode clamps negative input to 0");
+    synth_set_filter_mode(999);
+    CHECK(synth_filter_mode_mask == 7, "filter mode clamps out-of-range input to 7 (LP|BP|HP)");
+    synth_set_filter_mode(SYNTH_FILTER_MODE_BP);
+    CHECK(synth_filter_mode_mask == SYNTH_FILTER_MODE_BP, "filter mode accepts an in-range value unchanged");
+}
+
+static void test_filter_lowpass_step_response_converges(void) {
+    struct synth_filter_state st = {0, 0};
+    int i;
+    int f_coeff = synth_filter_f_coeff[64];  /* a moderate cutoff */
+    int q_coeff = synth_filter_q_coeff[0];   /* lowest resonance */
+    int last = 0;
+    int converged = 0;
+
+    for (i = 0; i < 2000; i++) {
+        int out = synth_filter_process_sample(&st, 1000, f_coeff, q_coeff, SYNTH_FILTER_MODE_LP);
+        if (i > 1000) {
+            int delta = out - last;
+            if (delta < 0) delta = -delta;
+            if (delta < 5) {
+                converged = 1;
+            }
+        }
+        last = out;
+    }
+    CHECK(converged, "low-pass output settles toward a steady value under a held step input");
+    CHECK(last > 500 && last < 1500, "settled low-pass output is in a sane range near the step input, not wildly off");
+}
+
+static void test_filter_resonance_increases_peak_overshoot(void) {
+    struct synth_filter_state st_low = {0, 0};
+    struct synth_filter_state st_high = {0, 0};
+    int i;
+    int f_coeff = synth_filter_f_coeff[200];
+    int peak_low = 0, peak_high = 0;
+
+    for (i = 0; i < 200; i++) {
+        int out_low = synth_filter_process_sample(&st_low, 1000, f_coeff, synth_filter_q_coeff[0], SYNTH_FILTER_MODE_LP);
+        int out_high = synth_filter_process_sample(&st_high, 1000, f_coeff, synth_filter_q_coeff[15], SYNTH_FILTER_MODE_LP);
+        if (out_low > peak_low) peak_low = out_low;
+        if (out_high > peak_high) peak_high = out_high;
+    }
+    CHECK(peak_high > peak_low, "higher resonance produces a larger peak overshoot than lower resonance at the same cutoff");
+}
+
+static void test_filter_mode_zero_is_silent(void) {
+    struct synth_filter_state st = {0, 0};
+    int i;
+    int all_zero = 1;
+    for (i = 0; i < 100; i++) {
+        int out = synth_filter_process_sample(&st, 1000, synth_filter_f_coeff[200], synth_filter_q_coeff[8], 0);
+        if (out != 0) {
+            all_zero = 0;
+        }
+    }
+    CHECK(all_zero, "filter mode 0 (no LP/BP/HP selected) produces silence regardless of input");
+}
+
+static void test_filter_never_exceeds_state_clamp_across_full_range(void) {
+    int cutoff_idx, res_idx, mode;
+    int any_exceeded = 0;
+    for (cutoff_idx = 0; cutoff_idx < 256; cutoff_idx += 17) {
+        for (res_idx = 0; res_idx < 16; res_idx++) {
+            for (mode = 1; mode <= 7; mode++) {
+                struct synth_filter_state st = {0, 0};
+                int i;
+                for (i = 0; i < 500; i++) {
+                    synth_filter_process_sample(&st, 1016, synth_filter_f_coeff[cutoff_idx], synth_filter_q_coeff[res_idx], mode);
+                    if (st.lp > SYNTH_FILTER_STATE_MAX || st.lp < -SYNTH_FILTER_STATE_MAX ||
+                        st.bp > SYNTH_FILTER_STATE_MAX || st.bp < -SYNTH_FILTER_STATE_MAX) {
+                        any_exceeded = 1;
+                    }
+                }
+            }
+        }
+    }
+    CHECK(!any_exceeded, "internal filter state never exceeds its clamp across a sweep of the full cutoff/resonance/mode range");
+}
+
+static void test_ring_mod_changes_triangle_when_partner_msb_differs(void) {
+    unsigned int lfsr = 1;
+    /* own phase at pos8=0 (msb=0); partner at pos8=255 (msb=1) --
+     * ring mod should flip the fold direction relative to no ring mod. */
+    int without_ring = synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 0, 0);
+    int with_ring = synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 1, 0xFF000000u);
+    CHECK(without_ring != with_ring, "ring mod changes the triangle output when the partner's MSB differs from this voice's own");
+}
+
+static void test_ring_mod_no_effect_when_partner_msb_matches(void) {
+    unsigned int lfsr = 1;
+    /* own phase at pos8=0 (msb=0); partner also at pos8=0 (msb=0) --
+     * XORing two matching bits is 0, so ring mod should be a no-op here. */
+    int without_ring = synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 0, 0);
+    int with_ring = synth_osc_sample(WAVE_TRIANGLE, 0x00000000u, 128, &lfsr, 0, 1, 0x00000000u);
+    CHECK(without_ring == with_ring, "ring mod against a partner with the same MSB is a no-op, as XOR-of-equal-bits predicts");
+}
+
+static void test_ring_mod_self_reference_is_harmless(void) {
+    unsigned int lfsr = 1;
+    /* A voice ring-modulating against its own phase: XOR-with-self
+     * always clears the bit, so this must behave exactly like msb=0,
+     * not crash or produce a wildly out-of-range sample. */
+    int self_ring = synth_osc_sample(WAVE_TRIANGLE, 0xFF000000u, 128, &lfsr, 0, 1, 0xFF000000u);
+    CHECK(self_ring >= -128 && self_ring <= 127, "ring mod against itself stays in the valid sample range, no crash or overflow");
+    CHECK(self_ring == 126, "ring mod against itself always clears the fold bit (XOR of equal bits is 0), so tri_pos = lower7 = 127 here -> sample 126");
+}
+
+static void test_ring_mod_has_no_effect_on_non_triangle_waveforms(void) {
+    unsigned int lfsr_a = 42, lfsr_b = 42;
+    int saw_without = synth_osc_sample(WAVE_SAW, 0x00000000u, 128, &lfsr_a, 0, 0, 0);
+    int saw_with = synth_osc_sample(WAVE_SAW, 0x00000000u, 128, &lfsr_a, 0, 1, 0xFF000000u);
+    CHECK(saw_without == saw_with, "ring mod has no effect on sawtooth (only wired into the triangle generator)");
+
+    {
+        int pulse_without = synth_osc_sample(WAVE_PULSE, 0x00000000u, 128, &lfsr_a, 0, 0, 0);
+        int pulse_with = synth_osc_sample(WAVE_PULSE, 0x00000000u, 128, &lfsr_a, 0, 1, 0xFF000000u);
+        CHECK(pulse_without == pulse_with, "ring mod has no effect on pulse");
+    }
+
+    {
+        int noise_without = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_a, 1, 0, 0);
+        int noise_with = synth_osc_sample(WAVE_NOISE, 0, 128, &lfsr_b, 1, 1, 0xFF000000u);
+        CHECK(noise_without == noise_with, "ring mod has no effect on noise (both advance the LFSR identically regardless of ring params)");
+    }
+}
+
+static void test_ring_partner_setters(void) {
+    synth_init();
+    CHECK(synth_voices[0].ring_partner == -1, "ring partner defaults to -1 (off) after synth_init()");
+
+    synth_set_ring_partner(0, 3);
+    CHECK(synth_voices[0].ring_partner == 3, "synth_set_ring_partner sets an in-range partner");
+
+    synth_set_ring_partner(0, -1);
+    CHECK(synth_voices[0].ring_partner == 3, "synth_set_ring_partner ignores an out-of-range (negative) partner, does not clear it");
+
+    synth_set_ring_partner(0, 8);
+    CHECK(synth_voices[0].ring_partner == 3, "synth_set_ring_partner ignores an out-of-range (too high) partner");
+
+    synth_clear_ring_partner(0);
+    CHECK(synth_voices[0].ring_partner == -1, "synth_clear_ring_partner turns ring mod back off");
+}
+
+static void test_render_half_default_filter_route_matches_unfiltered_behavior(void) {
+    unsigned char buf[4];
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_SAW);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    /* filter_route defaults to 0 (bypass) after synth_init() -- output
+     * should be identical to the pre-filter engine's behavior, proving
+     * adding the filter didn't change anything for voices that don't
+     * opt into it. */
+    synth_render_half(buf, 1);
+    CHECK(buf[0] == 0, "a bypass-routed voice's output is unaffected by the filter (matches the original single-voice-passthrough test)");
+}
+
+static void test_render_half_filter_route_changes_output(void) {
+    unsigned char buf_bypass[8];
+    unsigned char buf_filtered[8];
+    int i;
+    int differs = 0;
+
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_PULSE);
+    synth_set_duty(0, 50);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0x10000000u; /* a mid-range tone */
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    synth_set_filter_cutoff(64);
+    synth_set_filter_resonance(8);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_set_voice_filter_route(0, 0);
+    synth_render_half(buf_bypass, 8);
+
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_PULSE);
+    synth_set_duty(0, 50);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0x10000000u;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    synth_set_filter_cutoff(64);
+    synth_set_filter_resonance(8);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_set_voice_filter_route(0, 1);
+    synth_render_half(buf_filtered, 8);
+
+    for (i = 0; i < 8; i++) {
+        if (buf_bypass[i] != buf_filtered[i]) {
+            differs = 1;
+        }
+    }
+    CHECK(differs, "routing a voice through the filter produces different output than bypassing it, same source signal");
+}
+
+static void test_render_half_filter_state_persists_across_calls(void) {
+    unsigned char buf1[4];
+    unsigned char buf2[4];
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_PULSE);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    synth_set_filter_cutoff(220);
+    synth_set_filter_resonance(4);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_set_voice_filter_route(0, 1);
+    synth_render_half(buf1, 4);
+    synth_render_half(buf2, 4);
+    /* A low-pass ramping toward a held step input reaches its
+     * steady-state within buf1's own 4 samples at this cutoff; buf2's
+     * first sample continues from that converged state rather than
+     * restarting the ramp -- if the filter's internal state were reset
+     * each call instead of persisting (like each voice's phase_accum/
+     * envelope_level already do), buf2[0] would replay buf1[0]'s exact
+     * startup value instead of picking up where buf1 left off. */
+    CHECK(buf1[0] != buf2[0],
+          "the shared filter's internal state persists across synth_render_half() calls, not reset each time");
+}
+
+static void test_synth_init_resets_filter_state(void) {
+    unsigned char buf[4];
+    int i;
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_PULSE);
+    synth_voices[0].phase_accum = 0;
+    synth_voices[0].phase_increment = 0;
+    synth_voices[0].envelope_stage = ENV_SUSTAIN;
+    synth_voices[0].envelope_level = SYNTH_ENV_FULL << 8;
+    synth_voices[0].sustain_level = SYNTH_ENV_FULL << 8;
+    synth_set_filter_cutoff(220);
+    synth_set_filter_resonance(4);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_set_voice_filter_route(0, 1);
+    synth_render_half(buf, 4);
+    /* filter state is now perturbed (non-{0,0}) */
+
+    synth_init();
+    synth_voices[0].envelope_stage = ENV_OFF;
+    for (i = 0; i < 4; i++) {
+        buf[i] = 0xFF;
+    }
+    synth_render_half(buf, 4);
+    for (i = 0; i < 4; i++) {
+        CHECK(buf[i] == 128, "synth_init() resets the shared filter's state, not just per-voice state -- a silent bypass render right after re-init must be true silence, not residual filter ringing");
+    }
+}
+
+/* Final-whole-branch-review regression: the truncating (floor)
+ * fixed-point recursion in synth_filter_process_sample() has spurious
+ * nonzero equilibria and small limit cycles under zero input that a
+ * real analog SVF doesn't -- without the silence-history fix, this
+ * specific (cutoff, resonance, mode) combination gets stuck cycling
+ * among small nonzero (lp,bp) pairs forever instead of ever reaching
+ * true (0,0), independently confirmed via an exhaustive host-side sweep
+ * while diagnosing the bug (256 cutoffs x 16 resonances x 4 mode
+ * families x 6 seed states, 98304 checks, 0 failures after the fix). */
+static void test_filter_process_sample_converges_to_true_zero_under_zero_input(void) {
+    struct synth_filter_state st;
+    int f_coeff = synth_filter_f_coeff[193];
+    int q_coeff = synth_filter_q_coeff[13];
+    int i;
+    int converged = 0;
+
+    st.lp = -9000;
+    st.bp = -9000;
+    /* nonzero input first, to start from a clean silence-history window */
+    synth_filter_process_sample(&st, 1, f_coeff, q_coeff, SYNTH_FILTER_MODE_LP);
+    st.lp = -9000;
+    st.bp = -9000;
+
+    for (i = 0; i < 400000; i++) {
+        synth_filter_process_sample(&st, 0, f_coeff, q_coeff, SYNTH_FILTER_MODE_LP);
+        if (st.lp == 0 && st.bp == 0) {
+            converged = 1;
+            break;
+        }
+    }
+    CHECK(converged, "filter must converge to exactly (lp=0, bp=0) under sustained zero input, not settle into a nonzero limit cycle");
+
+    for (i = 0; i < 1000; i++) {
+        synth_filter_process_sample(&st, 0, f_coeff, q_coeff, SYNTH_FILTER_MODE_LP);
+    }
+    CHECK(st.lp == 0 && st.bp == 0, "once converged to true zero under continued zero input, the filter must stay there");
+}
+
+/* End-to-end version of the same regression: a filtered note, once
+ * released, must return the mixer to true silence (128) and stay there
+ * -- not leave a permanent DC bias that also corrupts every other,
+ * entirely unrelated voice sharing the same output byte. */
+static void test_render_half_returns_to_true_silence_after_filtered_note_release(void) {
+    unsigned char buf[64];
+    int i;
+
+    synth_init();
+    synth_set_voice_waveform(0, WAVE_SAW);
+    synth_set_ona(0, 40);
+    synth_set_adsr(0, 10, 50, 80, 500);
+    synth_set_voice_filter_route(0, 1);
+    synth_set_filter_cutoff(20);
+    synth_set_filter_resonance(10);
+    synth_set_filter_mode(SYNTH_FILTER_MODE_LP);
+    synth_gate_on(0);
+
+    for (i = 0; i < 3000; i++) {
+        synth_render_half(buf, 64);
+    }
+    synth_gate_off(0);
+    for (i = 0; i < 2000; i++) {
+        synth_render_half(buf, 64);
+    }
+
+    synth_render_half(buf, 64);
+    for (i = 0; i < 64; i++) {
+        CHECK(buf[i] == 128, "a filtered note, once released and settled, must return to true silence (128), not a permanent DC-biased floor");
+    }
+}
+
 int main(void) {
     test_ona_table();
     test_waveform_saw();
@@ -337,6 +693,23 @@ int main(void) {
     test_mixer_clamps_max_voices();
     test_mixer_silence_when_no_voices_gated();
     test_mixer_single_voice_full_envelope_matches_oscillator();
+    test_filter_table_sanity();
+    test_filter_setters_clamp();
+    test_filter_lowpass_step_response_converges();
+    test_filter_resonance_increases_peak_overshoot();
+    test_filter_mode_zero_is_silent();
+    test_filter_never_exceeds_state_clamp_across_full_range();
+    test_ring_mod_changes_triangle_when_partner_msb_differs();
+    test_ring_mod_no_effect_when_partner_msb_matches();
+    test_ring_mod_self_reference_is_harmless();
+    test_ring_mod_has_no_effect_on_non_triangle_waveforms();
+    test_ring_partner_setters();
+    test_render_half_default_filter_route_matches_unfiltered_behavior();
+    test_render_half_filter_route_changes_output();
+    test_render_half_filter_state_persists_across_calls();
+    test_synth_init_resets_filter_state();
+    test_filter_process_sample_converges_to_true_zero_under_zero_input();
+    test_render_half_returns_to_true_silence_after_filtered_note_release();
 
     if (failures == 0) {
         printf("PASS\n");

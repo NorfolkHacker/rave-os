@@ -94,6 +94,18 @@ not a queue.
   entry also originally described both remain unbuilt, separate future
   work.
 
+  The resonant filter has now also shipped, 2026-08-24 (see
+  `docs/superpowers/specs/2026-08-23-sid-filter-ringmod-design.md` and
+  `docs/BUILD_LOG.md`'s entry for the same date): one shared fixed-point
+  resonant state-variable filter (matching the real SID's own
+  one-filter-for-all-voices architecture, scaled from 3 to 8 voices),
+  combinable low/band/high-pass output modes, per-voice routing (bypass
+  or through the filter), plus per-voice assignable ring modulation on
+  the triangle waveform (a feature the original entry didn't ask for but
+  that rounds out the SID-style feature set). (C) -- a real control
+  surface / note-sequencing language -- remains unbuilt, still separate
+  future work.
+
 - ~~**Upgrade the FILES window.**~~ Done, 2026-08-16 -- both candidates
   this entry originally floated shipped the same day. Multi-select +
   clipboard-style CUT/COPY/PASTE landed in FILES (plus `mv`/`cp` in

@@ -2,6 +2,23 @@
 
 struct synth_voice synth_voices[SYNTH_NUM_VOICES];
 
+/* The one shared filter instance (matches "one shared filter", not one
+ * per voice, per the SID architecture this is scaled up from). Its
+ * lp/bp state persists across calls to synth_render_half() the same
+ * way each voice's phase_accum/envelope_level already do -- reset only
+ * by synth_init(), not per-call. */
+static struct synth_filter_state synth_filter;
+
+/* Tracks the (lp,bp) pairs visited during the current unbroken run of
+ * zero-input samples fed to the shared filter -- see
+ * synth_filter_process_sample()'s own doc comment for why. Reset by
+ * synth_init() for the same test/re-init-isolation reason synth_filter
+ * itself is. */
+#define SYNTH_FILTER_SILENCE_HISTORY_LEN 512
+static int synth_filter_silence_hist_lp[SYNTH_FILTER_SILENCE_HISTORY_LEN];
+static int synth_filter_silence_hist_bp[SYNTH_FILTER_SILENCE_HISTORY_LEN];
+static int synth_filter_silence_hist_count = 0;
+
 /* Standard 88-key piano numbering, ona 49 = A4 = 440.0Hz
  * (freq(n) = 440 * 2^((n-49)/12)). Each entry is a Q-format DDS phase
  * increment for a 32-bit phase accumulator at SYNTH_SAMPLE_RATE:
@@ -43,7 +60,12 @@ void synth_init(void) {
         synth_voices[v].decay_rate = SYNTH_ENV_FULL << 8;
         synth_voices[v].sustain_level = SYNTH_ENV_FULL << 8;
         synth_voices[v].release_rate = SYNTH_ENV_FULL << 8;
+        synth_voices[v].ring_partner = -1;
+        synth_voices[v].filter_route = 0;
     }
+    synth_filter.lp = 0;
+    synth_filter.bp = 0;
+    synth_filter_silence_hist_count = 0;
 }
 
 static int clamp_voice(int voice) {
@@ -83,6 +105,30 @@ void synth_set_ona(int voice, int ona) {
     synth_voices[voice].phase_increment = ona_phase_increment[ona - 1];
 }
 
+void synth_set_ring_partner(int voice, int partner) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    if (partner < 0 || partner > 7) {
+        return;
+    }
+    synth_voices[voice].ring_partner = partner;
+}
+
+void synth_clear_ring_partner(int voice) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    synth_voices[voice].ring_partner = -1;
+}
+
+void synth_set_voice_filter_route(int voice, int routed) {
+    if (clamp_voice(voice) < 0) {
+        return;
+    }
+    synth_voices[voice].filter_route = routed ? 1 : 0;
+}
+
 /* 16-bit Galois LFSR, maximal-length tap mask 0xB400. Ties the noise
  * generator's pitch to the voice's own ona (like the real SID chip):
  * it only advances when the caller says this sample's phase_accum
@@ -101,17 +147,35 @@ static void noise_advance(unsigned int *lfsr) {
  * duty_threshold (0-255) only matters for WAVE_PULSE. noise_lfsr is
  * only read/advanced for WAVE_NOISE. phase_accum's top 8 bits
  * (pos8, 0-255) give this sample's position within the current
- * period for the three deterministic waveforms. */
+ * period for the three deterministic waveforms. ring_active/
+ * ring_partner_phase_accum only matter for WAVE_TRIANGLE -- see the
+ * WAVE_TRIANGLE case below and synth.h's doc comment. */
 int synth_osc_sample(enum synth_waveform wave, unsigned int phase_accum,
                       unsigned int duty_threshold, unsigned int *noise_lfsr,
-                      int phase_wrapped) {
+                      int phase_wrapped, int ring_active,
+                      unsigned int ring_partner_phase_accum) {
     unsigned int pos8 = (phase_accum >> 24) & 0xFFu;
 
     switch (wave) {
     case WAVE_SAW:
         return (int)pos8 - 128;
     case WAVE_TRIANGLE: {
-        unsigned int tri_pos = (pos8 < 128u) ? pos8 : (255u - pos8);
+        /* msb (pos8's own top bit) decides fold direction; lower7 is
+         * the position within that half-period. Ring mod XORs a
+         * partner voice's own top bit into that fold decision --
+         * exactly how real SID's ring mod is wired into the triangle
+         * generator. Behaviorally identical to the plain (pos8<128)
+         * form when ring_active is 0: msb=0 -> tri_pos=lower7
+         * (matches pos8<128's pos8==lower7); msb=1 -> tri_pos=
+         * 127-lower7 (matches pos8>=128's 255-pos8 = 127-lower7). */
+        unsigned int msb = (pos8 >> 7) & 1u;
+        unsigned int lower7 = pos8 & 0x7Fu;
+        unsigned int tri_pos;
+        if (ring_active) {
+            unsigned int partner_pos8 = (ring_partner_phase_accum >> 24) & 0xFFu;
+            msb ^= (partner_pos8 >> 7) & 1u;
+        }
+        tri_pos = msb ? (127u - lower7) : lower7;
         return (int)(tri_pos * 2u) - 128;
     }
     case WAVE_PULSE:
@@ -263,28 +327,49 @@ void synth_render_half(unsigned char *buf, unsigned int len) {
     int v;
 
     for (i = 0; i < len; i++) {
-        int sum = 0;
+        int filtered_sum = 0;
+        int bypass_sum = 0;
+        int sum;
+        int filtered_out;
 
         for (v = 0; v < SYNTH_NUM_VOICES; v++) {
             struct synth_voice *voice = &synth_voices[v];
             unsigned int old_accum = voice->phase_accum;
             unsigned int new_accum = old_accum + voice->phase_increment;
             int wrapped = (new_accum < old_accum) ? 1 : 0;
+            int ring_active = (voice->ring_partner >= 0) ? 1 : 0;
+            unsigned int ring_partner_accum = ring_active
+                ? synth_voices[voice->ring_partner].phase_accum : 0u;
             int osc = synth_osc_sample(voice->waveform, old_accum,
                                         voice->duty_threshold,
-                                        &voice->noise_lfsr, wrapped);
+                                        &voice->noise_lfsr, wrapped,
+                                        ring_active, ring_partner_accum);
             int level = synth_envelope_advance_sample(voice);
+            int contribution;
 
             /* level is Q0.15 (0..32768): at full envelope this is an
              * exact pass-through of osc (127*32768>>15 == 127). */
-            sum += (osc * level) >> 15;
+            contribution = (osc * level) >> 15;
+            if (voice->filter_route) {
+                filtered_sum += contribution;
+            } else {
+                bypass_sum += contribution;
+            }
             voice->phase_accum = new_accum;
         }
 
-        /* Must clamp before biasing to unsigned 8-bit: 8 simultaneously
-         * maxed-out voices sum to roughly +-1016, about 4x what a
-         * signed byte holds -- an unclamped sum would wrap into loud
-         * garbage instead of just clipping. */
+        filtered_out = synth_filter_process_sample(&synth_filter, filtered_sum,
+                                                     synth_filter_f_coeff[synth_filter_cutoff_index],
+                                                     synth_filter_q_coeff[synth_filter_res_index],
+                                                     synth_filter_mode_mask);
+        sum = filtered_out + bypass_sum;
+
+        /* Must clamp before biasing to unsigned 8-bit: unfiltered voices
+         * alone can already sum to roughly +-1016 (8 maxed-out voices),
+         * about 4x what a signed byte holds, and a resonant filter can
+         * amplify filtered_sum well past that near its cutoff on top --
+         * an unclamped sum would wrap into loud garbage instead of just
+         * clipping. */
         if (sum > 127) {
             sum = 127;
         }
@@ -292,5 +377,169 @@ void synth_render_half(unsigned char *buf, unsigned int len) {
             sum = -128;
         }
         buf[i] = (unsigned char)(sum + 128);
+    }
+}
+
+/* Cutoff-to-frequency-coefficient table: Q14 fixed-point f = 2*sin(pi*fc/fs)
+ * for fc log-spaced 20Hz-3000Hz (index 0-255), fs = SYNTH_SAMPLE_RATE.
+ * The 3000Hz upper bound is deliberately conservative -- comfortably
+ * under fs/6 (~3675Hz), the range where this simple (non-oversampled)
+ * state-variable topology stays numerically well-behaved. No floating
+ * point exists in this kernel, so this table (like ona_phase_increment[])
+ * is generated once on the host and committed as a literal -- exact
+ * Python: `round(2.0 * math.sin(math.pi * (20.0 * (3000.0/20.0) **
+ * (i/255.0)) / 22050.0) * 16384)` for i in 0..255. */
+const int synth_filter_f_coeff[256] = {
+    93, 95, 97, 99, 101, 103, 105, 107,
+    109, 111, 114, 116, 118, 121, 123, 125,
+    128, 130, 133, 136, 138, 141, 144, 147,
+    150, 153, 156, 159, 162, 165, 168, 172,
+    175, 179, 182, 186, 189, 193, 197, 201,
+    205, 209, 213, 217, 222, 226, 231, 235,
+    240, 245, 249, 254, 259, 265, 270, 275,
+    281, 286, 292, 298, 304, 310, 316, 322,
+    328, 335, 342, 348, 355, 362, 369, 377,
+    384, 392, 400, 408, 416, 424, 432, 441,
+    450, 459, 468, 477, 486, 496, 506, 516,
+    526, 537, 547, 558, 569, 581, 592, 604,
+    616, 628, 640, 653, 666, 679, 693, 707,
+    721, 735, 749, 764, 780, 795, 811, 827,
+    843, 860, 877, 894, 912, 930, 949, 968,
+    987, 1006, 1026, 1047, 1067, 1089, 1110, 1132,
+    1155, 1178, 1201, 1225, 1249, 1274, 1299, 1325,
+    1351, 1378, 1405, 1433, 1461, 1490, 1520, 1550,
+    1581, 1612, 1644, 1677, 1710, 1744, 1779, 1814,
+    1850, 1886, 1924, 1962, 2001, 2040, 2081, 2122,
+    2164, 2207, 2251, 2295, 2341, 2387, 2435, 2483,
+    2532, 2582, 2633, 2685, 2738, 2793, 2848, 2904,
+    2962, 3020, 3080, 3141, 3203, 3267, 3331, 3397,
+    3464, 3533, 3603, 3674, 3746, 3820, 3896, 3973,
+    4051, 4131, 4213, 4296, 4380, 4467, 4555, 4645,
+    4736, 4830, 4925, 5022, 5120, 5221, 5324, 5429,
+    5535, 5644, 5755, 5868, 5983, 6100, 6220, 6342,
+    6466, 6593, 6722, 6853, 6987, 7123, 7262, 7404,
+    7548, 7695, 7845, 7998, 8153, 8311, 8472, 8637,
+    8804, 8974, 9147, 9324, 9504, 9687, 9873, 10062,
+    10255, 10452, 10652, 10855, 11062, 11272, 11486, 11704,
+    11926, 12151, 12380, 12613, 12850, 13090, 13335, 13583,
+};
+
+/* Resonance-to-Q14-feedback-coefficient table, index 0-15 matching
+ * SID's own 4-bit resonance register. Q sweeps 0.707 (heavily damped,
+ * index 0) to 8.0 (sharp resonant peak, index 15), q = 1/Q. Exact
+ * Python: `round((1.0 / (0.707 + i * (8.0 - 0.707) / 15.0)) * 16384)`
+ * for i in 0..15. */
+const int synth_filter_q_coeff[16] = {
+    23174, 13731, 9756, 7566, 6178, 5221, 4521, 3986, 3564, 3223, 2942, 2706, 2505, 2331, 2181, 2048,
+};
+
+int synth_filter_cutoff_index = 128;
+int synth_filter_res_index = 0;
+int synth_filter_mode_mask = SYNTH_FILTER_MODE_LP;
+
+void synth_set_filter_cutoff(int cutoff) {
+    if (cutoff < 0) {
+        cutoff = 0;
+    }
+    if (cutoff > 255) {
+        cutoff = 255;
+    }
+    synth_filter_cutoff_index = cutoff;
+}
+
+void synth_set_filter_resonance(int resonance) {
+    if (resonance < 0) {
+        resonance = 0;
+    }
+    if (resonance > 15) {
+        resonance = 15;
+    }
+    synth_filter_res_index = resonance;
+}
+
+void synth_set_filter_mode(int mode_mask) {
+    if (mode_mask < 0) {
+        mode_mask = 0;
+    }
+    if (mode_mask > 7) {
+        mode_mask = 7;
+    }
+    synth_filter_mode_mask = mode_mask;
+}
+
+/* FIXPOINT_LIMIT_CYCLE_FIX: a truncating (floor) fixed-point IIR
+ * recursion has spurious nonzero equilibria and small limit cycles the
+ * real analog SVF doesn't -- with zero input, the only physically
+ * correct resting state is (0,0), but this recursion's rounding error
+ * can park it on an exact repeating orbit instead of ever reaching
+ * true zero. Detected by remembering the (lp,bp) pairs visited during
+ * the current unbroken run of zero-input samples (see the
+ * synth_filter_silence_hist_* declarations near synth_filter's own,
+ * above): if the state repeats one already seen, it has (by definition)
+ * stopped decaying and is cycling forever, so force it the rest of the
+ * way to true silence. Any nonzero input resets the history, so this
+ * can never fire mid-note -- only once a release's whole filtered input
+ * has gone fully silent. */
+int synth_filter_process_sample(struct synth_filter_state *st, int input,
+                                 int f_coeff, int q_coeff, int mode_mask) {
+    int hp = input - st->lp - (int)(((long long)q_coeff * st->bp) >> 14);
+    int bp_new = st->bp + (int)(((long long)f_coeff * hp) >> 14);
+    int lp_new = st->lp + (int)(((long long)f_coeff * bp_new) >> 14);
+
+    if (input != 0) {
+        synth_filter_silence_hist_count = 0;
+    } else {
+        int k;
+        int seen = synth_filter_silence_hist_count < SYNTH_FILTER_SILENCE_HISTORY_LEN
+                       ? synth_filter_silence_hist_count
+                       : SYNTH_FILTER_SILENCE_HISTORY_LEN;
+        int matched = 0;
+        for (k = 0; k < seen; k++) {
+            if (synth_filter_silence_hist_lp[k] == lp_new &&
+                synth_filter_silence_hist_bp[k] == bp_new) {
+                matched = 1;
+                break;
+            }
+        }
+        if (matched) {
+            lp_new = 0;
+            bp_new = 0;
+            synth_filter_silence_hist_count = 0;
+        } else {
+            int slot = synth_filter_silence_hist_count % SYNTH_FILTER_SILENCE_HISTORY_LEN;
+            synth_filter_silence_hist_lp[slot] = lp_new;
+            synth_filter_silence_hist_bp[slot] = bp_new;
+            synth_filter_silence_hist_count++;
+        }
+    }
+
+    if (lp_new > SYNTH_FILTER_STATE_MAX) {
+        lp_new = SYNTH_FILTER_STATE_MAX;
+    }
+    if (lp_new < -SYNTH_FILTER_STATE_MAX) {
+        lp_new = -SYNTH_FILTER_STATE_MAX;
+    }
+    if (bp_new > SYNTH_FILTER_STATE_MAX) {
+        bp_new = SYNTH_FILTER_STATE_MAX;
+    }
+    if (bp_new < -SYNTH_FILTER_STATE_MAX) {
+        bp_new = -SYNTH_FILTER_STATE_MAX;
+    }
+
+    st->lp = lp_new;
+    st->bp = bp_new;
+
+    {
+        int out = 0;
+        if (mode_mask & SYNTH_FILTER_MODE_LP) {
+            out += lp_new;
+        }
+        if (mode_mask & SYNTH_FILTER_MODE_BP) {
+            out += bp_new;
+        }
+        if (mode_mask & SYNTH_FILTER_MODE_HP) {
+            out += hp;
+        }
+        return out;
     }
 }
