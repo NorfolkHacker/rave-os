@@ -2683,3 +2683,98 @@ primitives: `FILTER-CUTOFF`/`FILTER-RES`/`FILTER-MODE`/`FILTER-ROUTE`/
 `RING-PARTNER`/`RING-OFF`). Plan:
 `docs/superpowers/plans/2026-08-23-sid-filter-ringmod.md`. Spec:
 `docs/superpowers/specs/2026-08-23-sid-filter-ringmod-design.md`.
+
+## 2026-08-25 -- A per-voice arpeggio effect, a small self-contained addition on top of the SID-style synth
+
+Picked up a follow-on the user asked for once the filter+ring-mod work
+landed: a per-voice arpeggio, explicitly scoped as separate from and
+not a substitute for `docs/IDEAS.md`'s still-unbuilt sub-project (C)
+(a real note-sequencing language). Built as two SDD tasks against a
+design spec
+(`docs/superpowers/specs/2026-08-25-synth-arpeggio-design.md`, plan at
+`docs/superpowers/plans/2026-08-25-synth-arpeggio.md`), each landing in
+its own commit and host-tested before the next began.
+
+**Task 1: the core engine (`32c5f78`).** Six new per-voice fields on
+`struct synth_voice` -- `arp_notes[SYNTH_ARP_NOTES]` (4 slots),
+`arp_count`, `arp_active`, `arp_step`, `arp_step_rate`,
+`arp_step_counter` -- plus four setters (`synth_set_arp_note()`,
+`synth_arp_on()`, `synth_arp_off()`, `synth_set_arp_rate()`) and a new
+`synth_calc_arp_step_samples()` helper converting a millisecond rate
+into a plain countdown-to-threshold sample count (no Q8 envelope
+scaling), clamping 0/negative to 1 sample and anything over 10000ms to
+10000ms. `synth_render_half()` gained per-sample arpeggio stepping
+right after the phase accumulator advance: once `arp_step_counter`
+reaches `arp_step_rate` it wraps `arp_step` via modulo and reloads
+`phase_increment` from `arp_notes[arp_step]`, independent of the
+voice's plain `ONA` pitch -- an arpeggiating voice has no "stored ona"
+fallback. `synth_gate_on()` also picked up a priming fix: it now checks
+`arp_active` before the existing `phase_increment == 0` guard, so a
+voice that was `ARP-ON` but never had a plain `ONA` set still gets a
+valid starting pitch (from `arp_notes[0]`) instead of gating on silent,
+and resets `arp_step`/`arp_step_counter` to 0 so every `GATE-ON`
+restarts the pattern from its first note.
+
+**Task 2: the Forth control surface (`30d1fae`).** Four new bare words
+-- `ARP-NOTE`, `ARP-ON`, `ARP-OFF`, `ARP-RATE` -- wiring Forth
+primitives through `kernel.c` hooks to Task 1's setters, following this
+feature line's established hard-vs-soft validation split: `ARP-NOTE`
+hard-errors on an out-of-range slot (0-3, `BAD ARP SLOT`) or note (1-88,
+`BAD ARP NOTE`); `ARP-ON` hard-errors on an out-of-range count (2-4,
+`BAD ARP COUNT`); `ARP-RATE` clamps gracefully inside
+`synth_set_arp_rate()` itself with no Forth-level check, matching
+`DUTY`/`FILTER-CUTOFF`'s convention; `ARP-OFF` takes no stack args and,
+like `RING-OFF`, does not call `audio_ensure_stream_started()` since it
+only silences an already-active voice. Verified via headless QEMU:
+`0 VOICE 1 WAVE 1 ONA 10 50 80 500 ADSR GATE-ON` to gate a static
+low note, then `1 0 ARP-NOTE 40 1 ARP-NOTE 80 2 ARP-NOTE 3 ARP-ON
+2 ARP-RATE` to arm a 3-note (ona 1/40/80) pattern at a 2ms step rate,
+then `GATE-OFF` -- the console screendump showed all three lines echoed
+back with no error text. The originally-planned wall-clock-timestamp
+method for locating the region boundary in the recording didn't line up
+with the real WAV (per-keystroke monitor-socket typing latency shifted
+the actual transition by ~15s versus the plan's assumed ~1.2s), so the
+region boundaries were instead derived directly from a 100ms-window
+zero-crossing-rate/RMS scan of the WAV itself. Two large interior
+windows picked from that scan: region A (static `ona 1`, before
+`ARP-ON`), `samples[44100:683550]`, 14.50s, zcr/sec = 28.07; region B
+(the 3-note arpeggio, after `ARP-ON`), `samples[732060:882000]`, 3.40s,
+zcr/sec = 1955.59 -- a sustained ~69.7x step change coincident with
+`ARP-ON`, not a gradual drift or noise, and not consistent with
+`ARP-ON` being a no-op.
+
+**Host-tested throughout.** `kernel/tests/test_synth.c` grew from 35 to
+46 tests in Task 1 (11 new arpeggio tests: setter validation, rate
+clamping, 2- and 4-note stepping order and wraparound, `GATE-ON`
+restart and ONA-less priming, stepping through release, `ARP-OFF`/
+`ARP-ON` resume without reloading notes, `synth_init()` state reset,
+and continued respect for filter routing and ring modulation), part of
+the same 5-suite host regression run
+(`test_synth`/`test_context_switch`/`test_font`/`test_scheduler`/
+`test_editor`) this project has used since the concurrency work -- all
+5 PASS in both tasks, both under host `gcc -m32` and under
+`i686-elf-gcc -mgeneral-regs-only` freestanding compilation, with zero
+new compiler warnings.
+
+**A real-hardware verification pass is still pending**, the same bar
+every prior piece of the audio subsystem has been held to.
+
+**Known minor gaps, deferred, not fixed here:**
+
+- Task 1: `arp_step_rate`'s "1" default is duplicated between
+  `synth_init()` and `synth_calc_arp_step_samples(0)`'s own clamp --
+  brief-mandated, not a defect.
+- Task 2: the report narrates the intermediate 100ms scan rather than
+  pasting its raw output, so that scan itself isn't independently
+  re-checkable (the final region measurement it fed into is); and
+  `ARP-RATE`'s clamp behavior lives in Task 1's `synth.c`, outside
+  Task 2's own diff -- already covered by Task 1's host tests.
+
+Files: `kernel/audio/synth.h`/`.c` (arpeggio state, setters, timing
+helper, render-loop stepping, `GATE-ON` priming fix);
+`kernel/tests/test_synth.c` (35 -> 46 tests); `kernel/forth/forth_hooks.h`
+(4 new declarations); `kernel/kernel.c` (4 new `forth_hook_synth_arp_*`
+functions); `kernel/forth/forth.c` (4 new primitives: `ARP-NOTE`/
+`ARP-ON`/`ARP-OFF`/`ARP-RATE`). Plan:
+`docs/superpowers/plans/2026-08-25-synth-arpeggio.md`. Spec:
+`docs/superpowers/specs/2026-08-25-synth-arpeggio-design.md`.
