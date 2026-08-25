@@ -191,29 +191,22 @@ static void append_split_lines(struct console_output *co, char *buf) {
 #define TITLE_TEXT "RAVE-OS"
 #define TITLE_Y 40
 #define TITLE_SCALE 4
-#define SUBTITLE_TEXT "KERNEL: GUI PRIMITIVES ONLINE"
-#define SUBTITLE_Y 90
-#define SUBTITLE_SCALE 2
 
 static void draw_title_subtitle(int w) {
     text_puts((w - text_width(TITLE_TEXT, TITLE_SCALE)) / 2, TITLE_Y, TITLE_TEXT, TEXT_ACCENT_COLOR, TITLE_SCALE);
-    text_puts((w - text_width(SUBTITLE_TEXT, SUBTITLE_SCALE)) / 2, SUBTITLE_Y, SUBTITLE_TEXT, TEXT_MUTED_COLOR,
-              SUBTITLE_SCALE);
 }
 
-/* Bounding box of both the title and subtitle, treated as one unit --
- * they're small and always redrawn together, so there's no need to track
- * them as two separately-damaged regions. */
+/* Bounding box of the title text -- kept as its own function (rather
+ * than inlined at its call sites) since the desktop's damage tracking
+ * needs the same rect draw_title_subtitle() just painted. */
 static void title_block_rect(int w, int *x0, int *y0, int *x1, int *y1) {
     int title_w = text_width(TITLE_TEXT, TITLE_SCALE);
-    int subtitle_w = text_width(SUBTITLE_TEXT, SUBTITLE_SCALE);
     int title_x = (w - title_w) / 2;
-    int subtitle_x = (w - subtitle_w) / 2;
 
-    *x0 = title_x < subtitle_x ? title_x : subtitle_x;
+    *x0 = title_x;
     *y0 = TITLE_Y;
-    *x1 = (title_x + title_w) > (subtitle_x + subtitle_w) ? (title_x + title_w) : (subtitle_x + subtitle_w);
-    *y1 = SUBTITLE_Y + GLYPH_HEIGHT * SUBTITLE_SCALE;
+    *x1 = title_x + title_w;
+    *y1 = TITLE_Y + GLYPH_HEIGHT * TITLE_SCALE;
 }
 
 /* The window's full painted extent, border included -- matches the
@@ -1311,6 +1304,196 @@ static void seed_bin_paint_script(void) {
     fs_create_file(BIN_PAINT_PATH, bin_paint_default, (unsigned int)(sizeof(bin_paint_default) - 1));
 }
 
+/* Seeds four self-contained /BIN scripts demonstrating the synth's
+ * Forth surface (VOICE/WAVE/ONA/ADSR/GATE-ON, the resonant filter,
+ * ring modulation, and the arpeggio engine) -- same idempotent
+ * fs_create_file() write-once shape as seed_bin_paint_script() above,
+ * so a user who EDITs and rewrites one keeps their own version across
+ * reboots. None of these use Forth-level comments (this dialect has
+ * none -- see forth.c's handle_compile_token()/handle_immediate_token(),
+ * neither recognizes "(" or "\\"); a stray comment token would just
+ * fail to parse as UNKNOWN. SPIN busy-loops a counted number of
+ * scheduler yields as this dialect's only available stand-in for a
+ * millisecond delay (there's no WAIT/MS primitive) -- each demo defines
+ * its own copy rather than sharing one across files, since every RUN
+ * gets its own fresh forth_vm (see run_program_entry()) with no shared
+ * dictionary between scripts. Every looping demo exits on a right click
+ * (MOUSE-RIGHT-DOWN?), the same convention PLOOP above already
+ * established, rather than WINDOW-CLOSED? -- that hook is hardcoded to
+ * the Paint window specifically (see forth_hook_window_closed()) and
+ * would immediately end any of these before they'd even started. */
+#define BIN_SCALE_PATH "/BIN/SCALE"
+#define BIN_FSWEEP_PATH "/BIN/FSWEEP"
+#define BIN_RINGMOD_PATH "/BIN/RINGMOD"
+#define BIN_ARPCHORD_PATH "/BIN/ARPCHORD"
+
+static void seed_bin_synth_demos(void) {
+    /* Plays an ascending chromatic run (piano keys 40-52, C4 to C5) on
+     * a plain sawtooth voice, gate-on/gate-off per note -- the
+     * baseline synth (no filter, ring mod, or arp) before the other
+     * three demos layer effects on top of it. */
+    static const char bin_scale_default[] =
+        ": SPIN\n"
+        "  BEGIN\n"
+        "    1 -\n"
+        "    DUP 0 =\n"
+        "  UNTIL\n"
+        "  DROP\n"
+        ";\n"
+        ": NSTEP\n"
+        "  DUP ONA\n"
+        "  GATE-ON\n"
+        "  30 SPIN\n"
+        "  GATE-OFF\n"
+        "  10 SPIN\n"
+        "  1 +\n"
+        ";\n"
+        ": SCALE\n"
+        "  0 VOICE\n"
+        "  1 WAVE\n"
+        "  5 30 90 50 ADSR\n"
+        "  40\n"
+        "  BEGIN\n"
+        "    NSTEP\n"
+        "    DUP 52 >\n"
+        "    MOUSE-RIGHT-DOWN? +\n"
+        "  UNTIL\n"
+        "  DROP\n"
+        ";\n"
+        "SCALE\n";
+    /* Sweeps the shared resonant filter's cutoff up and down over a
+     * sustained sawtooth, lowpass mode with a resonant peak, so the
+     * classic sweep is audible; right-click to stop. */
+    static const char bin_fsweep_default[] =
+        ": SPIN\n"
+        "  BEGIN\n"
+        "    1 -\n"
+        "    DUP 0 =\n"
+        "  UNTIL\n"
+        "  DROP\n"
+        ";\n"
+        ": HOLD\n"
+        "  25 SPIN\n"
+        ";\n"
+        ": STEP\n"
+        "  DUP FILTER-CUTOFF\n"
+        "  HOLD\n"
+        ";\n"
+        ": SWEEPUP\n"
+        "  BEGIN\n"
+        "    STEP\n"
+        "    2 +\n"
+        "    DUP 250 >\n"
+        "  UNTIL\n"
+        ";\n"
+        ": SWEEPDOWN\n"
+        "  BEGIN\n"
+        "    STEP\n"
+        "    2 -\n"
+        "    DUP 20 <\n"
+        "  UNTIL\n"
+        ";\n"
+        ": FSWEEP\n"
+        "  0 VOICE\n"
+        "  1 WAVE\n"
+        "  40 ONA\n"
+        "  30 300 70 400 ADSR\n"
+        "  1 FILTER-ROUTE\n"
+        "  12 FILTER-RES\n"
+        "  1 FILTER-MODE\n"
+        "  GATE-ON\n"
+        "  20\n"
+        "  BEGIN\n"
+        "    SWEEPUP\n"
+        "    SWEEPDOWN\n"
+        "    MOUSE-RIGHT-DOWN?\n"
+        "  UNTIL\n"
+        "  DROP\n"
+        "  GATE-OFF\n"
+        ";\n"
+        "FSWEEP\n";
+    /* Voice 0 (triangle) holds a sustained carrier note; voice 1 is a
+     * silent (never gated) modulator whose pitch sweeps up and down --
+     * only its phase feeds voice 0's ring-mod fold (see
+     * synth_osc_sample()'s WAVE_TRIANGLE case), so it's never audible
+     * on its own. Right-click to stop. */
+    static const char bin_ringmod_default[] =
+        ": SPIN\n"
+        "  BEGIN\n"
+        "    1 -\n"
+        "    DUP 0 =\n"
+        "  UNTIL\n"
+        "  DROP\n"
+        ";\n"
+        ": PSTEP\n"
+        "  1 VOICE\n"
+        "  DUP ONA\n"
+        "  0 VOICE\n"
+        "  15 SPIN\n"
+        ";\n"
+        ": RUP\n"
+        "  BEGIN\n"
+        "    PSTEP\n"
+        "    1 +\n"
+        "    DUP 60 >\n"
+        "  UNTIL\n"
+        ";\n"
+        ": RDOWN\n"
+        "  BEGIN\n"
+        "    PSTEP\n"
+        "    1 -\n"
+        "    DUP 20 <\n"
+        "  UNTIL\n"
+        ";\n"
+        ": RINGMOD\n"
+        "  0 VOICE\n"
+        "  2 WAVE\n"
+        "  30 ONA\n"
+        "  20 100 90 500 ADSR\n"
+        "  1 VOICE\n"
+        "  30 ONA\n"
+        "  0 VOICE\n"
+        "  1 RING-PARTNER\n"
+        "  GATE-ON\n"
+        "  20\n"
+        "  BEGIN\n"
+        "    RUP\n"
+        "    RDOWN\n"
+        "    MOUSE-RIGHT-DOWN?\n"
+        "  UNTIL\n"
+        "  DROP\n"
+        "  RING-OFF\n"
+        "  GATE-OFF\n"
+        ";\n"
+        "RINGMOD\n";
+    /* Sets up a 4-note C-major-add-octave pattern (C4 E4 G4 C5) on a
+     * pulse voice and starts the arpeggio engine -- unlike the other
+     * three, needs no BEGIN...UNTIL loop at all: the arpeggio's own
+     * per-sample stepping (synth_render_half(), synth.c) keeps cycling
+     * on its own once gated on, entirely independent of this script,
+     * which just sets state and returns. */
+    static const char bin_arpchord_default[] =
+        ": ARPCHORD\n"
+        "  0 VOICE\n"
+        "  0 WAVE\n"
+        "  50 DUTY\n"
+        "  10 60 80 300 ADSR\n"
+        "  40 0 ARP-NOTE\n"
+        "  44 1 ARP-NOTE\n"
+        "  47 2 ARP-NOTE\n"
+        "  52 3 ARP-NOTE\n"
+        "  4 ARP-ON\n"
+        "  90 ARP-RATE\n"
+        "  GATE-ON\n"
+        ";\n"
+        "ARPCHORD\n";
+
+    fs_create_file(BIN_SCALE_PATH, bin_scale_default, (unsigned int)(sizeof(bin_scale_default) - 1));
+    fs_create_file(BIN_FSWEEP_PATH, bin_fsweep_default, (unsigned int)(sizeof(bin_fsweep_default) - 1));
+    fs_create_file(BIN_RINGMOD_PATH, bin_ringmod_default, (unsigned int)(sizeof(bin_ringmod_default) - 1));
+    fs_create_file(BIN_ARPCHORD_PATH, bin_arpchord_default, (unsigned int)(sizeof(bin_arpchord_default) - 1));
+}
+
 /* Holds files cut/copied from the FILES window, independent of the
  * current listing/selection so it survives navigating to a different
  * directory before pasting -- the whole point of "select, then navigate,
@@ -2120,6 +2303,7 @@ void kmain(void) {
     fx_enabled = fx_default_from_config();
 
     seed_bin_paint_script();
+    seed_bin_synth_demos();
 
     /* Seeds one real script into /BIN so RUN has something to actually
      * run -- there's no in-OS text editor yet, so this is the only way

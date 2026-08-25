@@ -2779,3 +2779,84 @@ functions); `kernel/forth/forth.c` (4 new primitives: `ARP-NOTE`/
 `ARP-ON`/`ARP-OFF`/`ARP-RATE`). Plan:
 `docs/superpowers/plans/2026-08-25-synth-arpeggio.md`. Spec:
 `docs/superpowers/specs/2026-08-25-synth-arpeggio-design.md`.
+
+## 2026-08-25 — Boot-screen cleanup, and four seeded /BIN synth demo scripts
+
+Two small, unrelated changes to `kernel/kernel.c`.
+
+**Boot-screen cleanup.** The desktop's centered `"KERNEL: GUI
+PRIMITIVES ONLINE"` subtitle (`draw_title_subtitle()`, dated back to
+Stage B's first GUI primitives) is gone -- just the `"RAVE-OS"` title
+remains. `title_block_rect()` (the desktop's damage-tracking rect for
+this text) shrank to match, since it no longer needs to union two
+labels' bounding boxes into one.
+
+**Four demo scripts**, seeded into `/BIN` the same idempotent,
+write-once way `seed_bin_paint_script()` already seeds `/BIN/PAINT`
+(a new `seed_bin_synth_demos()`, called right after it in `kmain()`):
+`SCALE` (a plain sawtooth chromatic run, C4-C5, no effects -- the
+baseline before the other three layer something on top), `FSWEEP`
+(a resonant lowpass sweep over a sustained sawtooth), `RINGMOD`
+(a triangle carrier with a silent, never-gated modulator voice sweeping
+underneath it -- only its phase feeds the carrier's ring-mod fold, see
+`synth_osc_sample()`'s `WAVE_TRIANGLE` case), and `ARPCHORD` (a 4-note
+C-major-add-octave pattern through the arpeggio engine). The three
+looping demos exit on a right click (`MOUSE-RIGHT-DOWN?`), matching
+`PLOOP`'s own convention, rather than `WINDOW-CLOSED?` -- that hook is
+hardcoded to the Paint window (`forth_hook_window_closed()`) and would
+end any of these before they'd started. `ARPCHORD` needs no loop at
+all: the arpeggio engine keeps stepping on its own once gated on
+(`synth_render_half()`), independent of the script that armed it. None
+of the four use Forth-level comments -- this dialect has none (neither
+`handle_compile_token()` nor `handle_immediate_token()` recognizes `(`
+or `\`); a stray comment token would just fail to parse as `UNKNOWN`.
+Every looping demo defines its own private `SPIN` word (a counted
+busy-loop of `BEGIN...UNTIL`'s automatic per-iteration
+`OP_CALL_YIELD`s) as this dialect's only available stand-in for a
+millisecond delay -- there's no `WAIT`/`MS` primitive, and no shared
+dictionary between scripts since every `RUN` gets its own fresh
+`forth_vm`.
+
+**Verified two ways.** First, headlessly and exactly: a throwaway host
+program (`gcc`, not the cross-compiler) linked the real
+`kernel/forth/forth.c` unmodified against stub `forth_hook_*`
+implementations recording every call, then ran each of the four
+scripts' exact on-disk text (diffed byte-for-byte against the string
+literals embedded in `kernel.c` first, to make sure the harness wasn't
+quietly testing a stale copy) through `forth_eval_line()` the same
+line-by-line way `run_program_entry()` does. All four completed with
+`vm.error[0]` empty throughout and the expected hook-call shape:
+`SCALE` set `ONA` across exactly 40..52 with matched gate-on/gate-off
+counts; `FSWEEP` swept `FILTER-CUTOFF` across the intended range with
+`FILTER-ROUTE` set once and exactly one gate-on/gate-off pair (its
+sweep does overshoot the nominal 20-250 bound by one 2-unit step at
+each turnaround -- the tail value from one phase's exit condition gets
+set once before the next phase's own decrement kicks in -- harmless,
+still inside the filter's valid 0-255 domain, and not worth the extra
+complexity to trim); `RINGMOD` set ring partner voice 1, called
+`RING-OFF`, and gated on/off exactly once; `ARPCHORD` armed the exact
+40/44/47/52 pattern, called `ARP-ON` with count 4, gated on exactly
+once, and -- confirming it truly never loops -- never polled
+`MOUSE-RIGHT-DOWN?` at all. Second, in QEMU: rebuilt clean
+(`i686-elf-gcc`, zero new warnings beyond the pre-existing RWX-segment
+linker warning) and booted; the desktop rendered with the subtitle
+gone and the taskbar/MENU intact, confirmed via screenshot. Driving
+the start menu itself through QEMU's monitor socket (relative PS/2
+`mouse_move`/`mouse_button`, no host input-automation tooling) worked
+for the first click but not reliably beyond it -- the QEMU window
+itself moved on screen between screenshots, invalidating the
+screenshot-pixel-to-guest-coordinate math static crop offsets were
+built on -- so `RUN SCALE`/`FSWEEP`/`RINGMOD`/`ARPCHORD` from the live
+FORTH console were not exercised interactively this pass. Not treated
+as a blocking gap: the host-side pass above already runs the identical
+interpreter against the identical on-disk bytes.
+
+**Known gap, deferred:** no live-QEMU interactive confirmation of `RUN
+SCALE`/`FSWEEP`/`RINGMOD`/`ARPCHORD` from the FORTH console (see
+above) -- worth a real audio-out pass (`-audiodev pa,id=snd0 -device
+sb16,audiodev=snd0`, per the README) next time QEMU is driven
+interactively rather than headlessly.
+
+Files: `kernel/kernel.c` (`draw_title_subtitle()`/`title_block_rect()`
+trimmed; new `seed_bin_synth_demos()` seeding `/BIN/SCALE`,
+`/BIN/FSWEEP`, `/BIN/RINGMOD`, `/BIN/ARPCHORD`, called from `kmain()`).
