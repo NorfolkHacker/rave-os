@@ -2851,11 +2851,44 @@ FORTH console were not exercised interactively this pass. Not treated
 as a blocking gap: the host-side pass above already runs the identical
 interpreter against the identical on-disk bytes.
 
-**Known gap, deferred:** no live-QEMU interactive confirmation of `RUN
-SCALE`/`FSWEEP`/`RINGMOD`/`ARPCHORD` from the FORTH console (see
-above) -- worth a real audio-out pass (`-audiodev pa,id=snd0 -device
-sb16,audiodev=snd0`, per the README) next time QEMU is driven
-interactively rather than headlessly.
+**Follow-up (same day): live-QEMU audio confirmation for `RUN SCALE`.**
+The gap above is closed. First attempt used a real SDL display driven
+via the monitor socket's `mouse_move`/`mouse_button`/`sendkey` --
+technically worked (menu, FORTH window, and `RUN SCALE` all landed
+correctly) but the SDL window kept moving/regrabbing on the host
+desktop between screenshots, at one point even triggering the host
+window manager's own activity-switcher overview -- real interference
+with the interactive session driving this, not just a cosmetic
+nuisance. Abandoned that approach entirely rather than fight it
+further. Re-ran fully headless instead: `-display none` plus the
+monitor's own `screendump` command (writes the guest framebuffer
+straight to a PPM file, no host window, no grab, nothing to move) for
+every click, and `-audiodev wav` to capture actual output samples. With
+a real screen-pixel-exact 640x480 dump instead of a scaled host
+screenshot, the menu/FORTH/input-field clicks all landed on the first
+try. Typed `RUN SCALE` into the FORTH input field, screendumped
+*before* pressing Enter to confirm the exact text landed (`RUN SCALE`,
+no typos), then submitted.
+
+The WAV capture (44.1kHz stereo) went from the constant silence value
+to genuine signal at t=0.09s, held it through t=1.75s, then returned to
+silence -- 144,250 non-silent samples, RMS 10000-17000 out of a ±32768
+range throughout (a strong, clearly audible level, not noise). A
+50ms-window zero-crossing-rate scan across that span climbed
+close-to-monotonically from 520/s to 1060/s -- almost exactly a 2x
+increase, matching a one-octave chromatic run's frequency ratio
+(2^(12/12) = 2) between its first and last note. That's `SCALE`'s
+13-note C4-C5 run (see the previous entry), audibly and measurably
+correct, not just "some sound happened."
+
+One earlier attempt (before finding the headless approach) tried a
+direct, immediate-mode `GATE-ON` typed through the SDL/grab path above
+and showed zero non-silent samples for its whole ~160s recording --
+almost certainly a mistyped `sendkey minus` for the `-` in `GATE-ON`
+silently producing `GATEON` (`UNKNOWN`, gate never actually fired) that
+went unnoticed because that session never screendumped the input field
+before submitting. The headless pass's before-submit screendump habit
+exists specifically because of that near-miss.
 
 Files: `kernel/kernel.c` (`draw_title_subtitle()`/`title_block_rect()`
 trimmed; new `seed_bin_synth_demos()` seeding `/BIN/SCALE`,
