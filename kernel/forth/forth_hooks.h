@@ -39,11 +39,16 @@ int forth_hook_window_closed(void);
 
 /* Sub-project (B): the 8-voice synthesizer's manual control surface.
  * VOICE selects which of the 8 voices WAVE/DUTY/ONA/ADSR/GATE-ON/
- * GATE-OFF act on -- the same "select a context, then act on it" shape
+ * GATE-OFF/FILTER-ROUTE/RING-PARTNER/RING-OFF/ARP-NOTE/ARP-ON/ARP-OFF/
+ * ARP-RATE act on -- the same "select a context, then act on it" shape
  * PAINT's own current_color selection already uses in this codebase,
  * just driven by a Forth word instead of a mouse click since there's
- * no picker UI for voices. See
- * docs/superpowers/specs/2026-08-23-sid-synth-design.md. */
+ * no picker UI for voices. FILTER-CUTOFF/FILTER-RES/FILTER-MODE are
+ * the exception -- they set the one shared filter's global settings,
+ * not anything per-voice. See
+ * docs/superpowers/specs/2026-08-23-sid-synth-design.md,
+ * docs/superpowers/specs/2026-08-23-sid-filter-ringmod-design.md, and
+ * docs/superpowers/specs/2026-08-25-synth-arpeggio-design.md. */
 void forth_hook_synth_voice(int voice);
 void forth_hook_synth_wave(int wave);
 void forth_hook_synth_duty(int duty_percent);
@@ -57,5 +62,9 @@ void forth_hook_synth_filter_mode(int mode_mask);
 void forth_hook_synth_filter_route(int routed);
 void forth_hook_synth_ring_partner(int partner);
 void forth_hook_synth_ring_off(void);
+void forth_hook_synth_arp_note(int note, int slot);
+void forth_hook_synth_arp_on(int count);
+void forth_hook_synth_arp_off(void);
+void forth_hook_synth_arp_rate(int ms);
 
 #endif
