@@ -2991,3 +2991,68 @@ through; `kmain()` gets a `struct boot_splash splash` local,
 `boot_splash_init()` at startup, per-iteration `boot_splash_tick()`, the
 new spin-not-hlt branch, and `splash_just_hid` threaded into the
 `update_and_present()` call).
+
+## 2026-08-26 -- Floating-point spike, then scoping `-mgeneral-regs-only` off the whole kernel
+
+Raised directly, picked as the smaller of `docs/IDEAS.md`'s two
+remaining open large items (real userspace being the other, explicitly
+bigger). Ran as a throwaway spike first, per
+`superpowers:brainstorming` -- no repo files touched, just ad-hoc
+`i686-elf-gcc`/`objdump` probes in a scratch dir -- to answer two
+questions before committing to any real change: does dropping
+`-mgeneral-regs-only` actually let float/double compile on this
+target, and does the cooperative scheduler's `context_switch()` need
+real FPU state save/restore added to be safe.
+
+First answer: yes cleanly. `kernel.c` compiled with the flag simply
+omitted, zero errors (only `arch/isr.c`'s `__attribute__((interrupt))`
+handlers ever needed it). A probe `float`/`double` function disassembled
+to plain x87 instructions (`flds`/`fadds`/`fldl`/`faddl`) -- this
+target defaults to x87, not SSE, for float math, which matters because
+x87 needs only `CR0.EM=0` (the CPU's out-of-reset default, already true
+since nothing in this kernel ever touches `CR0`), while SSE would have
+needed an explicit `CR4.OSFXSR` enable this kernel has never done.
+
+Second answer, initially assumed true and stated as such when this
+spike was first reported, then disproven by actually testing it rather
+than trusting the assumption: `sched/context_switch.asm` only
+saves/restores the four callee-saved GP registers (`ebx`/`esi`/`edi`/
+`ebp`), and the naive worry was that two interleaved fibers both using
+floats could corrupt each other's in-flight x87 state across a switch.
+Disassembling a probe function that does float math on both sides of a
+`context_switch()` call showed GCC spilling the live float to a memory
+slot (`fstps`) *before* the call and reloading it (`flds`) *after* --
+even at `-O0`. The x87 register stack is fully call-clobbered per the
+standard ABI; GCC never keeps a float value resident in an ST register
+across any call, `context_switch()` included, so no fiber can ever
+observe another fiber's in-flight FPU state through a switch. The
+"landmine" was real for hand-written inline assembly that deliberately
+violates the ABI (nothing in this kernel does or has reason to) but not
+for ordinary C, so no FPU save/restore was added -- would have been
+dead code defending against a scenario the compiler already prevents.
+
+Implemented from there: moved `-mgeneral-regs-only` out of
+`kernel/Makefile`'s shared `CFLAGS` into an `isr.o`-only `ISR_CFLAGS`.
+Confirmed `isr.c`'s protection still holds, just via a different
+mechanism than the original Makefile comment implied -- a probe showed
+`-mgeneral-regs-only` doesn't reject a float-using function at compile
+time at all; it silently routes the arithmetic through libgcc
+soft-float calls instead of emitting any FPU/SSE instruction. Those
+symbols don't exist in this `-nostdlib` build, so `isr.c` using a float
+still fails to build, just as an undefined-reference link error instead
+of a compile error. No TDD cycle here -- this is a compiler-flag
+scoping change with no new logic, the kind of config change
+`superpowers:test-driven-development` calls out as the one exception
+category, and verification was a clean full rebuild plus the
+compile/link probes above.
+
+Verified: `make clean && make` rebuilds the full kernel with zero new
+warnings (only the pre-existing RWX-segment linker warning); a probe
+`float` function compiles cleanly under `kernel.c`'s flags and fails
+to link under `isr.o`'s. Nothing in the kernel actually uses floating
+point yet -- this closes the compiler-level barrier from
+`docs/IDEAS.md`'s floating-point entry, not the whole entry; what would
+actually use it is still open.
+
+Files: `kernel/Makefile` (`-mgeneral-regs-only` moved from `CFLAGS` to
+a new `ISR_CFLAGS`, used only by `isr.o`'s rule).

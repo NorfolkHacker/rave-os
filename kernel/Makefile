@@ -17,19 +17,29 @@ OBJCOPY := i686-elf-objcopy
 # lives in -- one build directory, not one per subsystem.
 INCLUDES := -I. -Iarch -Idrivers -Isched -Ifs -Iforth -Igfx -Igui -Iaudio
 
-# -mgeneral-regs-only: GCC's __attribute__((interrupt)) handlers (isr.c)
-# must never touch FPU/MMX/SSE registers -- there's no FPU state
-# save/restore around interrupt entry/exit, so any incidental use (even
-# compiler-generated) would corrupt whatever the interrupted code was
-# doing with it. This also just suits a kernel with no FPU context
-# switching at all yet.
-#
 # No -m32 here anymore -- i686-elf-gcc has no other architecture to
 # default to, so it's redundant with a real cross-compiler (it was only
 # ever needed to make the host's own hosted gcc target 32-bit instead
 # of its native 64-bit). -ffreestanding/-nostdlib stay for explicitness
 # even though the target implies them too.
-CFLAGS := -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mgeneral-regs-only -nostdlib -Wall -Wextra $(INCLUDES)
+CFLAGS := -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -nostdlib -Wall -Wextra $(INCLUDES)
+
+# -mgeneral-regs-only, isr.o only: GCC's __attribute__((interrupt))
+# handlers (isr.c) must never touch FPU/MMX/SSE registers -- there's no
+# FPU state save/restore around interrupt entry/exit, so any incidental
+# use (even compiler-generated) would corrupt whatever the interrupted
+# code was doing with it. Everywhere else this used to blanket-forbid
+# float/double kernel-wide for no reason tied to interrupts at all --
+# scoped down here (see docs/IDEAS.md's 2026-08-26 floating-point entry)
+# once a spike confirmed the one real risk this seemed to guard against
+# outside interrupts, FPU state surviving a context_switch() fiber
+# swap, doesn't actually exist: the x87 register stack is fully
+# call-clobbered per the standard ABI, and GCC always spills any live
+# float to memory before a call (context_switch() included) and reloads
+# it after -- confirmed by disassembly, not just ABI docs. No FPU
+# save/restore was added to sched/context_switch.asm as a result; none
+# is needed for compiler-generated code.
+ISR_CFLAGS := $(CFLAGS) -mgeneral-regs-only
 
 C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o sb16.o fs.o editor.o serial.o scheduler.o synth.o boot_splash.o
 
@@ -57,7 +67,7 @@ pic.o: arch/pic.c arch/pic.h arch/io.h
 	$(CC) $(CFLAGS) -c arch/pic.c -o pic.o
 
 isr.o: arch/isr.c arch/idt.h arch/pic.h arch/io.h arch/interrupts.h drivers/keyboard.h drivers/mouse.h gfx/graphics.h gfx/text.h drivers/sb16.h
-	$(CC) $(CFLAGS) -c arch/isr.c -o isr.o
+	$(CC) $(ISR_CFLAGS) -c arch/isr.c -o isr.o
 
 graphics.o: gfx/graphics.c gfx/graphics.h boot_info.h
 	$(CC) $(CFLAGS) -c gfx/graphics.c -o graphics.o

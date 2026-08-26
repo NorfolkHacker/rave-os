@@ -280,3 +280,24 @@ not a queue.
   entry/exit -- plus deciding what would actually use it (a nicer synth
   filter? real VBE mode math?) since nothing currently needs it enough
   to justify the lift.
+
+  The compiler-level barrier is gone as of 2026-08-26 (see
+  `docs/BUILD_LOG.md`'s entry for the same date): a spike first checked
+  whether `context_switch()`'s cooperative fiber swap (see the
+  userspace entry above) needed real FPU save/restore too, since it
+  only saves the four GP callee-saved registers. Disassembly showed it
+  doesn't -- the x87 register stack is fully call-clobbered per the
+  standard ABI, and GCC always spills any live float to memory before a
+  call (`context_switch()` included) and reloads it after, so no fiber
+  can ever observe another fiber's in-flight FPU state through a
+  switch. `-mgeneral-regs-only` moved from the kernel-wide `CFLAGS` to
+  an `isr.o`-only `ISR_CFLAGS` in `kernel/Makefile`, with no
+  `context_switch.asm` changes needed. `float`/`double` now compile
+  cleanly everywhere except `arch/isr.c` (confirmed: a probe function
+  with `-mgeneral-regs-only` doesn't error at compile time, it silently
+  routes float arithmetic through libgcc soft-float calls instead of
+  touching any FPU/SSE register -- which don't exist in this
+  `-nostdlib` build, so `isr.c` using a float still fails, just at link
+  time instead of compile time). Nothing in the kernel actually uses
+  floating point yet -- what would (a nicer synth filter? real VBE mode
+  math?) is still an open, separate question.
