@@ -41,7 +41,7 @@ CFLAGS := -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-
 # is needed for compiler-generated code.
 ISR_CFLAGS := $(CFLAGS) -mgeneral-regs-only
 
-C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o sb16.o fs.o editor.o serial.o scheduler.o synth.o boot_splash.o
+C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o sb16.o fs.o editor.o serial.o scheduler.o synth.o boot_splash.o paging.o
 
 all: kernel.bin
 
@@ -68,6 +68,9 @@ pic.o: arch/pic.c arch/pic.h arch/io.h
 
 isr.o: arch/isr.c arch/idt.h arch/pic.h arch/io.h arch/interrupts.h drivers/keyboard.h drivers/mouse.h gfx/graphics.h gfx/text.h drivers/sb16.h
 	$(CC) $(ISR_CFLAGS) -c arch/isr.c -o isr.o
+
+paging.o: arch/paging.c arch/paging.h
+	$(CC) $(CFLAGS) -c arch/paging.c -o paging.o
 
 graphics.o: gfx/graphics.c gfx/graphics.h boot_info.h
 	$(CC) $(CFLAGS) -c gfx/graphics.c -o graphics.o
