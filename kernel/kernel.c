@@ -22,6 +22,7 @@
 #include "shell.h"
 #include "editor.h"
 #include "boot_splash.h"
+#include "paging.h"
 #include "io.h"
 #include "ata.h"
 #include "sb16.h"
@@ -2302,6 +2303,7 @@ void kmain(void) {
      * enabled once both are ready. */
     serial_init();
     interrupts_init();
+    paging_enable();
     mouse_init();
     interrupts_enable();
 

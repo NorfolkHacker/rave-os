@@ -267,6 +267,25 @@ not a queue.
   into the kernel binary -- a large, foundational lift, not an
   incremental one.
 
+  (A), paging itself, has now also shipped, 2026-08-26 (see
+  `docs/superpowers/specs/2026-08-26-paging-design.md` and
+  `docs/BUILD_LOG.md`'s entry for the same date): `kernel/arch/paging.c`/
+  `.h` builds a single static page directory of 4MB PSE pages
+  identity-mapping physical memory 1:1 (every address maps to itself,
+  proven a true no-op for the kernel's own code, stack, `boot_info`,
+  backbuffer, and the real VBE framebuffer in headless-QEMU
+  verification), switched on in `kmain()` right after
+  `interrupts_init()`. `kernel/arch/isr.c`'s page-fault handler now
+  reports the faulting address and error code instead of a bare
+  generic banner, confirmed to actually fire correctly against a
+  deliberately-unmapped address. This is only the foundation, though:
+  no guard pages, no ring 3, and no per-process address spaces exist
+  yet -- every mapped page is supervisor-only and there's still exactly
+  one address space, shared by every fiber, identical to before this
+  landed. (B) ring 3 + a minimal syscall ABI, (C) a real syscall
+  surface for existing kernel services, and (D) a loadable/relocatable
+  program format all remain entirely unbuilt, separate future work.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the

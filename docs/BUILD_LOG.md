@@ -3149,3 +3149,99 @@ rebuilding `VBE_MODE=0x112`); scratch `.ppm`/monitor-socket/pidfile
 files cleaned up.
 
 Files: `boot/Makefile`, `boot/stage2.asm` (Task 1: overridable VBE_MODE); `kernel/kernel.c` (Task 2: scaled window positions); `docs/BUILD_LOG.md`, `docs/IDEAS.md` (Task 3: verification and doc closeout).
+
+## 2026-08-26 -- Identity-mapped paging switched on, verified in headless QEMU
+
+Closes sub-project (A) of `docs/IDEAS.md`'s "Real userspace" entry --
+paging is now genuinely on, for the first time in this kernel's
+history. Three-task plan
+(`docs/superpowers/sdd/2026-08-26-paging/`, design doc
+`docs/superpowers/specs/2026-08-26-paging-design.md`):
+
+**Task 1: `kernel/arch/paging.c`/`.h`.** A single static, page-aligned
+page directory (`page_directory[1024]`) built by
+`paging_build_directory()` and switched on by `paging_enable()`
+(`CR4.PSE`, `CR3` load, `CR0.PG`). Every mapped entry is a 4MB PSE
+page identity-mapping physical address `[i*4MB, (i+1)*4MB)` to the
+same virtual range -- PDEs 0 through 1015
+(`PAGING_IDENTITY_PDE_COUNT`), covering the low 4064MB of the 32-bit
+space with headroom past the VBE linear framebuffer's physical base,
+confirmed empirically at `0xFD000000` (PDE index 1012) for this
+build/QEMU combination. PDEs 1016-1023 (`0xFE000000` and up, the top
+32MB) are deliberately left unmapped -- free, since an unbuilt PDE
+already reads as not-present, and exactly the range this task's own
+throwaway verification (below) pokes at. 4MB pages (`CR4.PSE`) were
+chosen over a standard 4KB two-level scheme specifically to avoid
+needing any second-level page-table memory to reach the framebuffer's
+address: a real 4KB scheme would need a page table per mapped 4MB
+region (1024 x 4 bytes each) purely to reach `0xFD000000`, for no
+present benefit since nothing needs sub-4MB-granularity protection
+yet. Nothing here forecloses swapping the framebuffer's own 4MB region
+for a real 4KB-backed page table later, if per-page permissions ever
+matter.
+
+**Task 2: `kernel/arch/isr.c`.** `isr_page_fault` upgraded from the
+generic `panic("PANIC: UNHANDLED CPU EXCEPTION")` banner every other
+unhandled-exception ISR still uses to a dedicated
+`panic_with_addr("PANIC: PAGE FAULT", fault_addr, error_code)`, reading
+the faulting address out of `CR2` and rendering both it and the raw
+`#PF` error code as a second banner line -- but until this task, paging
+had never actually been turned on, so this code path had never once
+executed.
+
+**Task 3 (this entry): wiring `paging_enable()` into `kmain()`, and
+proving it end to end.** `kernel/kernel.c` now calls `paging_enable()`
+right after `interrupts_init()` and before `mouse_init()` /
+`interrupts_enable()` (so the `#PF` IDT gate is already live, and
+paging is fully established before anything IRQ-driven starts). The
+entire functional diff is two lines: the `#include "paging.h"` and the
+one `paging_enable();` call.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as the resolution-settings entry
+above), `disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480):
+
+- **Before/after regression (paging on, no deliberate fault):** booted
+  and screendumped twice -- once right after wiring in
+  `paging_enable()` alone, once again after the deliberate-fault test
+  below was added and then fully removed. Both screendumps show the
+  ordinary desktop: black backdrop, green cursor square, the taskbar's
+  green rule and `MENU` label at the bottom, no corruption, no hang
+  (the second dump, taken a few seconds later, also shows the
+  `RAVE-OS` boot splash already faded, confirming it settles to the
+  identical steady state as the first). This is the concrete proof the
+  identity map is a true no-op for every address the kernel actually
+  uses -- its own code/data, the stack, `boot_info`, the backbuffer,
+  and the real VBE framebuffer all keep working with paging live.
+- **Deliberate fault (proving the handler fires on real hardware, not
+  just that it compiles):** temporarily added
+  `*(volatile uint32_t *)0xFFFFFFF0 = 0;` directly after
+  `paging_enable();` (an address inside the deliberately-unmapped PDE
+  1016-1023 range), rebuilt, booted, and screendumped. The red panic
+  banner appeared immediately, reading exactly:
+  ```
+  PANIC: PAGE FAULT
+  ADDR=0XFFFFFFF0 CODE=0X00000002
+  ```
+  `ADDR=0XFFFFFFF0` matches the poked address exactly, confirming `CR2`
+  was read correctly and not some stale/other value. `CODE=0x00000002`
+  is binary `10`: bit 0 (Present) clear and bit 1 (Write) set, with
+  every higher bit also clear (not User-mode, not reserved-bit, not an
+  instruction fetch) -- exactly what a supervisor-mode write to a
+  not-present page should report, and nothing else. The deliberate
+  line (and the temporary `uint32_t` write) was then removed; `git diff
+  kernel/kernel.c` against the Task-1 state showed only the
+  `paging.h` include and the single `paging_enable();` call, and a
+  final rebuild + headless boot confirmed the desktop back to the same
+  normal state as the very first regression check.
+
+Verified: two full-boot regression screendumps (identity map is a
+no-op for real addresses in active use); one deliberate-fault
+screendump with the exact address and a correctly-decoded error code
+(the mechanism fires end-to-end, not just compiles); `git diff` showed
+a clean two-line functional change with no leftover debug code.
+Working tree left in its normal paging-enabled, no-deliberate-fault
+state; scratch `.ppm`/monitor-socket/pidfile files cleaned up.
+
+Files: `kernel/kernel.c` (wiring `paging_enable()` into `kmain()`);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
