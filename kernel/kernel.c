@@ -193,6 +193,16 @@ static void append_split_lines(struct console_output *co, char *buf) {
 #define TITLE_Y 40
 #define TITLE_SCALE 4
 
+/* The screen size every hardcoded window position below was originally
+ * hand-placed against. kmain() scales each one by the real w/h (from
+ * gfx_width()/gfx_height(), themselves read from boot_info at boot --
+ * see boot/stage2.asm's VBE_MODE) against this baseline, so the same
+ * relative layout holds at any built resolution. At the default
+ * 640x480 this is an exact no-op: multiplying and dividing by the
+ * same value never truncates. */
+#define BASELINE_W 640
+#define BASELINE_H 480
+
 /* No-ops once boot_splash_visible() goes false -- the banner is a
  * boot-time splash, not a permanent desktop fixture (see boot_splash.h).
  * Callers still call this unconditionally; the visibility check lives
@@ -1966,8 +1976,8 @@ void kmain(void) {
     boot_splash_init(&splash);
 
     /* Sized/positioned clear of the taskbar strip below it. */
-    windows[WIN_KIND_FORTH].x = 170;
-    windows[WIN_KIND_FORTH].y = 230;
+    windows[WIN_KIND_FORTH].x = 170 * w / BASELINE_W;
+    windows[WIN_KIND_FORTH].y = 230 * h / BASELINE_H;
     windows[WIN_KIND_FORTH].w = 400;
     windows[WIN_KIND_FORTH].h = 180;
     windows[WIN_KIND_FORTH].title = "RAVE-OS FORTH";
@@ -1989,8 +1999,8 @@ void kmain(void) {
     /* Sized for ~8 visible listing lines (see draw_files_group()) --
      * plenty for the current tree. Overlapping the other windows' corners
      * is fine, same as every other window here. */
-    windows[WIN_KIND_FILES].x = 420;
-    windows[WIN_KIND_FILES].y = 120;
+    windows[WIN_KIND_FILES].x = 420 * w / BASELINE_W;
+    windows[WIN_KIND_FILES].y = 120 * h / BASELINE_H;
     windows[WIN_KIND_FILES].w = 180;
     /* 26px taller than Stage D's height -- room for the new name-entry
      * field above the button footer, without shrinking the list's
@@ -2089,8 +2099,8 @@ void kmain(void) {
      * two don't land exactly on top of each other at boot (overlap
      * itself is harmless and expected -- every window here is
      * draggable). */
-    windows[WIN_KIND_SHELL].x = 200;
-    windows[WIN_KIND_SHELL].y = 260;
+    windows[WIN_KIND_SHELL].x = 200 * w / BASELINE_W;
+    windows[WIN_KIND_SHELL].y = 260 * h / BASELINE_H;
     windows[WIN_KIND_SHELL].w = 400;
     windows[WIN_KIND_SHELL].h = 180;
     windows[WIN_KIND_SHELL].title = "RAVE-OS SHELL";
@@ -2104,8 +2114,8 @@ void kmain(void) {
     /* Same 400x180 footprint FORTH/SHELL's own console panes already
      * use -- this is a single-region editable pane, not a
      * windowed-list-plus-footer shape like FILES. */
-    windows[WIN_KIND_EDITOR].x = 240;
-    windows[WIN_KIND_EDITOR].y = 240;
+    windows[WIN_KIND_EDITOR].x = 240 * w / BASELINE_W;
+    windows[WIN_KIND_EDITOR].y = 240 * h / BASELINE_H;
     windows[WIN_KIND_EDITOR].w = 400;
     windows[WIN_KIND_EDITOR].h = 180;
     windows[WIN_KIND_EDITOR].title = "RAVE-OS EDIT";
@@ -2132,8 +2142,8 @@ void kmain(void) {
      * screen) -- the same invariant a prior stage's default window
      * position violated and had to fix; checked deliberately this
      * time, including after this height change. */
-    windows[WIN_KIND_PAINT].x = 340;
-    windows[WIN_KIND_PAINT].y = 80;
+    windows[WIN_KIND_PAINT].x = 340 * w / BASELINE_W;
+    windows[WIN_KIND_PAINT].y = 80 * h / BASELINE_H;
     windows[WIN_KIND_PAINT].w = 272;
     windows[WIN_KIND_PAINT].h = 356;
     windows[WIN_KIND_PAINT].title = "RAVE-OS PAINT";
