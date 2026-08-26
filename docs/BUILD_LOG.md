@@ -3056,3 +3056,97 @@ actually use it is still open.
 
 Files: `kernel/Makefile` (`-mgeneral-regs-only` moved from `CFLAGS` to
 a new `ISR_CFLAGS`, used only by `isr.o`'s rule).
+
+## 2026-08-26 -- Build-time resolution selection, verified in headless QEMU at both sizes
+
+Closes `docs/IDEAS.md`'s "Different resolution settings" item -- the
+narrower, already-scoped-down slice of it (a build-time override plus
+scaling the GUI's own hardcoded layout, not stage2 probing/selecting
+among multiple VBE modes at runtime, which stays open). Three-task
+plan (`docs/superpowers/sdd/2026-08-26-resolution-settings/`):
+
+**Task 1: `boot/Makefile` + `boot/stage2.asm`.** A new `VBE_MODE`
+Makefile variable (default `0x112`, i.e. 640x480x32, unchanged)
+threaded through as a `-D VBE_MODE=...` NASM define into stage2's VBE
+mode-set call, replacing what had been hardcoded there. `make
+VBE_MODE=0x115` builds the same disk image at 800x600 instead.
+`disk.img`'s prerequisites don't include the Makefile itself, so
+switching this variable between builds needs `make clean` first --
+called out directly in the Makefile comment.
+
+**Task 2: `kernel/kernel.c`.** Every hardcoded window position
+(FORTH/FILES/SHELL/EDITOR/PAINT) scaled against the real screen size:
+`windows[...].x = 170 * w / BASELINE_W` etc, with `BASELINE_W`/
+`BASELINE_H` set to 640/480 -- the resolution every position was
+originally hand-placed against. Window *sizes* stay fixed (only
+position scales); at the default resolution the scaling is a true
+no-op since multiplying and dividing by the same value never
+truncates.
+
+**Task 3 (this entry): headless QEMU verification at both
+resolutions.** Built `boot/disk.img` at `VBE_MODE=0x112` and separately
+at `VBE_MODE=0x115`, booted each with `-display none -accel kvm`, and
+confirmed via the monitor's `screendump`:
+
+- **640x480 (default):** framebuffer header reports `640 480`; desktop
+  renders cleanly (taskbar, MENU, cursor, no corruption). Opened FORTH
+  via the start menu (mouse pinned to guest `(0,0)` first via an
+  oversized relative `mouse_move`, then exact relative deltas to the
+  MENU button center and the FORTH item -- see the mouse-motion
+  finding below); its window chrome (top-left of the titlebar border)
+  measured at `(168, 208)` against `windows[FORTH]` logical
+  `x=170, y=230` -- a constant `(-2, -22)` offset (2px border stroke,
+  22px titlebar height), i.e. the same position FORTH has always
+  rendered at, confirming the scaling math is a true no-op here.
+- **800x600 (`VBE_MODE=0x115`):** framebuffer header reports `800
+  600` (not `640 480` -- proves stage2 actually applied the override,
+  not just that the kernel booted); desktop renders cleanly, taskbar
+  spans the new full width and sits at the new bottom edge
+  (`y = 600 - TASKBAR_HEIGHT`). Opened FORTH the same way (button
+  center `(32, 588)`, item center `(32, 446)`); its window chrome
+  measured at `(210, 265)` against `windows[FORTH]` logical
+  `x = 170*800/640 = 212, y = 230*600/480 = 287` (the one case in the
+  scaling table that doesn't divide evenly -- both truncate from
+  `.5`) -- the *same* `(-2, -22)` chrome offset as the 640x480 case,
+  confirming the fixed titlebar-chrome height is genuinely resolution-
+  independent. The whole window (400x180, unscaled) sat fully inside
+  the 800x600 framebuffer with no clipping.
+
+**Mouse-motion finding, headless QEMU monitor.** Extends the
+SDL-window-grab account earlier in this log (the `RUN SCALE`
+follow-up entry above) with a second, unrelated headless-specific
+gotcha: even with `-display none` and pure `screendump`/`mouse_move`/
+`mouse_button` (no host window to move or grab), a single relative
+`mouse_move dx dy` sent right after a period of mouse inactivity (e.g.
+immediately after the origin-pinning move) would sometimes not move
+the guest cursor at all -- the monitor command was accepted
+(`info mice` showed no error) but no PS/2 packets reached the guest,
+confirmed by a temporary debug build that logged every drained mouse
+packet to the serial port. Retrying the identical `mouse_move` command
+a few times, or first sending a small throwaway nudge, reliably got it
+flowing again, after which exact deltas landed pixel-perfectly. The
+resulting technique, used for both resolutions above: send the move,
+screendump, and locate the cursor precisely (its 8x8 accent-colored
+square is distinctive enough to find by scanning for a solid same-
+colour block near the expected target, restricted to a small region
+around it to avoid matching taskbar/window-border pixels of the same
+colour); if the measured position isn't exactly the target, send one
+corrective `mouse_move` for the exact remaining delta and re-check.
+Every click in both resolutions' verification above was confirmed to
+land on-target this way before proceeding to the next step. This is a
+QEMU/PS2-emulation timing quirk, not a Rave-OS bug -- no kernel or
+driver code changed as a result (the temporary serial-debug prints
+added to `kernel/kernel.c` and `kernel/drivers/mouse.c` while
+diagnosing this were reverted before the final rebuild below; `git
+diff` against both files is empty).
+
+Verified: both `disk.img` builds' framebuffer sizes and desktop
+renders confirmed above; FORTH's position confirmed unchanged
+(unscaled) at 640x480 and correctly scaled with a matching chrome
+offset at 800x600, fully on-screen with no clipping. Working tree left
+in its normal default-build state (`cd boot && make clean && make`,
+rebuilding `VBE_MODE=0x112`); scratch `.ppm`/monitor-socket/pidfile
+files cleaned up.
+
+Files: none (verification-only task; `docs/BUILD_LOG.md`/`docs/IDEAS.md`
+are this entry's own docs update).

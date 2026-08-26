@@ -240,16 +240,17 @@ not a queue.
   replacement, not an optional second path). See
   `docs/BUILD_LOG.md`'s entry for the same date.
 
-- **Different resolution settings, not just the one hardcoded
-  640x480.** Raised 2026-08-20. `boot/stage2.asm`'s `VBE_MODE` is
-  hardcoded to `0x112` (640x480, 32bpp) -- the kernel has no path to
-  request or fall back across multiple VBE modes at all. Worth
-  revisiting once there's an actual reason to want more screen space
-  (PAINT's palette-chooser redesign above is one candidate), but a real
-  feature here means both stage2 querying/selecting among multiple VBE
-  modes and the whole GUI layer's widgets (`kernel.c`'s window-pipeline
-  functions, `taskbar.c`, `startmenu.c`, etc.) no longer assuming one
-  fixed screen size -- likely a bigger lift than it first sounds.
+- ~~**Different resolution settings, not just the one hardcoded
+  640x480.**~~ Done (build-time slice), 2026-08-26 -- `boot/Makefile`'s
+  `VBE_MODE` is now a build-time override (`make VBE_MODE=0x115` for
+  800x600, default `0x112`/640x480 unchanged), and `kernel/kernel.c`'s
+  five hardcoded window positions scale against the real screen size.
+  Verified headlessly in QEMU at both resolutions -- see
+  `docs/BUILD_LOG.md`'s entry for this date. What's still open: stage2
+  itself doesn't query/select among multiple VBE modes at runtime, so
+  this is a fixed choice baked in at build time, not a real
+  auto-detected/negotiated resolution -- that runtime piece is a
+  bigger lift than it first sounds and stays a candidate for later.
 
 - **Real userspace: ring 3, paging, syscalls -- separate address
   spaces per program.** Raised 2026-08-26. Everything today (PAINT,
