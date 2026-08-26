@@ -30,10 +30,17 @@ SEGMENT_CHUNK_SECTORS equ 128 ; 128 * 512 = 65536 = exactly one 64KB real-mode s
 ; is ever changed, that segment advance must be re-derived to match, or
 ; chunk loads will silently gap or overlap with no error.
 
-; VBE mode 0x112 = 640x480, 32 bits/pixel, linear framebuffer. Bit 14
-; (0x4000) of the mode number tells VBE function 4F02h to use the linear
-; framebuffer addressing model instead of legacy bank-switched addressing.
+; VBE mode number -- 0x112 = 640x480, 0x115 = 800x600, both 32
+; bits/pixel linear-framebuffer VESA modes. Normally passed in by
+; boot/Makefile via `nasm -D VBE_MODE=...` (same override pattern as
+; KERNEL_SECTORS/KERNEL_START_SECTOR above); the fallback below only
+; matters if this file is ever assembled directly, outside the
+; Makefile. Bit 14 (0x4000) of the mode number tells VBE function
+; 4F02h to use the linear framebuffer addressing model instead of
+; legacy bank-switched addressing.
+%ifndef VBE_MODE
 VBE_MODE       equ 0x112
+%endif
 VBE_MODE_LFB   equ VBE_MODE | 0x4000
 
 ; Scratch buffer VBE fills in with a 256-byte ModeInfoBlock, and the small

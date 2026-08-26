@@ -3,6 +3,14 @@ QEMU := qemu-system-i386
 KERNEL_DIR := ../kernel
 KERNEL_BIN := $(KERNEL_DIR)/kernel.bin
 
+# VBE mode stage2 sets at boot -- 0x112 (640x480x32, the long-standing
+# default) unless overridden, e.g. `make VBE_MODE=0x115` for 800x600.
+# disk.img's own prerequisites (stage1.asm/stage2.asm/$(KERNEL_BIN))
+# don't change when only this variable changes, so Make won't know to
+# rebuild on its own -- run `make clean` first when switching this
+# between builds.
+VBE_MODE := 0x112
+
 all: disk.img
 
 $(KERNEL_BIN): FORCE
@@ -25,12 +33,12 @@ $(KERNEL_BIN): FORCE
 #      stage1 with the real STAGE2_SECTORS, and concatenate everything.
 disk.img: stage1.asm stage2.asm $(KERNEL_BIN)
 	@kernel_sectors=$$(( ($$(stat -c%s $(KERNEL_BIN)) + 511) / 512 )); \
-	$(AS) -f bin -D KERNEL_SECTORS=1 -D KERNEL_START_SECTOR=4 stage2.asm -o /tmp/rave_stage2_measure.bin; \
+	$(AS) -f bin -D KERNEL_SECTORS=1 -D KERNEL_START_SECTOR=4 -D VBE_MODE=$(VBE_MODE) stage2.asm -o /tmp/rave_stage2_measure.bin; \
 	stage2_sectors=$$(( ($$(stat -c%s /tmp/rave_stage2_measure.bin) + 511) / 512 )); \
 	rm -f /tmp/rave_stage2_measure.bin; \
 	kernel_start_sector=$$(( 2 + stage2_sectors )); \
-	echo "disk layout: stage1=1 sector, stage2=$$stage2_sectors sector(s), kernel=$$kernel_sectors sector(s) starting at sector $$kernel_start_sector"; \
-	$(AS) -f bin -D KERNEL_SECTORS=$$kernel_sectors -D KERNEL_START_SECTOR=$$kernel_start_sector stage2.asm -o stage2.bin; \
+	echo "disk layout: stage1=1 sector, stage2=$$stage2_sectors sector(s), kernel=$$kernel_sectors sector(s) starting at sector $$kernel_start_sector, VBE_MODE=$(VBE_MODE)"; \
+	$(AS) -f bin -D KERNEL_SECTORS=$$kernel_sectors -D KERNEL_START_SECTOR=$$kernel_start_sector -D VBE_MODE=$(VBE_MODE) stage2.asm -o stage2.bin; \
 	truncate -s $$(( stage2_sectors * 512 )) stage2.bin; \
 	$(AS) -f bin -D STAGE2_SECTORS=$$stage2_sectors stage1.asm -o stage1.bin; \
 	truncate -s $$(( kernel_sectors * 512 )) $(KERNEL_BIN); \
