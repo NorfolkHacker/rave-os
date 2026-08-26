@@ -2141,7 +2141,9 @@ void kmain(void) {
      * max_y for a window this tall (98, on a 640x480/24px-taskbar
      * screen) -- the same invariant a prior stage's default window
      * position violated and had to fix; checked deliberately this
-     * time, including after this height change. */
+     * time, including after this height change. This invariant still
+     * holds for any h >= 480 after the position became screen-size-scaled,
+     * not just the 640x480 baseline this was originally checked against. */
     windows[WIN_KIND_PAINT].x = 340 * w / BASELINE_W;
     windows[WIN_KIND_PAINT].y = 80 * h / BASELINE_H;
     windows[WIN_KIND_PAINT].w = 272;

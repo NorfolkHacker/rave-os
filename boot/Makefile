@@ -7,8 +7,9 @@ KERNEL_BIN := $(KERNEL_DIR)/kernel.bin
 # default) unless overridden, e.g. `make VBE_MODE=0x115` for 800x600.
 # disk.img's own prerequisites (stage1.asm/stage2.asm/$(KERNEL_BIN))
 # don't change when only this variable changes, so Make won't know to
-# rebuild on its own -- run `make clean` first when switching this
-# between builds.
+# rebuild on its own -- run `rm -f stage2.bin disk.img` first when
+# switching this between builds (not `make clean` -- that also deletes
+# `fs.img`, the persistent scratch disk; see its own target's comment below).
 VBE_MODE := 0x112
 
 all: disk.img

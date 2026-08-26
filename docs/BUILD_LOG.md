@@ -3148,5 +3148,4 @@ in its normal default-build state (`cd boot && make clean && make`,
 rebuilding `VBE_MODE=0x112`); scratch `.ppm`/monitor-socket/pidfile
 files cleaned up.
 
-Files: none (verification-only task; `docs/BUILD_LOG.md`/`docs/IDEAS.md`
-are this entry's own docs update).
+Files: `boot/Makefile`, `boot/stage2.asm` (Task 1: overridable VBE_MODE); `kernel/kernel.c` (Task 2: scaled window positions); `docs/BUILD_LOG.md`, `docs/IDEAS.md` (Task 3: verification and doc closeout).
