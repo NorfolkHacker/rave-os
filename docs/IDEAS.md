@@ -250,3 +250,33 @@ not a queue.
   modes and the whole GUI layer's widgets (`kernel.c`'s window-pipeline
   functions, `taskbar.c`, `startmenu.c`, etc.) no longer assuming one
   fixed screen size -- likely a bigger lift than it first sounds.
+
+- **Real userspace: ring 3, paging, syscalls -- separate address
+  spaces per program.** Raised 2026-08-26. Everything today (PAINT,
+  EDITOR, SHELL, FORTH scripts run via `RUN`) is compiled straight into
+  `kernel.c` and scheduled as cooperative fibers sharing one ring-0
+  address space -- there's no process isolation at all, just the
+  scheduler built 2026-08-19/20. That work explicitly scoped real
+  process isolation out as "Rave-OS v2 scale" at the time (see
+  `docs/superpowers/specs/2026-08-19-concurrency-design.md`). Actually
+  landing it means a page-table/paging layer, a ring 3 switch, a
+  syscall interface for the ring-0 services programs currently call
+  directly (fs, gfx, audio, window management), and some real notion
+  of a loadable/relocatable program image separate from being baked
+  into the kernel binary -- a large, foundational lift, not an
+  incremental one.
+
+- **Real floating-point arithmetic.** Raised 2026-08-26. Every
+  `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
+  FPU/SSE registers entirely -- there's no float/double anywhere in the
+  kernel, only deliberate fixed-point and integer arithmetic (see
+  `kernel/audio/synth.c`'s phase-increment and filter comments, which
+  call this out explicitly as the reason no floating point is used).
+  That flag exists because GCC's `__attribute__((interrupt))` ISR
+  handlers can't safely touch FPU/SSE state without it. Actually
+  supporting floats would mean either scoping `-mgeneral-regs-only` down
+  to just the interrupt-handler translation units instead of the whole
+  kernel, or adding real FPU/SSE context save-restore on every interrupt
+  entry/exit -- plus deciding what would actually use it (a nicer synth
+  filter? real VBE mode math?) since nothing currently needs it enough
+  to justify the lift.

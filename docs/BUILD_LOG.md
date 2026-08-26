@@ -2893,3 +2893,101 @@ exists specifically because of that near-miss.
 Files: `kernel/kernel.c` (`draw_title_subtitle()`/`title_block_rect()`
 trimmed; new `seed_bin_synth_demos()` seeding `/BIN/SCALE`,
 `/BIN/FSWEEP`, `/BIN/RINGMOD`, `/BIN/ARPCHORD`, called from `kmain()`).
+
+## 2026-08-26 -- A real boot splash: `RAVE-OS` now actually hides itself
+
+Raised directly: the `RAVE-OS` banner (the previous entry's trimmed-down
+`draw_title_subtitle()`) is a permanent desktop fixture, not a boot
+splash -- it's drawn every frame and never goes away for the rest of
+the session, however long that runs. Brainstormed as a bounded task
+(the desktop title-text rendering already existed; this changes its
+lifecycle, not the whole desktop). Scope, chosen with the user: keep
+the desktop/taskbar/windows interactive from frame 1 as today (no new
+gated "boot state"), just make the banner itself disappear on a fixed
+timer instead of persisting forever.
+
+Followed TDD. `kernel/gui/boot_splash.c`/`.h` (new, same
+struct-plus-init-plus-tick convention as `console_output.h`'s
+`generation` field): a `struct boot_splash` with a `frames_left`
+countdown and a `hidden` flatline flag, `boot_splash_tick()` returning
+1 exactly on the one call where the countdown reaches zero and
+visibility flips (0 on every other call, including all calls after
+it's already hidden), `boot_splash_visible()` as a static inline
+reader. `kernel/tests/test_boot_splash.c` (new, host-built, no QEMU
+needed) written and watched fail (undefined-reference link error, the
+correct failure) before `boot_splash.c` existed; passed once it did.
+
+No PIT/timer driver exists in this kernel (see docs/IDEAS.md's
+floating-point/userspace entries, also added this session) -- the 8259
+PICs mask every IRQ line by default and nothing ever unmasks IRQ0 --
+so `boot_splash_tick()` counts `kmain()`'s own main-loop iterations as
+a proxy for elapsed time, not real seconds. That surfaced a real bug
+while designing this, not just an approximation caveat: the loop's
+existing idle path (`else { hlt }`, gated on `had_event ||
+scheduler_any_active()`) blocks until the next interrupt when nothing
+happened, and with zero PIT and a genuinely untouched mouse/keyboard at
+boot, nothing would ever wake it -- ticking the counter only when the
+loop's had-work branch already runs would mean the splash never
+disappears on an idle boot, reproducing the exact bug this was meant
+to fix. Fixed by adding a third branch: `else if
+(boot_splash_visible(&splash))` keeps the loop spinning (no `hlt`)
+for as long as the splash is up, regardless of input, so the countdown
+always completes; idle iterations go back to `hlt` once it's hidden.
+
+`draw_title_subtitle()` itself now takes the `boot_splash` and no-ops
+once hidden -- one place decides whether the text exists a given
+frame, both at `draw_scene()`'s first-frame call and inside
+`update_and_present()`'s damage-tracked redraw. The trickier half was
+making the old text actually get erased, not just stop being drawn:
+`update_and_present()`'s `TITLE_REGION` damage entry used to only ever
+get set reactively (by the fixed-point overlap loop, when some other
+region's damage happened to cross it) -- nothing ever seeded it as
+damage on its own. Added a `splash_just_hid` parameter, forced
+`redraw[TITLE_REGION]` on that one transition frame the same way
+`fx_changed` already forces full-screen damage for a backdrop-wide
+change, and unioned the title rect into the damage seed alongside the
+existing taskbar/menu union step -- the backdrop repaint that already
+runs across the damage rect then erases the old glyphs for free, with
+`draw_title_subtitle()` itself silent since the splash is hidden by
+then.
+
+The countdown constant needed empirical, not analytical, calibration:
+picked `BOOT_SPLASH_FRAMES = 600` first (arbitrary), and headless QEMU
+screendumps (same `-display none` + monitor `screendump` technique as
+the previous entry) showed it vanishing before the first dump landed
+even 200ms after boot -- the spin loop has no throttling, so 600
+iterations complete far faster than a human could ever see. Raised to
+20,000,000 and re-measured under plain TCG: ~8s to disappear. Critical
+catch: `boot/Makefile`'s actual `run` target uses `-accel kvm`, not
+TCG, and re-measuring the same 20,000,000 under `-accel kvm` showed it
+gone before the first 122ms-later dump -- roughly a 70-90x speed gap
+between the two, meaning a TCG-calibrated constant would be wildly
+wrong for what a real `make run` actually uses. Recalibrated against
+`-accel kvm` specifically. That in turn showed the same constant
+swinging by an order of magnitude run to run under sustained 100%-core
+spinning; `scaling_cur_freq` sampled as low as 800MHz mid-run on an
+otherwise-idle host confirmed host CPU frequency scaling, not
+measurement noise, as the cause. Settled on `BOOT_SPLASH_FRAMES =
+100000000` -- landed at roughly 3.7-4s in the final measured run, in
+the right ballpark (low single-digit seconds) rather than tuned to an
+exact duration, since no exact duration is achievable without a PIT
+driver.
+
+Verified: `test_boot_splash` passes -- starts visible, reports no
+transition and stays visible on every tick before the countdown
+boundary, reports the transition exactly once at that boundary, then
+reports no further transition and stays hidden on every later tick;
+full kernel rebuild clean (only the
+pre-existing RWX-segment linker warning); headless `-accel kvm` QEMU
+screendumps confirmed the banner visible immediately after boot,
+gone a few seconds later with no leftover artifacts in its old rect,
+and the cursor/taskbar/MENU unaffected throughout.
+
+Files: `kernel/gui/boot_splash.c`/`.h` (new); `kernel/tests/test_boot_splash.c`
+(new, host-built); `kernel/Makefile` (new `boot_splash.o` target/dependency);
+`kernel/kernel.c` (`draw_title_subtitle()` takes a `boot_splash` and
+no-ops when hidden; `draw_scene()`/`update_and_present()` take/thread it
+through; `kmain()` gets a `struct boot_splash splash` local,
+`boot_splash_init()` at startup, per-iteration `boot_splash_tick()`, the
+new spin-not-hlt branch, and `splash_just_hid` threaded into the
+`update_and_present()` call).

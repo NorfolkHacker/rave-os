@@ -21,6 +21,7 @@
 #include "serial.h"
 #include "shell.h"
 #include "editor.h"
+#include "boot_splash.h"
 #include "io.h"
 #include "ata.h"
 #include "sb16.h"
@@ -192,7 +193,15 @@ static void append_split_lines(struct console_output *co, char *buf) {
 #define TITLE_Y 40
 #define TITLE_SCALE 4
 
-static void draw_title_subtitle(int w) {
+/* No-ops once boot_splash_visible() goes false -- the banner is a
+ * boot-time splash, not a permanent desktop fixture (see boot_splash.h).
+ * Callers still call this unconditionally; the visibility check lives
+ * here so there's exactly one place that decides whether the text
+ * exists this frame. */
+static void draw_title_subtitle(int w, const struct boot_splash *splash) {
+    if (!boot_splash_visible(splash)) {
+        return;
+    }
     text_puts((w - text_width(TITLE_TEXT, TITLE_SCALE)) / 2, TITLE_Y, TITLE_TEXT, TEXT_ACCENT_COLOR, TITLE_SCALE);
 }
 
@@ -1701,7 +1710,7 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
  * update_and_present() below). */
 static void draw_scene(int w, int h, const struct window *windows, int fx_enabled, const struct window_content *wc,
                        const int *z_order, const struct taskbar *bar, int hovered_entry, const struct startmenu *menu,
-                       int menu_hovered_item, int mx, int my, uint32_t cursor_color) {
+                       int menu_hovered_item, int mx, int my, uint32_t cursor_color, const struct boot_splash *splash) {
     int x, y, i;
 
     for (y = 0; y < h; y++) {
@@ -1710,7 +1719,7 @@ static void draw_scene(int w, int h, const struct window *windows, int fx_enable
         }
     }
 
-    draw_title_subtitle(w);
+    draw_title_subtitle(w, splash);
 
     for (i = MAX_WINDOWS - 1; i >= 0; i--) {
         int idx = z_order[i];
@@ -1768,7 +1777,8 @@ static void update_and_present(int w, int h, const struct window *windows, int f
                                const int *z_order, const int *old_z, int old_mx, int old_my, int mx, int my,
                                uint32_t cursor_color, const int *old_x, const int *old_y, const int *touched,
                                int fx_changed, const struct taskbar *bar, int hovered_entry, int old_hovered_entry,
-                               const struct startmenu *menu, int menu_hovered_item, int menu_touched) {
+                               const struct startmenu *menu, int menu_hovered_item, int menu_touched,
+                               const struct boot_splash *splash, int splash_just_hid) {
     int dx0, dy0, dx1, dy1;
     int rx0[DAMAGE_REGIONS], ry0[DAMAGE_REGIONS], rx1[DAMAGE_REGIONS], ry1[DAMAGE_REGIONS];
     int redraw[DAMAGE_REGIONS];
@@ -1817,7 +1827,13 @@ static void update_and_present(int w, int h, const struct window *windows, int f
         redraw[i] = touched[i] || z_reordered;
     }
     title_block_rect(w, &rx0[TITLE_REGION], &ry0[TITLE_REGION], &rx1[TITLE_REGION], &ry1[TITLE_REGION]);
-    redraw[TITLE_REGION] = 0;
+    /* Only forced on the one frame boot_splash_tick() reports the
+     * visible->hidden transition -- that's the sole case where the
+     * banner's own rect needs repainting even though nothing else
+     * touched it, so the backdrop redraw below actually erases the old
+     * text (draw_title_subtitle() itself has already gone permanently
+     * silent by then). */
+    redraw[TITLE_REGION] = splash_just_hid;
     rx0[TASKBAR_REGION] = bar->x;
     ry0[TASKBAR_REGION] = bar->y;
     rx1[TASKBAR_REGION] = bar->x + bar->w;
@@ -1846,6 +1862,10 @@ static void update_and_present(int w, int h, const struct window *windows, int f
     }
     if (redraw[MENU_REGION]) {
         rect_union(&dx0, &dy0, &dx1, &dy1, rx0[MENU_REGION], ry0[MENU_REGION], rx1[MENU_REGION], ry1[MENU_REGION]);
+    }
+    if (redraw[TITLE_REGION]) {
+        rect_union(&dx0, &dy0, &dx1, &dy1, rx0[TITLE_REGION], ry0[TITLE_REGION], rx1[TITLE_REGION],
+                  ry1[TITLE_REGION]);
     }
 
     do {
@@ -1879,7 +1899,7 @@ static void update_and_present(int w, int h, const struct window *windows, int f
     }
 
     if (redraw[TITLE_REGION]) {
-        draw_title_subtitle(w);
+        draw_title_subtitle(w, splash);
     }
 
 
@@ -1921,6 +1941,7 @@ void kmain(void) {
     struct shell sh;
     struct taskbar bar;
     struct startmenu menu;
+    struct boot_splash splash;
     struct button delete_btn;
     struct button new_dir_btn;
     struct button cut_btn;
@@ -1942,6 +1963,7 @@ void kmain(void) {
     gfx_init();
     w = gfx_width();
     h = gfx_height();
+    boot_splash_init(&splash);
 
     /* Sized/positioned clear of the taskbar strip below it. */
     windows[WIN_KIND_FORTH].x = 170;
@@ -2344,12 +2366,13 @@ void kmain(void) {
             .paint_load_btn = &paint_load_btn,
         };
         draw_scene(w, h, windows, fx_enabled, &wc, z_order, &bar, taskbar_hovered, &menu, menu_hovered_item, mx, my,
-                  cursor_color);
+                  cursor_color, &splash);
     }
     gfx_present();
 
     for (;;) {
         int had_event = 0;
+        int splash_just_hid;
         int dx, dy, buttons;
         char c;
         int old_mx = mx;
@@ -3149,6 +3172,8 @@ void kmain(void) {
             had_event = 1;
         }
 
+        splash_just_hid = boot_splash_tick(&splash);
+
         scheduler_tick();
 
         {
@@ -3160,7 +3185,7 @@ void kmain(void) {
             }
         }
 
-        if (had_event || scheduler_any_active()) {
+        if (had_event || scheduler_any_active() || splash_just_hid) {
             int touched[MAX_WINDOWS];
             int menu_touched = (menu.open != old_menu_open) || (menu_hovered_item != old_menu_hovered_item);
 
@@ -3248,8 +3273,17 @@ void kmain(void) {
                 };
                 update_and_present(w, h, windows, fx_enabled, &wc, z_order, old_z, old_mx, old_my, mx, my,
                                    cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled, &bar,
-                                   taskbar_hovered, old_taskbar_hovered, &menu, menu_hovered_item, menu_touched);
+                                   taskbar_hovered, old_taskbar_hovered, &menu, menu_hovered_item, menu_touched,
+                                   &splash, splash_just_hid);
             }
+        } else if (boot_splash_visible(&splash)) {
+            /* Keep spinning instead of hlt-ing: this kernel never
+             * unmasks IRQ0 (no PIT driver, see boot_splash.h), so on a
+             * genuinely idle boot (nothing touching the mouse/keyboard)
+             * hlt would block forever waiting for an interrupt that may
+             * never come, and the countdown above would never reach
+             * zero. Once the splash hides, idle iterations go back to
+             * hlt as before. */
         } else {
             __asm__ volatile("hlt");
         }
