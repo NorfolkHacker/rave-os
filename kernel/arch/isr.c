@@ -15,6 +15,7 @@
  * handlers instead (see panic() below) so at least those show up as more
  * than a silent freeze. */
 
+#include <stdint.h>
 #include "idt.h"
 #include "pic.h"
 #include "io.h"
@@ -24,6 +25,7 @@
 #include "sb16.h"
 #include "graphics.h"
 #include "text.h"
+#include "hexfmt.h"
 
 struct interrupt_frame;
 
@@ -35,6 +37,50 @@ struct interrupt_frame;
 static void panic(const char *msg) {
     gfx_fill_rect(0, 0, gfx_width(), 30, 0xCC0000);
     text_puts(10, 8, msg, 0xFFFFFF, 2);
+    gfx_present();
+    for (;;) {
+        __asm__ volatile("cli\n\thlt");
+    }
+}
+
+/* Same as panic(), but for a #PF specifically: shows the faulting
+ * linear address (CR2) and the CPU-pushed error code as a second
+ * line, so a page fault is actually diagnosable instead of just
+ * "something happened." A taller red band (40px vs. panic()'s 30px)
+ * makes room for it. No snprintf in this freestanding kernel -- msg
+ * is copied character-by-character into a fixed buffer alongside the
+ * hex-formatted address/code, following the same manual-buffer-
+ * building style kernel.c's str_append() already establishes for
+ * this codebase (that helper is static to kernel.c, not shared, so
+ * this is a small self-contained equivalent rather than a new
+ * dependency). */
+static void panic_with_addr(const char *msg, uint32_t addr, unsigned int error_code) {
+    char line2[64];
+    int pos = 0;
+    const char *p;
+    char addr_hex[9];
+    char code_hex[9];
+
+    hex32_to_str(addr, addr_hex);
+    hex32_to_str((uint32_t)error_code, code_hex);
+
+    for (p = "ADDR=0x"; *p && pos < (int)sizeof(line2) - 1; p++) {
+        line2[pos++] = *p;
+    }
+    for (p = addr_hex; *p && pos < (int)sizeof(line2) - 1; p++) {
+        line2[pos++] = *p;
+    }
+    for (p = " CODE=0x"; *p && pos < (int)sizeof(line2) - 1; p++) {
+        line2[pos++] = *p;
+    }
+    for (p = code_hex; *p && pos < (int)sizeof(line2) - 1; p++) {
+        line2[pos++] = *p;
+    }
+    line2[pos] = '\0';
+
+    gfx_fill_rect(0, 0, gfx_width(), 40, 0xCC0000);
+    text_puts(10, 8, msg, 0xFFFFFF, 2);
+    text_puts(10, 26, line2, 0xFFFFFF, 1);
     gfx_present();
     for (;;) {
         __asm__ volatile("cli\n\thlt");
@@ -69,9 +115,10 @@ __attribute__((interrupt)) static void isr_general_protection(struct interrupt_f
 }
 
 __attribute__((interrupt)) static void isr_page_fault(struct interrupt_frame *frame, unsigned int error_code) {
+    uint32_t fault_addr;
     (void)frame;
-    (void)error_code;
-    panic("PANIC: PAGE FAULT");
+    __asm__ volatile("mov %%cr2, %0" : "=r" (fault_addr));
+    panic_with_addr("PANIC: PAGE FAULT", fault_addr, error_code);
 }
 
 __attribute__((interrupt)) static void irq_master_default(struct interrupt_frame *frame) {
