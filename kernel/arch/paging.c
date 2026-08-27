@@ -10,7 +10,19 @@ void paging_build_directory(uint32_t *pd, uint32_t pde_count) {
     }
 }
 
+void paging_set_user_entry(uint32_t *pd, uint32_t pde_index, int user) {
+    if (user) {
+        pd[pde_index] |= PDE_USER_FLAG;
+    } else {
+        pd[pde_index] &= ~(uint32_t)PDE_USER_FLAG;
+    }
+}
+
 static uint32_t page_directory[PAGE_DIRECTORY_ENTRIES] __attribute__((aligned(4096)));
+
+void paging_set_user(uint32_t pde_index, int user) {
+    paging_set_user_entry(page_directory, pde_index, user);
+}
 
 void paging_enable(void) {
     paging_build_directory(page_directory, PAGING_IDENTITY_PDE_COUNT);

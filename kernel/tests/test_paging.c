@@ -85,6 +85,34 @@ int main(void) {
      * exists for, not just an arbitrary index. */
     check(PAGING_IDENTITY_PDE_COUNT > 1012, "PAGING_IDENTITY_PDE_COUNT must cover PDE 1012 (0xFD000000, the confirmed framebuffer address)");
 
+    /* paging_set_user_entry(): toggles bit 2 (User/Supervisor) on one
+     * entry in place -- nothing else about that entry, or any other
+     * entry, may change. */
+    {
+        uint32_t before[PAGE_DIRECTORY_ENTRIES];
+        uint32_t after[PAGE_DIRECTORY_ENTRIES];
+
+        for (i = 0; i < PAGE_DIRECTORY_ENTRIES; i++) {
+            before[i] = 0xDEADBEEF;
+        }
+        paging_build_directory(before, 10);
+        for (i = 0; i < PAGE_DIRECTORY_ENTRIES; i++) {
+            after[i] = before[i];
+        }
+
+        paging_set_user_entry(after, 3, 1);
+        check((after[3] & 0x4) != 0, "paging_set_user_entry(3, 1): User bit should now be set");
+        check((after[3] & ~0x4u) == (before[3] & ~0x4u), "paging_set_user_entry(3, 1): every other bit of entry 3 should be unchanged");
+        for (i = 0; i < PAGE_DIRECTORY_ENTRIES; i++) {
+            if (i != 3) {
+                check(after[i] == before[i], "paging_set_user_entry(3, 1): every other entry should be untouched");
+            }
+        }
+
+        paging_set_user_entry(after, 3, 0);
+        check(after[3] == before[3], "paging_set_user_entry(3, 0): entry 3 should be back to its original value");
+    }
+
     if (failures == 0) {
         printf("PASS: all paging tests passed\n");
         return 0;
