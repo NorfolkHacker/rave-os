@@ -3245,3 +3245,182 @@ state; scratch `.ppm`/monitor-socket/pidfile files cleaned up.
 
 Files: `kernel/kernel.c` (wiring `paging_enable()` into `kmain()`);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-27 -- Ring 3 + a minimal syscall ABI (userspace sub-project B)
+
+Closes sub-project (B) of `docs/IDEAS.md`'s "Real userspace" entry --
+code can now actually run at CPL 3 and call back into the kernel
+through a real trap gate, for the first time in this kernel's history.
+Six-task plan (`docs/superpowers/sdd/2026-08-27-ring3-syscall/`,
+design doc `docs/superpowers/specs/2026-08-27-ring3-syscall-design.md`):
+
+**Task 1: `kernel/arch/paging.c`'s `paging_set_user()`.** Toggles
+`PDE_USER_FLAG` (bit 2, User/Supervisor) on one page directory entry
+of the live, already-switched-on `page_directory` built by (A)'s
+`paging_enable()`. Necessary because the U/S bit gates *instruction
+fetch*, not just data access -- every PDE (A) built is supervisor-only
+by construction, so ring 3 code can't even fetch its own first
+instruction without this. Backed by a pure, host-testable
+`paging_set_user_entry(pd, pde_index, user)` that only touches the
+in-memory array (`kernel/tests/test_paging.c` exercises it directly,
+no hardware needed); `paging_set_user()` itself is the thin
+real/hardware-touching wrapper around it.
+
+**Task 2: `kernel/arch/isr.c`'s `isr_general_protection`.** Upgraded
+from the generic unhandled-exception banner to
+`panic_with_code("PANIC: GENERAL PROTECTION FAULT", error_code)`,
+mirroring (A)'s page-fault decode from the day before -- but #GP's
+error code carries a segment selector index (or 0 for the many #GP
+causes, like a privileged-instruction fault, that aren't
+selector-related) rather than a faulting address, so this decode had
+never fired on real hardware until this task's own verification, below.
+
+**Task 3: `kernel/arch/gdt.c`/`.h`'s `gdt_init()`.** Replaces
+`boot/stage2.asm`'s static, boot-time-only GDT with a kernel-owned,
+6-entry table built and loaded from C: null, kernel code/data (kept
+numerically identical to the boot GDT's `0x08`/`0x10` -- every existing
+ISR and `idt_set_gate()`'s hardcoded selector assume this), user
+code/data at DPL 3 (`0x18`/`0x20`), and a TSS (`0x28`) whose `esp0`/`ss0`
+point at a dedicated kernel-mode stack -- what the CPU auto-loads on
+any ring3->ring0 transition (a syscall or a fault), without which a
+privilege-level change has nowhere safe to push its interrupt frame.
+The TSS's `iomap_base` is set past the struct's own end, disabling the
+I/O permission bitmap entirely: ring 3 gets no port access at all.
+Unlike every other host test suite in this project, `test_gdt.c` must
+be compiled with `-fno-pie -no-pie` added to the usual `gcc -m32
+-Wall -Wextra` invocation, since `gdt_init()`'s absolute-address
+`ljmp` (reloading CS via the new GDT) needs a non-PIE relocation --
+there's no test-runner script here (every `kernel/tests/*.c` is
+compiled and run by hand), so noting it here saves the next person
+from rediscovering it.
+
+**Task 4: `kernel/arch/syscall.c`/`.h`'s `syscall_dispatch()`.** A
+pure C function (`int syscall_dispatch(int num, int arg)`, no asm, no
+hardware access) mapping `SYS_TEST` (returns a fixed `0x1234`, proving
+plumbing alone) and `SYS_EXIT` (reserved for "the caller is done";
+currently just returns 0 and does nothing else -- not real process
+termination, since this minimal ABI has no process/address-space
+concept to tear down) to their behavior, `-1` for anything else.
+
+**Task 5: `kernel/arch/ring3.asm`, wired into `kmain()`.** The
+`int 0x80` trap-gate ABI itself: `eax` is the syscall number in and
+the return value out, `ebx` is the one argument, every other register
+is genuinely clobbered -- not part of this minimal ABI's contract.
+Hand-written asm (`enter_ring3()`/`syscall_entry`) rather than GCC's
+`__attribute__((interrupt))`, the way every other ISR in this codebase
+is written, because a syscall needs register-precise control over
+arguments and return value that attribute doesn't expose --
+`kernel/sched/context_switch.asm` already set the precedent for
+hand-written asm exactly when C can't express the needed register
+discipline. `syscall_entry` reloads DS/ES/FS/GS to the kernel data
+selector using `ecx` as scratch (not `eax`, which still holds the
+incoming syscall number) before calling `syscall_dispatch()`, since
+DS/ES/FS/GS still hold whatever the ring3 caller had loaded and can't
+be trusted for kernel-side work even though this build's user/kernel
+data segments happen to be numerically identical. `kmain()` calls
+`gdt_init()` first (before `interrupts_init()`, since every ISR and
+`idt_set_gate()` assume the kernel selectors are already valid) and
+installs `syscall_entry` at IDT vector `0x80` as a DPL 3 trap gate,
+right after `interrupts_init()`. An early review of this task caught
+`syscall_entry` clobbering `eax` (the syscall number) with the
+segment selector value before it was needed -- fixed by moving the
+selector load to use `ecx` instead, the version described above.
+
+**Task 6 (this entry): the one-time ring-3 proof, cleanup, and
+closeout.** None of Tasks 1-5's machinery had been exercised yet --
+every verification so far only proved it was a no-op when unused. A
+temporary payload was added to `kernel/kernel.c`: `paging_set_user(0,
+1)` to mark the low 4MB user-accessible, then `enter_ring3()` into a
+CPL3 function that issues `int 0x80` for `SYS_TEST`, checks the
+result against `0x1234` (proving the argument and return value both
+crossed the ring3/ring0 boundary intact), issues `SYS_EXIT`, and then
+deliberately executes `cli` -- a CPL0-only instruction, guaranteed to
+raise `#GP` from CPL3, exercising Task 2's decode for the first time
+on real hardware. A broken round-trip instead falls into an infinite
+loop, a permanently black screen on screendump, clearly
+distinguishable from the expected banner.
+
+The first attempt at this screendump surfaced a real bug, not in this
+task's own code but in Task 1's `paging_set_user()`: the screen showed
+`PANIC: PAGE FAULT` / `ADDR=0x000385EC CODE=0x00000007` (a genuine
+CPL3 write, denied against a page the MMU still considered
+supervisor-only) instead of the expected `#GP`. Root cause:
+`paging_set_user()` modified the live PDE in memory but never flushed
+the TLB. This identity map uses 4MB PSE pages, and PDE 0 had been in
+continuous use since `paging_enable()` first ran early in `kmain()` --
+by the time `paging_set_user(0, 1)` ran, the CPU already held a cached
+PSE TLB entry for that entire 4MB region carrying the *original*
+supervisor-only permission. Modifying the in-memory PDE afterward
+doesn't retroactively invalidate an already-cached translation; x86
+requires an explicit flush after any live page-table modification.
+Fixed by adding a full TLB flush (a CR3 reload with its own current
+value -- this identity map uses no Global-page bit, so this is
+sufficient; `paging_enable()` already loads CR3 the same way) to
+`paging_set_user()` itself, landed as its own dedicated commit,
+separate from this task's temporary test code:
+
+```c
+void paging_set_user(uint32_t pde_index, int user) {
+    paging_set_user_entry(page_directory, pde_index, user);
+    __asm__ volatile(
+        "mov %%cr3, %%eax\n\t"
+        "mov %%eax, %%cr3\n\t"
+        :
+        :
+        : "eax", "memory"
+    );
+}
+```
+
+`paging_set_user_entry()`, the pure function backing the host-side
+test suite, was deliberately left untouched -- it must stay
+host-testable and must never touch `CR3` or any other privileged
+instruction. `kernel/tests/test_paging.c` was re-run after the fix
+(`gcc -m32 -Wall -Wextra ... && ./test_paging`) and still passes: it
+never calls `paging_set_user()` itself, only `paging_set_user_entry()`,
+so it can't exercise or be broken by the new inline asm, but confirmed
+nothing else regressed.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as (A)'s own paging entry above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480):
+
+- **Proof screendump, after the TLB-flush fix:** the red panic banner
+  appeared, reading exactly:
+  ```
+  PANIC: GENERAL PROTECTION FAULT
+  CODE=0x00000000
+  ```
+  `CODE=0x00000000` is correct for a privileged-instruction violation
+  (`cli` at CPL3) -- this #GP cause carries no selector index, unlike
+  the segment-related causes the error code otherwise encodes. This
+  single screendump is proof of both halves at once: reaching the
+  deliberate `cli` at all requires `SYS_TEST`'s argument and return
+  value to have round-tripped correctly across two separate `int 0x80`
+  calls (`SYS_TEST` then `SYS_EXIT`), and the banner itself proves the
+  CPU was genuinely at CPL3 when `cli` executed and that Task 2's #GP
+  decode fires correctly on real hardware.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` against the Task-5 state came back empty --confirming
+  the removal was exact, nothing new left behind. A final rebuild and
+  headless boot showed the ordinary desktop: black backdrop, green
+  cursor square, the taskbar's green rule and `MENU` label at the
+  bottom -- confirming the entire permanent mechanism (GDT/TSS,
+  `paging_set_user()`, the syscall gate, the #GP decode) is still a
+  true no-op with nothing in the tree invoking it.
+
+Verified: one proof screendump with the exact expected banner text
+(both the ring-3/syscall round-trip and the #GP decode exercised on
+real hardware for the first time); one TLB-flush regression fix to
+Task 1's `paging_set_user()`, confirmed via the host test suite and a
+second (successful) proof screendump; one final regression screendump
+matching (A)'s own steady-state desktop exactly; `git diff` showed a
+clean revert of the temporary test code with no leftover debug code.
+Working tree left in its normal ring-3-mechanism-present-but-unused
+state; scratch `.ppm`/monitor-socket files cleaned up; no leftover
+QEMU processes.
+
+Files: `kernel/arch/paging.c`/`.h` (the TLB-flush fix to
+`paging_set_user()`, permanent); `kernel/kernel.c` (the temporary
+proof payload, added and fully removed within this task);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).

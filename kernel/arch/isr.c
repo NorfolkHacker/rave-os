@@ -87,6 +87,36 @@ static void panic_with_addr(const char *msg, uint32_t addr, unsigned int error_c
     }
 }
 
+/* Same banner/text layout as panic_with_addr(), minus the address
+ * line -- CR2 is meaningless for #GP (only #PF sets it). error_code
+ * is nonzero only when a specific segment selector caused the fault;
+ * 0 covers the far more common case (a privileged instruction
+ * executed at insufficient CPL). */
+static void panic_with_code(const char *msg, unsigned int error_code) {
+    char line2[64];
+    int pos = 0;
+    const char *p;
+    char code_hex[9];
+
+    hex32_to_str((uint32_t)error_code, code_hex);
+
+    for (p = "CODE=0x"; *p && pos < (int)sizeof(line2) - 1; p++) {
+        line2[pos++] = *p;
+    }
+    for (p = code_hex; *p && pos < (int)sizeof(line2) - 1; p++) {
+        line2[pos++] = *p;
+    }
+    line2[pos] = '\0';
+
+    gfx_fill_rect(0, 0, gfx_width(), 40, 0xCC0000);
+    text_puts(10, 8, msg, 0xFFFFFF, 2);
+    text_puts(10, 26, line2, 0xFFFFFF, 1);
+    gfx_present();
+    for (;;) {
+        __asm__ volatile("cli\n\thlt");
+    }
+}
+
 __attribute__((interrupt)) static void isr_exception_no_err(struct interrupt_frame *frame) {
     (void)frame;
     panic("PANIC: UNHANDLED CPU EXCEPTION");
@@ -110,8 +140,7 @@ __attribute__((interrupt)) static void isr_invalid_opcode(struct interrupt_frame
 
 __attribute__((interrupt)) static void isr_general_protection(struct interrupt_frame *frame, unsigned int error_code) {
     (void)frame;
-    (void)error_code;
-    panic("PANIC: GENERAL PROTECTION FAULT");
+    panic_with_code("PANIC: GENERAL PROTECTION FAULT", error_code);
 }
 
 __attribute__((interrupt)) static void isr_page_fault(struct interrupt_frame *frame, unsigned int error_code) {

@@ -8,6 +8,7 @@
 #include "mouse.h"
 #include "keyboard.h"
 #include "interrupts.h"
+#include "gdt.h"
 #include "window.h"
 #include "button.h"
 #include "taskbar.h"
@@ -23,6 +24,7 @@
 #include "editor.h"
 #include "boot_splash.h"
 #include "paging.h"
+#include "idt.h"
 #include "io.h"
 #include "ata.h"
 #include "sb16.h"
@@ -2301,8 +2303,19 @@ void kmain(void) {
      * handshake runs with IRQ12 still masked so it can't race the new
      * interrupt handler for the same bytes, then interrupts are actually
      * enabled once both are ready. */
+    gdt_init();
     serial_init();
     interrupts_init();
+
+    /* extern, not declared in a header -- matches this codebase's
+     * existing convention for asm-defined symbols only ever referenced
+     * at their one call site (see kernel/sched/scheduler.c's own
+     * extern void context_switch(...) declaration). */
+    {
+        extern void syscall_entry(void);
+        idt_set_gate(0x80, (void *)syscall_entry, IDT_TYPE_TRAP_GATE_32_DPL3);
+    }
+
     paging_enable();
     mouse_init();
     interrupts_enable();

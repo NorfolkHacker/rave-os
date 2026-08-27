@@ -820,9 +820,15 @@ and, above `kmain()`'s own definition, add the payload function it references:
  * screendump, clearly distinguishable from the expected #GP banner. */
 static void ring3_test_payload(void) {
     int result;
-    __asm__ volatile("int $0x80" : "=a"(result) : "a"(0), "b"(0));
+    /* Clobber list matches this ABI's own documented contract (see
+     * ring3.asm's syscall_entry header comment): only eax is
+     * guaranteed meaningful after int 0x80 returns, so GCC must be
+     * told ecx/edx (caller-saved under cdecl, and ecx is syscall_entry's
+     * own segment-selector scratch register) are not preserved across
+     * it, plus memory since a syscall is a real side effect boundary. */
+    __asm__ volatile("int $0x80" : "=a"(result) : "a"(0), "b"(0) : "ecx", "edx", "memory");
     if (result == 0x1234) {
-        __asm__ volatile("int $0x80" : : "a"(1), "b"(0));
+        __asm__ volatile("int $0x80" : : "a"(1), "b"(0) : "ecx", "edx", "memory");
         __asm__ volatile("cli");  /* deliberate: CPL0-only from CPL3 */
     }
     for (;;) { }

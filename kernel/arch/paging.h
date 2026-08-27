@@ -22,6 +22,13 @@
  * yet. */
 #define PDE_IDENTITY_FLAGS 0x83
 
+/* User/Supervisor bit (bit 2). paging_build_directory() never sets
+ * this -- every PDE it builds is supervisor-only by construction (see
+ * PDE_IDENTITY_FLAGS). paging_set_user_entry()/paging_set_user() are
+ * the only way any PDE ever becomes ring-3-accessible, and only ever
+ * one entry at a time, in place. */
+#define PDE_USER_FLAG 0x4
+
 /* Fills pd[0..pde_count) as present, read-write, 4MB identity pages
  * (pd[i] maps physical/virtual region [i*4MB, (i+1)*4MB) to itself).
  * Zeroes pd[pde_count..PAGE_DIRECTORY_ENTRIES) (not-present) --
@@ -33,6 +40,26 @@
  * PAGING_IDENTITY_PDE_COUNT, but the function itself doesn't assume
  * that constant -- see test_paging.c's boundary cases). */
 void paging_build_directory(uint32_t *pd, uint32_t pde_count);
+
+/* Sets (user=1) or clears (user=0) PDE_USER_FLAG on pd[pde_index] in
+ * place -- no other bit of that entry, and no other entry, changes.
+ * pde_index must be < PAGE_DIRECTORY_ENTRIES. Pure function: no asm,
+ * no hardware access. */
+void paging_set_user_entry(uint32_t *pd, uint32_t pde_index, int user);
+
+/* Real: applies paging_set_user_entry() to the live page directory
+ * paging_enable() already built and switched CR3 to. Ring 3 code
+ * cannot fetch its own first instruction without this -- the U/S bit
+ * gates all access, not just data, and every PDE paging_enable()
+ * builds starts supervisor-only. Also flushes the entire TLB (a CR3
+ * reload with its own current value) after modifying the entry --
+ * this identity map uses 4MB PSE pages, and the CPU may already hold
+ * a cached PSE translation for the modified region carrying the old
+ * permission; modifying the in-memory PDE alone doesn't retroactively
+ * invalidate that cached entry, so without the flush a stale
+ * supervisor-only translation could keep faulting ring-3 accesses
+ * even after this call returns. */
+void paging_set_user(uint32_t pde_index, int user);
 
 /* Builds the identity map into a static page directory and switches
  * the CPU into paging mode (CR4.PSE, CR3, CR0.PG). Call once, after

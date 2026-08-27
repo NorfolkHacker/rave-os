@@ -22,9 +22,10 @@ struct idt_ptr {
 
 #define IDT_ENTRIES 256
 
-/* Must match CODE_SEG in boot/stage2.asm's GDT -- that's the segment
- * selector already loaded into CS by the time kernel code runs, and the
- * one the CPU should switch back to when a handler fires. */
+/* Must match GDT_KERNEL_CODE_SELECTOR in arch/gdt.h -- that's the
+ * segment selector the kernel-owned GDT built by gdt_init() assigns to
+ * kernel code, and the one the CPU should switch back to when a
+ * handler fires. */
 #define KERNEL_CODE_SEGMENT 0x08
 
 static struct idt_entry idt[IDT_ENTRIES];
