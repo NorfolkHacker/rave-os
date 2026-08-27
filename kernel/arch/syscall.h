@@ -13,11 +13,37 @@
  * Out of Scope), so this is not real process termination. Ignores arg. */
 #define SYS_EXIT 1
 
-/* The C-side half of the syscall ABI. num is the requested syscall
- * (SYS_TEST/SYS_EXIT/anything else -- an unrecognized num returns
- * -1); arg is its one integer argument. Returns the value int 0x80
- * hands back in eax (see ring3.asm's syscall_entry). Pure function:
- * no asm, no hardware access, no other kernel module. */
+/* Reads an existing file's contents into a ring-3-owned buffer,
+ * wrapping fs_read_file() (kernel/fs/fs.h) with zero changes to its
+ * behavior. arg is the address of a struct sys_read_file_args built
+ * by the caller -- ring3.asm's ABI still passes exactly one value in
+ * ebx; for this syscall, that value is a pointer instead of a plain
+ * integer. */
+#define SYS_READ_FILE 2
+
+/* Carries fs_read_file()'s four arguments across the syscall boundary
+ * as a single pointer. Field types and order match fs_read_file()'s
+ * own signature exactly (kernel/fs/fs.h) -- this struct exists only
+ * to fit four arguments through one register, not to add or
+ * reinterpret any of them. */
+struct sys_read_file_args {
+    const char *path;
+    void *buf;
+    unsigned int buf_size;
+    unsigned int *out_size;
+};
+
+/* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
+ * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h or
+ * any other kernel module. This is what kernel/tests/test_syscall.c
+ * links and calls directly. */
+int syscall_dispatch_core(int num, int arg);
+
+/* Real -- defined in syscall_fs.c, not syscall.c. This is the exact
+ * name ring3.asm's syscall_entry already calls; giving the real
+ * dispatcher this name in a different file means ring3.asm needs no
+ * changes at all. Handles SYS_READ_FILE, falls through to
+ * syscall_dispatch_core() for everything else. */
 int syscall_dispatch(int num, int arg);
 
 #endif
