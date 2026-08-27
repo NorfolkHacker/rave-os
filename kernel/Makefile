@@ -41,7 +41,7 @@ CFLAGS := -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-
 # is needed for compiler-generated code.
 ISR_CFLAGS := $(CFLAGS) -mgeneral-regs-only
 
-C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o sb16.o fs.o editor.o serial.o scheduler.o synth.o boot_splash.o paging.o hexfmt.o
+C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o sb16.o fs.o editor.o serial.o scheduler.o synth.o boot_splash.o paging.o hexfmt.o gdt.o syscall.o
 
 all: kernel.bin
 
@@ -51,7 +51,10 @@ kernel_entry.o: arch/kernel_entry.asm
 context_switch.o: sched/context_switch.asm
 	$(AS) -f elf32 sched/context_switch.asm -o context_switch.o
 
-kernel.o: kernel.c gfx/graphics.h gfx/text.h drivers/mouse.h drivers/keyboard.h arch/interrupts.h gui/window.h gui/button.h gui/taskbar.h gui/startmenu.h gui/console_input.h gui/console_history.h gui/console_output.h forth/forth.h gui/shell.h arch/io.h drivers/ata.h fs/fs.h gui/editor.h forth/forth_hooks.h drivers/serial.h sched/scheduler.h drivers/sb16.h audio/synth.h gui/boot_splash.h
+ring3.o: arch/ring3.asm
+	$(AS) -f elf32 arch/ring3.asm -o ring3.o
+
+kernel.o: kernel.c gfx/graphics.h gfx/text.h drivers/mouse.h drivers/keyboard.h arch/interrupts.h gui/window.h gui/button.h gui/taskbar.h gui/startmenu.h gui/console_input.h gui/console_history.h gui/console_output.h forth/forth.h gui/shell.h arch/io.h drivers/ata.h fs/fs.h gui/editor.h forth/forth_hooks.h drivers/serial.h sched/scheduler.h drivers/sb16.h audio/synth.h gui/boot_splash.h arch/gdt.h arch/idt.h arch/syscall.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 keyboard.o: drivers/keyboard.c drivers/keyboard.h
@@ -74,6 +77,12 @@ paging.o: arch/paging.c arch/paging.h
 
 hexfmt.o: arch/hexfmt.c arch/hexfmt.h
 	$(CC) $(CFLAGS) -c arch/hexfmt.c -o hexfmt.o
+
+gdt.o: arch/gdt.c arch/gdt.h
+	$(CC) $(CFLAGS) -c arch/gdt.c -o gdt.o
+
+syscall.o: arch/syscall.c arch/syscall.h
+	$(CC) $(CFLAGS) -c arch/syscall.c -o syscall.o
 
 graphics.o: gfx/graphics.c gfx/graphics.h boot_info.h
 	$(CC) $(CFLAGS) -c gfx/graphics.c -o graphics.o
@@ -141,8 +150,8 @@ serial.o: drivers/serial.c drivers/serial.h arch/io.h
 scheduler.o: sched/scheduler.c sched/scheduler.h
 	$(CC) $(CFLAGS) -c sched/scheduler.c -o scheduler.o
 
-kernel.elf: kernel_entry.o context_switch.o $(C_OBJS) arch/linker.ld
-	$(LD) -m elf_i386 -T arch/linker.ld -nostdlib -o kernel.elf kernel_entry.o context_switch.o $(C_OBJS)
+kernel.elf: kernel_entry.o context_switch.o ring3.o $(C_OBJS) arch/linker.ld
+	$(LD) -m elf_i386 -T arch/linker.ld -nostdlib -o kernel.elf kernel_entry.o context_switch.o ring3.o $(C_OBJS)
 
 # No sector-boundary padding or size budget here anymore -- just the raw
 # compiled bytes. boot/Makefile is the sole place that now computes how
@@ -154,6 +163,6 @@ kernel.bin: kernel.elf
 	$(OBJCOPY) -O binary kernel.elf kernel.bin
 
 clean:
-	rm -f kernel_entry.o context_switch.o $(C_OBJS) kernel.elf kernel.bin
+	rm -f kernel_entry.o context_switch.o ring3.o $(C_OBJS) kernel.elf kernel.bin
 
 .PHONY: all clean
