@@ -52,12 +52,15 @@ syscall_entry:
     push es
     push fs
     push gs
-    mov ax, 0x10           ; kernel data selector -- DS/ES/FS/GS still
-    mov ds, ax               ; hold whatever the ring3 caller had
-    mov es, ax                ; loaded, and must not be trusted for
-    mov fs, ax                 ; kernel-side work even though this
-    mov gs, ax                  ; build's user/kernel data segments
-                                  ; are numerically identical
+    mov cx, 0x10            ; kernel data selector -- DS/ES/FS/GS still
+    mov ds, cx                ; hold whatever the ring3 caller had
+    mov es, cx                 ; loaded, and must not be trusted for
+    mov fs, cx                  ; kernel-side work even though this
+    mov gs, cx                   ; build's user/kernel data segments
+                                   ; are numerically identical -- ecx
+                                   ; (not eax, which still holds the
+                                   ; incoming syscall number) is used
+                                   ; as scratch here
 
     push ebx                ; arg
     push eax                 ; num
