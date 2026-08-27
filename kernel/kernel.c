@@ -25,7 +25,6 @@
 #include "boot_splash.h"
 #include "paging.h"
 #include "idt.h"
-#include "syscall.h"
 #include "io.h"
 #include "ata.h"
 #include "sb16.h"

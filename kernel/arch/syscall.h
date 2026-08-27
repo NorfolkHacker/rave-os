@@ -6,9 +6,10 @@
  * boundary intact. Ignores arg. */
 #define SYS_TEST 0
 
-/* Signals "the caller is done" by setting an internal flag -- this
- * minimal ABI has no process/address-space/scheduler-slot concept to
- * actually tear down (see docs/superpowers/specs/2026-08-27-ring3-syscall-design.md's
+/* Reserved syscall number for "the caller is done"; currently just
+ * returns 0 and does nothing else -- this minimal ABI has no
+ * process/address-space/scheduler-slot concept to actually tear down
+ * (see docs/superpowers/specs/2026-08-27-ring3-syscall-design.md's
  * Out of Scope), so this is not real process termination. Ignores arg. */
 #define SYS_EXIT 1
 

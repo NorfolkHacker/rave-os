@@ -304,10 +304,10 @@ not a queue.
   the expected `PANIC: GENERAL PROTECTION FAULT` / `CODE=0x00000000`
   banner -- confirming both the syscall ABI and CPL enforcement work on
   real hardware, not just that they compile. That verification also
-  caught a real bug in (A)'s `paging_set_user()` (a missing TLB flush
-  after a live PDE change -- fixed as its own dedicated commit,
-  permanent, unlike the temporary proof payload itself, which was
-  fully removed afterward). (C) a real syscall surface for existing
+  caught a real bug in (B)'s own Task 1, `paging_set_user()` (a missing
+  TLB flush after a live PDE change -- fixed as its own dedicated
+  commit, permanent, unlike the temporary proof payload itself, which
+  was fully removed afterward). (C) a real syscall surface for existing
   kernel services (fs, gfx, audio, window management) and (D) a
   loadable/relocatable program format both remain entirely unbuilt,
   separate future work.

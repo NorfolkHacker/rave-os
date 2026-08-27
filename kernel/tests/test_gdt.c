@@ -52,6 +52,13 @@ int main(void) {
     gdt_pack_entry(&e, 0, 0xFFFFFFFF, 0x9A, 0xCF);
     check(e.granularity == 0xCF, "gran low nibble is discarded -- 0xCF and 0xC0 must pack identically here");
 
+    /* Discriminating case: limit's bits 19:16 are 0 here, so discard
+     * vs. OR-merge of gran's low nibble actually produce different
+     * results (0xC0 vs 0xCF) -- unlike the cases above. */
+    memset(&e, 0xAA, sizeof(e));
+    gdt_pack_entry(&e, 0, 0x67, 0x9A, 0xCF);
+    check(e.granularity == 0xC0, "limit 0x67 (bits 19:16 = 0) + gran 0xCF: gran's low nibble must be discarded, giving granularity 0xC0 not 0xCF");
+
     if (failures == 0) {
         printf("PASS: all gdt tests passed\n");
         return 0;

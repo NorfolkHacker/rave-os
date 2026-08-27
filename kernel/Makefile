@@ -54,7 +54,7 @@ context_switch.o: sched/context_switch.asm
 ring3.o: arch/ring3.asm
 	$(AS) -f elf32 arch/ring3.asm -o ring3.o
 
-kernel.o: kernel.c gfx/graphics.h gfx/text.h drivers/mouse.h drivers/keyboard.h arch/interrupts.h gui/window.h gui/button.h gui/taskbar.h gui/startmenu.h gui/console_input.h gui/console_history.h gui/console_output.h forth/forth.h gui/shell.h arch/io.h drivers/ata.h fs/fs.h gui/editor.h forth/forth_hooks.h drivers/serial.h sched/scheduler.h drivers/sb16.h audio/synth.h gui/boot_splash.h arch/gdt.h arch/idt.h arch/syscall.h
+kernel.o: kernel.c gfx/graphics.h gfx/text.h drivers/mouse.h drivers/keyboard.h arch/interrupts.h gui/window.h gui/button.h gui/taskbar.h gui/startmenu.h gui/console_input.h gui/console_history.h gui/console_output.h forth/forth.h gui/shell.h arch/io.h drivers/ata.h fs/fs.h gui/editor.h forth/forth_hooks.h drivers/serial.h sched/scheduler.h drivers/sb16.h audio/synth.h gui/boot_splash.h arch/gdt.h arch/idt.h
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 
 keyboard.o: drivers/keyboard.c drivers/keyboard.h

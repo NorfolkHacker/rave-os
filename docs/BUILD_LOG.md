@@ -3286,12 +3286,20 @@ any ring3->ring0 transition (a syscall or a fault), without which a
 privilege-level change has nowhere safe to push its interrupt frame.
 The TSS's `iomap_base` is set past the struct's own end, disabling the
 I/O permission bitmap entirely: ring 3 gets no port access at all.
+Unlike every other host test suite in this project, `test_gdt.c` must
+be compiled with `-fno-pie -no-pie` added to the usual `gcc -m32
+-Wall -Wextra` invocation, since `gdt_init()`'s absolute-address
+`ljmp` (reloading CS via the new GDT) needs a non-PIE relocation --
+there's no test-runner script here (every `kernel/tests/*.c` is
+compiled and run by hand), so noting it here saves the next person
+from rediscovering it.
 
 **Task 4: `kernel/arch/syscall.c`/`.h`'s `syscall_dispatch()`.** A
 pure C function (`int syscall_dispatch(int num, int arg)`, no asm, no
 hardware access) mapping `SYS_TEST` (returns a fixed `0x1234`, proving
-plumbing alone) and `SYS_EXIT` (sets an internal flag -- not real
-process termination; this minimal ABI has no process/address-space
+plumbing alone) and `SYS_EXIT` (reserved for "the caller is done";
+currently just returns 0 and does nothing else -- not real process
+termination, since this minimal ABI has no process/address-space
 concept to tear down) to their behavior, `-1` for anything else.
 
 **Task 5: `kernel/arch/ring3.asm`, wired into `kmain()`.** The

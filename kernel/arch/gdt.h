@@ -12,11 +12,11 @@ struct gdt_entry {
     unsigned char  base_high;
 } __attribute__((packed));
 
-/* Must match KERNEL_CODE_SEGMENT/KERNEL_DATA_SEGMENT in arch/idt.c --
- * every ISR (and idt_set_gate()'s hardcoded selector) assumes these
- * exact values. gdt_init() keeps them numerically identical to
- * boot/stage2.asm's original static GDT; only the table backing them
- * becomes kernel-owned. */
+/* GDT_KERNEL_CODE_SELECTOR must match KERNEL_CODE_SEGMENT in
+ * arch/idt.c -- every ISR (and idt_set_gate()'s hardcoded selector)
+ * assumes this exact value. gdt_init() keeps all of these numerically
+ * identical to boot/stage2.asm's original static GDT; only the table
+ * backing them becomes kernel-owned. */
 #define GDT_KERNEL_CODE_SELECTOR 0x08
 #define GDT_KERNEL_DATA_SELECTOR 0x10
 #define GDT_USER_CODE_SELECTOR   0x18
