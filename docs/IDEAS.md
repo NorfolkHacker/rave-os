@@ -286,6 +286,32 @@ not a queue.
   surface for existing kernel services, and (D) a loadable/relocatable
   program format all remain entirely unbuilt, separate future work.
 
+  (B), ring 3 + a minimal syscall ABI, has now also shipped, 2026-08-27
+  (see `docs/superpowers/specs/2026-08-27-ring3-syscall-design.md` and
+  `docs/BUILD_LOG.md`'s entry for the same date): `kernel/arch/gdt.c`/
+  `.h` builds a kernel-owned GDT with real DPL 3 user code/data
+  segments and a TSS (so a ring3->ring0 transition has a safe kernel
+  stack to land on), `paging_set_user()` flips one page directory
+  entry's User/Supervisor bit so ring 3 code can actually fetch its
+  own instructions, and `kernel/arch/ring3.asm` implements
+  `enter_ring3()` (the CPL0->CPL3 switch) and a hand-written `int 0x80`
+  trap-gate stub (`eax` in/out, `ebx` the one argument, every other
+  register clobbered) dispatching into `kernel/arch/syscall.c`'s
+  `syscall_dispatch()`. Proven end to end in headless QEMU: a temporary
+  ring-3 payload round-tripped a real syscall (`SYS_TEST`'s argument
+  and return value both crossing the ring3/ring0 boundary intact) and
+  then deliberately executed a CPL0-only instruction, producing exactly
+  the expected `PANIC: GENERAL PROTECTION FAULT` / `CODE=0x00000000`
+  banner -- confirming both the syscall ABI and CPL enforcement work on
+  real hardware, not just that they compile. That verification also
+  caught a real bug in (A)'s `paging_set_user()` (a missing TLB flush
+  after a live PDE change -- fixed as its own dedicated commit,
+  permanent, unlike the temporary proof payload itself, which was
+  fully removed afterward). (C) a real syscall surface for existing
+  kernel services (fs, gfx, audio, window management) and (D) a
+  loadable/relocatable program format both remain entirely unbuilt,
+  separate future work.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
