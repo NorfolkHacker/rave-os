@@ -51,7 +51,14 @@ void paging_set_user_entry(uint32_t *pd, uint32_t pde_index, int user);
  * paging_enable() already built and switched CR3 to. Ring 3 code
  * cannot fetch its own first instruction without this -- the U/S bit
  * gates all access, not just data, and every PDE paging_enable()
- * builds starts supervisor-only. */
+ * builds starts supervisor-only. Also flushes the entire TLB (a CR3
+ * reload with its own current value) after modifying the entry --
+ * this identity map uses 4MB PSE pages, and the CPU may already hold
+ * a cached PSE translation for the modified region carrying the old
+ * permission; modifying the in-memory PDE alone doesn't retroactively
+ * invalidate that cached entry, so without the flush a stale
+ * supervisor-only translation could keep faulting ring-3 accesses
+ * even after this call returns. */
 void paging_set_user(uint32_t pde_index, int user);
 
 /* Builds the identity map into a static page directory and switches

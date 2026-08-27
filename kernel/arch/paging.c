@@ -22,6 +22,13 @@ static uint32_t page_directory[PAGE_DIRECTORY_ENTRIES] __attribute__((aligned(40
 
 void paging_set_user(uint32_t pde_index, int user) {
     paging_set_user_entry(page_directory, pde_index, user);
+    __asm__ volatile(
+        "mov %%cr3, %%eax\n\t"
+        "mov %%eax, %%cr3\n\t"
+        :
+        :
+        : "eax", "memory"
+    );
 }
 
 void paging_enable(void) {
