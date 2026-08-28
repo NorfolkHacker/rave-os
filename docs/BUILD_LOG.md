@@ -3574,3 +3574,110 @@ Files: `kernel/arch/syscall.c`/`.h`, `kernel/arch/syscall_fs.c` (new)
 `kernel/kernel.c` (the temporary proof payload, added and fully
 removed within this task); `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this
 entry and closeout).
+
+## 2026-08-27 -- More of the fs syscall surface: fs_create_file + fs_list_dir (userspace sub-project C, second slice)
+
+Closes the second slice of sub-project (C) of `docs/IDEAS.md`'s "Real
+userspace" entry -- two more real filesystem operations, not just the
+one `SYS_READ_FILE` shipped in the first slice, are now reachable from
+CPL 3 through `int 0x80`. Two-task plan
+(`docs/superpowers/sdd/2026-08-27-fs-syscall-write-list/`, design doc
+`docs/superpowers/specs/2026-08-27-fs-syscall-write-list-design.md`):
+
+**Task 1: `SYS_CREATE_FILE`/`SYS_LIST_DIR`.** No new architecture was
+needed -- the first slice's pure/real `syscall_dispatch_core()`/
+`syscall_dispatch()` split and its single-pointer-struct args-passing
+convention covered both new syscalls directly. `kernel/arch/syscall_fs.c`
+gained two more cases, each a thin wrapper: `SYS_CREATE_FILE` around
+`fs_create_file()`, `SYS_LIST_DIR` around `fs_list_dir()`
+(`kernel/fs/fs.h`). `struct sys_create_file_args`/`struct
+sys_list_dir_args` (`kernel/arch/syscall.h`) mirror those two
+functions' own signatures exactly, same as `struct sys_read_file_args`
+did for `fs_read_file()`. `struct sys_list_dir_args`'s `out` field is a
+`struct fs_dirent *`, and `fs_dirent` itself is only forward-declared
+in `syscall.h` (`struct fs_dirent;`) rather than pulled in by
+including `fs.h` there -- only a pointer to the type appears in the
+struct, which needs the tag to exist, not its full layout, so this
+keeps `syscall.h`'s own dependency footprint at zero `fs.h` symbols,
+exactly as it already was after the first slice.
+`kernel/arch/syscall_fs.c` already includes `fs.h` for `fs_read_file()`,
+so it gets the real `fs_dirent` definition for free.
+
+**Task 2 (this entry): the one-time ring-3 proof, cleanup, and
+closeout.** A temporary payload was added to `kernel/kernel.c`,
+immediately after `fs_bootstrap_dirs();` in `kmain()` (the same
+ordering lesson the first slice's own Task 2 had to learn the hard
+way applies here too: the payload needs `/TMP` to already exist, so
+it cannot run any earlier): `paging_set_user(0, 1)` then
+`enter_ring3()` into a CPL3 function that issues `int 0x80` for
+`SYS_CREATE_FILE` to create `/TMP/RING3.TXT`, then `int 0x80` for
+`SYS_LIST_DIR` to list `/TMP` and scan the returned entries for one
+named `RING3.TXT` (matched on its first four characters and its
+3-byte size), then `SYS_EXIT` followed by the same deliberate `cli`
+the first slice's proof reused from sub-project (B). The payload
+deliberately ignores `SYS_CREATE_FILE`'s own return value:
+`fs_create_file()` is write-once, and `fs.img` persists across QEMU
+boots within a worktree, so a re-run against an `fs.img` that already
+has the file sees `-1` ("already exists") -- correct, expected
+behavior, not a failure. Gating success on `SYS_LIST_DIR` finding the
+entry instead makes the proof self-verifying and idempotent across
+boots: reaching the deliberate `cli` requires the entry to actually be
+found via a real directory listing, regardless of whether this run's
+own create or an earlier run's created it. A broken syscall path
+instead falls into the same `for (;;) {}` fallback the first slice's
+payload used, producing a permanently black screen, clearly
+distinguishable from the expected `#GP` banner.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as every prior entry above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480), run from this
+task's own worktree (`boot/`, not the sibling checkout's; `fs.img` did
+not yet exist there and was built fresh via `make fs.img` before the
+first boot):
+
+- **Proof screendump:** the red panic banner appeared, reading
+  exactly:
+  ```
+  PANIC: GENERAL PROTECTION FAULT
+  CODE=0x00000000
+  ```
+  identical to both prior sub-project (C) proofs -- reaching it is
+  proof `/TMP/RING3.TXT` was created (by this run or an earlier one
+  against the same persistent `fs.img`) and found via a real,
+  round-tripped `SYS_LIST_DIR` call, not just fixed-value plumbing.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` came back empty, confirming the removal was exact
+  -- the call-site block, `ring3_fs_write_list_payload()`, and the
+  temporary `#include "syscall.h"` were all fully deleted, leaving
+  `kernel.c` identical to before this task started. A final rebuild
+  and headless boot showed the ordinary desktop: the `RAVE-OS` boot
+  banner, black backdrop, green cursor square, and the taskbar's green
+  rule and `MENU` label at the bottom -- matching every prior
+  sub-project's steady-state regression screendump, confirming
+  `SYS_CREATE_FILE`/`SYS_LIST_DIR` being wired into the permanent
+  `syscall_dispatch()` switch are still a true no-op with nothing in
+  the tree invoking them.
+
+One deviation from the task brief's own verbatim payload code: as
+written, `static const struct sys_list_dir_args list_args = { ...,
+&out_count }` took the address of a plain (non-`static`) local
+`out_count` as a static initializer, which does not compile
+(`initializer element is not constant`) -- `data` and `entries` in the
+same function were already `static` for exactly this reason, but
+`out_count` was not. Fixed by making `out_count` `static` too, matching
+the rest of the function's own pattern; no behavior change, since the
+payload only ever runs once per boot on a single core.
+
+Verified: one proof screendump with the exact expected banner text;
+one final regression screendump matching every prior sub-project's
+steady-state desktop exactly; `git diff` showed a clean revert of the
+temporary test code with no leftover debug code. Working tree left
+with the permanent `SYS_CREATE_FILE`/`SYS_LIST_DIR` plumbing present
+but unused by anything in the tree; scratch `.ppm`/monitor-socket
+files cleaned up; no leftover QEMU processes.
+
+Files: `kernel/arch/syscall_fs.c`, `kernel/arch/syscall.h` (the two
+new syscall cases and args structs, permanent, landed in this
+sub-project's Task 1); `kernel/kernel.c` (the temporary proof payload,
+added and fully removed within this task); `docs/BUILD_LOG.md`,
+`docs/IDEAS.md` (this entry and closeout).

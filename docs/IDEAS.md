@@ -347,6 +347,25 @@ not a queue.
   just a thin wrapper like this slice's `SYS_READ_FILE`. (D) a
   loadable/relocatable program format remains entirely unbuilt as well.
 
+  (C)'s second slice, two more real filesystem syscalls, has now also
+  shipped, 2026-08-27 (see
+  `docs/superpowers/specs/2026-08-27-fs-syscall-write-list-design.md`
+  and `docs/BUILD_LOG.md`'s entry for the same date): `SYS_CREATE_FILE`
+  and `SYS_LIST_DIR`, thin wrappers around `kernel/fs/fs.c`'s existing
+  `fs_create_file()`/`fs_list_dir()`, using the same single-pointer
+  args-struct convention the first slice established -- no new syscall
+  plumbing was needed. Proven end to end in headless QEMU: a temporary
+  ring-3 payload created `/TMP/RING3.TXT` via `SYS_CREATE_FILE`, then
+  listed `/TMP` via `SYS_LIST_DIR` and confirmed the entry was actually
+  present in the returned listing, only then executing the same
+  deliberate CPL0-only instruction the prior two proofs used, producing
+  the identical `PANIC: GENERAL PROTECTION FAULT` / `CODE=0x00000000`
+  banner. This is still not the rest of `fs.h`'s surface -- `fs_delete`,
+  `fs_rename`, `fs_move`, `fs_copy_file`, `fs_append_file`, and
+  `fs_create_dir` all remain unwrapped -- and gfx/audio/window-management
+  syscalls and (D) a loadable/relocatable program format all remain
+  entirely unbuilt, same as before.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
