@@ -33,6 +33,32 @@ struct sys_read_file_args {
     unsigned int *out_size;
 };
 
+#define SYS_CREATE_FILE 3
+#define SYS_LIST_DIR 4
+
+/* Mirrors fs_create_file()'s signature exactly (kernel/fs/fs.h). */
+struct sys_create_file_args {
+    const char *path;
+    const void *data;
+    unsigned int size;
+};
+
+/* Forward-declared, not included from fs.h: only a pointer to this
+ * type appears below, which needs the tag to exist, not its full
+ * layout. Keeps syscall.h's own dependency footprint at zero fs.h
+ * symbols, same as it already is today; kernel/arch/syscall_fs.c
+ * (which already includes fs.h for fs_read_file()) gets the real
+ * definition for free when it includes syscall.h. */
+struct fs_dirent;
+
+/* Mirrors fs_list_dir()'s signature exactly (kernel/fs/fs.h). */
+struct sys_list_dir_args {
+    const char *path;
+    struct fs_dirent *out;
+    unsigned int max_entries;
+    unsigned int *out_count;
+};
+
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
  * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h or
  * any other kernel module. This is what kernel/tests/test_syscall.c
