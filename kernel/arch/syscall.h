@@ -33,7 +33,15 @@ struct sys_read_file_args {
     unsigned int *out_size;
 };
 
+/* Creates a new file with the given contents, wrapping fs_create_file()
+ * (kernel/fs/fs.h) with zero changes to its behavior -- including its
+ * write-once semantics (fails if the path already exists). arg is the
+ * address of a struct sys_create_file_args built by the caller. */
 #define SYS_CREATE_FILE 3
+
+/* Lists a directory's entries, wrapping fs_list_dir()
+ * (kernel/fs/fs.h) with zero changes to its behavior. arg is the
+ * address of a struct sys_list_dir_args built by the caller. */
 #define SYS_LIST_DIR 4
 
 /* Mirrors fs_create_file()'s signature exactly (kernel/fs/fs.h). */
@@ -68,7 +76,8 @@ int syscall_dispatch_core(int num, int arg);
 /* Real -- defined in syscall_fs.c, not syscall.c. This is the exact
  * name ring3.asm's syscall_entry already calls; giving the real
  * dispatcher this name in a different file means ring3.asm needs no
- * changes at all. Handles SYS_READ_FILE, falls through to
+ * changes at all. Handles the fs.h-backed syscalls (SYS_READ_FILE,
+ * SYS_CREATE_FILE, SYS_LIST_DIR), falls through to
  * syscall_dispatch_core() for everything else. eax carries the
  * syscall number (num) and ebx the argument (arg) across int 0x80;
  * the return value here is what eax holds when it returns (see

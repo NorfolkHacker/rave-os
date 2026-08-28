@@ -3641,7 +3641,7 @@ first boot):
   PANIC: GENERAL PROTECTION FAULT
   CODE=0x00000000
   ```
-  identical to both prior sub-project (C) proofs -- reaching it is
+  identical to both prior syscall sub-projects' proofs -- reaching it is
   proof `/TMP/RING3.TXT` was created (by this run or an earlier one
   against the same persistent `fs.img`) and found via a real,
   round-tripped `SYS_LIST_DIR` call, not just fixed-value plumbing.
