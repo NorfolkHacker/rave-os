@@ -297,7 +297,10 @@ not a queue.
   `enter_ring3()` (the CPL0->CPL3 switch) and a hand-written `int 0x80`
   trap-gate stub (`eax` in/out, `ebx` the one argument, every other
   register clobbered) dispatching into `kernel/arch/syscall.c`'s
-  `syscall_dispatch()`. Proven end to end in headless QEMU: a temporary
+  `syscall_dispatch()` (later split by sub-project (C)'s Task 1 into a
+  pure `syscall_dispatch_core()` staying in `syscall.c` and the real
+  `syscall_dispatch()` that `ring3.asm` calls, moved to the new
+  `kernel/arch/syscall_fs.c`). Proven end to end in headless QEMU: a temporary
   ring-3 payload round-tripped a real syscall (`SYS_TEST`'s argument
   and return value both crossing the ring3/ring0 boundary intact) and
   then deliberately executed a CPL0-only instruction, producing exactly
@@ -323,7 +326,7 @@ not a queue.
   `struct sys_read_file_args` rather than extending `ring3.asm`'s
   register ABI. Proven end to end in headless QEMU: a temporary ring-3
   payload read `/BIN/HELLO`'s real, on-disk content via
-  `SYS_READ_FILE`, checked it byte-for-byte, and only then executed
+  `SYS_READ_FILE`, checked its length and leading bytes, and only then executed
   the same deliberate CPL0-only instruction (B)'s own proof used,
   producing the identical `PANIC: GENERAL PROTECTION FAULT` /
   `CODE=0x00000000` banner -- reaching it at all requires the

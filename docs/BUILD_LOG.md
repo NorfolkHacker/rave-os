@@ -3454,14 +3454,15 @@ and link `fs.c` and its own dependencies just to satisfy the linker,
 even though the test never calls the `SYS_READ_FILE` branch. This is
 unlike `paging.c`/`gdt.c`'s existing pure/real splits, which each stay
 in one file: `paging_set_user()` next to `paging_set_user_entry()`,
-`gdt_init()` next to nothing needing a split at all -- because in both
+`gdt_init()` next to `gdt_pack_entry()` -- because in both
 of those, the only "real" content is inline asm sitting directly
 inside otherwise-pure functions, not a call out to an entire other
 kernel subsystem's `.c` file. `syscall_dispatch()`/`SYS_READ_FILE`'s
 real half is impure via a genuine cross-module function call instead,
 which the linker resolves eagerly -- confirmed empirically while
 writing this task's design spec by trying the single-file approach
-first and watching `test_syscall`'s build pull in `fs.c`.
+first and confirmed by the link failing with `undefined reference to
+'fs_read_file'`.
 
 `struct sys_read_file_args` (`kernel/arch/syscall.h`) carries
 `fs_read_file()`'s four arguments (`path`, `buf`, `buf_size`,
@@ -3482,8 +3483,8 @@ of by hand in assembly.
 
 **Task 2 (this entry): the one-time ring-3 proof, cleanup, and
 closeout.** A temporary payload was added to `kernel/kernel.c`:
-`paging_set_user(0, 1)` (already a no-op by this point in `kmain()`,
-sub-project (B) having called it once already, but idempotent) then
+`paging_set_user(0, 1)` (the only caller in the tree, exactly as (B)'s
+own temporary payload did before being removed) then
 `enter_ring3()` into a CPL3 function issuing `int 0x80` for
 `SYS_READ_FILE` against `/BIN/HELLO` (seeded earlier in `kmain()`:
 `": GREET 42 . CR ;\nGREET\n"`, 24 bytes), checking the returned bytes
@@ -3494,9 +3495,10 @@ content to have round-tripped correctly through `fs_read_file()`. A
 broken read instead falls into the same `for (;;) {}` fallback (B)'s
 own payload used, producing a permanently black screen.
 
-**A real ordering bug surfaced before this task's proof screendump
-ever ran, caught during review rather than by a bad screendump.** The
-task's own instructions (mirroring sub-project (B)'s pattern) called
+**A real ordering bug surfaced on this task's first proof screendump,
+in the temporary payload's call-site placement rather than in any
+permanent syscall machinery.** The task's own instructions (mirroring
+sub-project (B)'s pattern) called
 for placing the temporary test payload's `enter_ring3()` call
 immediately after `interrupts_enable();` in `kmain()` -- the same
 call-site sub-project (B) itself used, since (B)'s `SYS_TEST` payload

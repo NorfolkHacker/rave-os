@@ -43,7 +43,10 @@ int syscall_dispatch_core(int num, int arg);
  * name ring3.asm's syscall_entry already calls; giving the real
  * dispatcher this name in a different file means ring3.asm needs no
  * changes at all. Handles SYS_READ_FILE, falls through to
- * syscall_dispatch_core() for everything else. */
+ * syscall_dispatch_core() for everything else. eax carries the
+ * syscall number (num) and ebx the argument (arg) across int 0x80;
+ * the return value here is what eax holds when it returns (see
+ * ring3.asm's syscall_entry). */
 int syscall_dispatch(int num, int arg);
 
 #endif
