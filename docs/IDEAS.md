@@ -312,6 +312,38 @@ not a queue.
   loadable/relocatable program format both remain entirely unbuilt,
   separate future work.
 
+  (C)'s first slice, a single real filesystem syscall, has now also
+  shipped, 2026-08-27 (see
+  `docs/superpowers/specs/2026-08-27-fs-syscall-design.md` and
+  `docs/BUILD_LOG.md`'s entry for the same date): `SYS_READ_FILE`, a
+  thin wrapper around `kernel/fs/fs.c`'s existing `fs_read_file()`,
+  reachable from CPL 3 through the same `int 0x80` trap gate (B)
+  built, its four arguments (`path`, `buf`, `buf_size`, `out_size`)
+  carried across the boundary as a single pointer to a
+  `struct sys_read_file_args` rather than extending `ring3.asm`'s
+  register ABI. Proven end to end in headless QEMU: a temporary ring-3
+  payload read `/BIN/HELLO`'s real, on-disk content via
+  `SYS_READ_FILE`, checked it byte-for-byte, and only then executed
+  the same deliberate CPL0-only instruction (B)'s own proof used,
+  producing the identical `PANIC: GENERAL PROTECTION FAULT` /
+  `CODE=0x00000000` banner -- reaching it at all requires the
+  filesystem read to have actually round-tripped correctly, not just
+  the syscall plumbing. That verification also caught a real ordering
+  bug in the temporary proof payload's own call-site placement (not in
+  any permanent syscall machinery): placed immediately after
+  `interrupts_enable()`, mirroring (B)'s own call site, the payload ran
+  before `/BIN/HELLO` was created on disk later in `kmain()`, so the
+  read correctly failed and produced an indistinguishable-looking black
+  screen until the call site was moved to after `/BIN/HELLO`'s
+  creation. This is deliberately only one operation out of `fs.h`'s
+  roughly a dozen (create, delete, list, mkdir, and the rest all remain
+  unwrapped), and gfx/audio/window-management have no syscall surface
+  at all yet -- both remain separate future work, and per this spec's
+  own Purpose section, window-management and audio in particular will
+  need real per-program ownership design once they're tackled, not
+  just a thin wrapper like this slice's `SYS_READ_FILE`. (D) a
+  loadable/relocatable program format remains entirely unbuilt as well.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the

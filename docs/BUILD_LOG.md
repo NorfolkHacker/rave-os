@@ -3424,3 +3424,151 @@ Files: `kernel/arch/paging.c`/`.h` (the TLB-flush fix to
 `paging_set_user()`, permanent); `kernel/kernel.c` (the temporary
 proof payload, added and fully removed within this task);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-27 -- A real fs_read_file syscall (userspace sub-project C, first slice)
+
+Closes the first slice of sub-project (C) of `docs/IDEAS.md`'s "Real
+userspace" entry -- a real kernel service, not just plumbing, is now
+reachable from CPL 3 through `int 0x80` for the first time. Two-task
+plan (`docs/superpowers/sdd/2026-08-27-fs-syscall/`, design doc
+`docs/superpowers/specs/2026-08-27-fs-syscall-design.md`):
+
+**Task 1: `SYS_READ_FILE` and the `syscall_dispatch()` split.**
+`kernel/arch/syscall.c`'s `syscall_dispatch()` (sub-project (B)'s pure,
+`fs.h`-free function) was renamed to `syscall_dispatch_core()` and kept
+exactly as-is (`SYS_TEST`/`SYS_EXIT`/default, no dependency on `fs.h`
+or anything else). A new `kernel/arch/syscall_fs.c` defines a second
+function under the *original* name, `syscall_dispatch()` -- the exact
+symbol `ring3.asm`'s `syscall_entry` already calls, so no assembly
+needed to change at all -- which handles the new `SYS_READ_FILE` and
+falls through to `syscall_dispatch_core()` for everything else. This
+two-file split exists for a real, empirically-confirmed reason, not
+just tidiness: a C linker resolves an entire translation unit's
+external symbols at link time, regardless of which branches are
+actually reachable at runtime, so adding `fs_read_file()` (declared in
+`kernel/fs/fs.h`) as a case inside the original single-file
+`syscall.c` would have forced every caller of `syscall_dispatch()` --
+including `kernel/tests/test_syscall.c`, the pure host-side test suite
+that links `syscall.c` alone, no hardware, no `fs.c` -- to also pull in
+and link `fs.c` and its own dependencies just to satisfy the linker,
+even though the test never calls the `SYS_READ_FILE` branch. This is
+unlike `paging.c`/`gdt.c`'s existing pure/real splits, which each stay
+in one file: `paging_set_user()` next to `paging_set_user_entry()`,
+`gdt_init()` next to nothing needing a split at all -- because in both
+of those, the only "real" content is inline asm sitting directly
+inside otherwise-pure functions, not a call out to an entire other
+kernel subsystem's `.c` file. `syscall_dispatch()`/`SYS_READ_FILE`'s
+real half is impure via a genuine cross-module function call instead,
+which the linker resolves eagerly -- confirmed empirically while
+writing this task's design spec by trying the single-file approach
+first and watching `test_syscall`'s build pull in `fs.c`.
+
+`struct sys_read_file_args` (`kernel/arch/syscall.h`) carries
+`fs_read_file()`'s four arguments (`path`, `buf`, `buf_size`,
+`out_size`) across the syscall boundary as a single pointer passed in
+`ebx`, field types and order matching `fs_read_file()`'s own signature
+exactly. A register-based extension to the ABI instead -- spreading
+the four arguments across `ebx`/`ecx`/`edx`/`edi` or similar -- was
+considered and rejected: it would mean touching `kernel/arch/ring3.asm`'s
+`syscall_entry`, the exact routine that has already had two real bugs
+land and get fixed during sub-project (B) (the `eax`-clobber bug caught
+in that task's own review, and the missing-TLB-flush bug this file's
+entry immediately above documents) purely from register-discipline
+mistakes in hand-written asm. A single-pointer struct keeps `ring3.asm`
+completely untouched -- `eax`/`ebx` in, `eax` out, exactly the same ABI
+shape as `SYS_TEST`/`SYS_EXIT` -- and moves all the field-order/size
+risk into a plain C struct definition, checked by the compiler instead
+of by hand in assembly.
+
+**Task 2 (this entry): the one-time ring-3 proof, cleanup, and
+closeout.** A temporary payload was added to `kernel/kernel.c`:
+`paging_set_user(0, 1)` (already a no-op by this point in `kmain()`,
+sub-project (B) having called it once already, but idempotent) then
+`enter_ring3()` into a CPL3 function issuing `int 0x80` for
+`SYS_READ_FILE` against `/BIN/HELLO` (seeded earlier in `kmain()`:
+`": GREET 42 . CR ;\nGREET\n"`, 24 bytes), checking the returned bytes
+against the expected content, then `SYS_EXIT` followed by a deliberate
+`cli` -- reusing sub-project (B)'s own exact deliberate-fault tail, so
+reaching the `#GP` banner at all requires the file's real, on-disk
+content to have round-tripped correctly through `fs_read_file()`. A
+broken read instead falls into the same `for (;;) {}` fallback (B)'s
+own payload used, producing a permanently black screen.
+
+**A real ordering bug surfaced before this task's proof screendump
+ever ran, caught during review rather than by a bad screendump.** The
+task's own instructions (mirroring sub-project (B)'s pattern) called
+for placing the temporary test payload's `enter_ring3()` call
+immediately after `interrupts_enable();` in `kmain()` -- the same
+call-site sub-project (B) itself used, since (B)'s `SYS_TEST` payload
+has no dependency on filesystem state at all. `SYS_READ_FILE`,
+unlike `SYS_TEST`, does: `/BIN/HELLO` is not created until much later
+in `kmain()`, after `ata_selftest()`, `fs_selftest()`, and
+`fs_bootstrap_dirs()` all run. Placed right after
+`interrupts_enable()`, the payload's `SYS_READ_FILE("/BIN/HELLO", ...)`
+call runs before the filesystem is even mounted, let alone before
+`/BIN/HELLO` exists on it -- `fs_read_file()` correctly returns "not
+found," the payload's own documented fallback correctly triggers, and
+the screendump is a black screen that looks identical to a genuinely
+broken syscall path, with no way to tell the two apart from the
+screendump alone. (A first implementation attempt at this task did in
+fact hit exactly this: black screen, diagnosed the ordering issue
+correctly by reading through `kmain()`'s call sequence, and reported
+blocked rather than guessing at a fix -- see this task's own report
+file for the full diagnosis trail.) Fixed by moving the temporary
+call-site block to run immediately after the block that creates
+`/BIN/HELLO` on disk instead of immediately after
+`interrupts_enable()` -- the only change from the task's original
+call-site instructions; the payload function itself and everything
+else were unchanged. `enter_ring3()` never returns to its caller, so
+nothing after the relocated call site (file-listing/window-content/
+`gfx_present()`/the main event loop) executes during this temporary
+test run -- expected, not a regression, mirroring how (B)'s own proof
+placement meant its main loop never started during its test run
+either.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as (A)/(B)'s own entries above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480), run from this
+task's own worktree (`boot/`, not the sibling checkout's):
+
+- **Proof screendump, after the call-site fix:** the red panic banner
+  appeared, reading exactly:
+  ```
+  PANIC: GENERAL PROTECTION FAULT
+  CODE=0x00000000
+  ```
+  identical to (B)'s own proof banner, since this reuses (B)'s
+  deliberate-fault tail -- reaching it is proof `/BIN/HELLO`'s real,
+  on-disk content came back through `SYS_READ_FILE` correctly: the
+  payload's content check (`out_size == 24` and the first four bytes
+  matching `": GR"`) had to pass before the deliberate `cli` could even
+  execute.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` against the Task-1 (of this sub-project) state came
+  back empty, confirming the removal was exact -- the call-site block,
+  `ring3_fs_test_payload()`, and the temporary `#include "syscall.h"`
+  were all fully deleted, leaving `kernel.c` identical to before this
+  task started. A final rebuild and headless boot showed the ordinary
+  desktop: black backdrop, green cursor square, the taskbar's green
+  rule and `MENU` label at the bottom -- matching (B)'s own steady-state
+  regression screendump exactly, confirming `SYS_READ_FILE` being wired
+  into the permanent `syscall_dispatch()` switch is still a true no-op
+  with nothing in the tree invoking it.
+
+Verified: one proof screendump with the exact expected banner text
+(the first real kernel service -- the filesystem -- exercised from
+CPL3 through `int 0x80`, not just fixed-value plumbing); one call-site
+ordering bug caught and fixed (the temporary test payload's placement,
+not any part of the permanent syscall machinery); one final regression
+screendump matching (B)'s own steady-state desktop exactly; `git diff`
+showed a clean revert of the temporary test code with no leftover
+debug code. Working tree left with the permanent `SYS_READ_FILE`
+plumbing present but unused by anything in the tree; scratch
+`.ppm`/monitor-socket files cleaned up; no leftover QEMU processes.
+
+Files: `kernel/arch/syscall.c`/`.h`, `kernel/arch/syscall_fs.c` (new)
+(the `syscall_dispatch_core()`/`syscall_dispatch()` split and
+`SYS_READ_FILE`, permanent, landed in this sub-project's Task 1);
+`kernel/kernel.c` (the temporary proof payload, added and fully
+removed within this task); `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this
+entry and closeout).
