@@ -36,5 +36,5 @@ int syscall_dispatch(int num, int arg) {
         const struct sys_append_file_args *a = (const struct sys_append_file_args *)arg;
         return fs_append_file(a->path, a->data, a->size);
     }
-    return syscall_dispatch_core(num, arg);
+    return syscall_dispatch_gfx(num, arg);
 }

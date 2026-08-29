@@ -134,11 +134,85 @@ struct sys_append_file_args {
     unsigned int size;
 };
 
+/* Returns gfx_width()/gfx_height() (kernel/gfx/graphics.h) directly --
+ * zero arguments, zero changes to behavior. Ignores arg. */
+#define SYS_GFX_WIDTH 11
+#define SYS_GFX_HEIGHT 12
+
+/* Fills the entire backbuffer with rgb, wrapping gfx_clear() with zero
+ * changes to its behavior. A single value fits in one register, so arg
+ * IS rgb directly, not the address of a wrapping struct -- same shape
+ * as SYS_DELETE/SYS_CREATE_DIR's single-pointer argument, just a plain
+ * value instead of a pointer. */
+#define SYS_GFX_CLEAR 13
+
+/* Sets one backbuffer pixel, wrapping gfx_put_pixel() with zero changes
+ * to its behavior. arg is the address of a struct sys_gfx_put_pixel_args
+ * built by the caller. No bounds validation: an out-of-range x/y is
+ * whatever gfx_put_pixel() itself already does with one, same
+ * no-pointer-validation stance every prior syscall sub-project has
+ * taken. */
+#define SYS_GFX_PUT_PIXEL 14
+
+/* Mirrors gfx_put_pixel()'s signature exactly (kernel/gfx/graphics.h). */
+struct sys_gfx_put_pixel_args {
+    int x;
+    int y;
+    unsigned int rgb;
+};
+
+/* Fills a backbuffer rectangle, wrapping gfx_fill_rect() with zero
+ * changes to its behavior. arg is the address of a struct
+ * sys_gfx_fill_rect_args built by the caller. */
+#define SYS_GFX_FILL_RECT 15
+
+/* Mirrors gfx_fill_rect()'s signature exactly (kernel/gfx/graphics.h). */
+struct sys_gfx_fill_rect_args {
+    int x;
+    int y;
+    int w;
+    int h;
+    unsigned int rgb;
+};
+
+/* Copies one backbuffer rectangle to the real screen, wrapping
+ * gfx_present_rect() with zero changes to its behavior -- this is a
+ * ring-3 program's only way to make anything it draws actually
+ * visible; the backbuffer itself is never directly readable/writable
+ * by ring 3 except through SYS_GFX_PUT_PIXEL/SYS_GFX_FILL_RECT. arg is
+ * the address of a struct sys_gfx_present_rect_args built by the
+ * caller. */
+#define SYS_GFX_PRESENT_RECT 16
+
+/* Mirrors gfx_present_rect()'s signature exactly
+ * (kernel/gfx/graphics.h). */
+struct sys_gfx_present_rect_args {
+    int x;
+    int y;
+    int w;
+    int h;
+};
+
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
- * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h or
- * any other kernel module. This is what kernel/tests/test_syscall.c
- * links and calls directly. */
+ * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h,
+ * graphics.h, or any other kernel module. This is what
+ * kernel/tests/test_syscall.c links and calls directly. */
 int syscall_dispatch_core(int num, int arg);
+
+/* Real, gfx-backed -- defined in syscall_gfx.c, not syscall.c or
+ * syscall_fs.c. Handles the graphics.h-backed syscalls (SYS_GFX_WIDTH,
+ * SYS_GFX_HEIGHT, SYS_GFX_CLEAR, SYS_GFX_PUT_PIXEL, SYS_GFX_FILL_RECT,
+ * SYS_GFX_PRESENT_RECT), falls through to syscall_dispatch_core() for
+ * everything else. Not the function ring3.asm calls directly --
+ * syscall_dispatch() (below) calls this one as its own fallback,
+ * chaining fs.h's dispatcher and graphics.h's dispatcher together the
+ * same way syscall_dispatch() already chained into
+ * syscall_dispatch_core(). Deliberately no per-window clipping or
+ * ownership: a ring-3 program can draw anywhere in the shared
+ * backbuffer, including over the desktop/taskbar -- real ownership is
+ * out of scope for this slice, deferred to whenever window-management
+ * syscalls are tackled. */
+int syscall_dispatch_gfx(int num, int arg);
 
 /* Real -- defined in syscall_fs.c, not syscall.c. This is the exact
  * name ring3.asm's syscall_entry already calls; giving the real
@@ -146,11 +220,11 @@ int syscall_dispatch_core(int num, int arg);
  * changes at all. Handles the fs.h-backed syscalls (SYS_READ_FILE,
  * SYS_CREATE_FILE, SYS_LIST_DIR, SYS_DELETE, SYS_CREATE_DIR,
  * SYS_RENAME, SYS_MOVE, SYS_COPY_FILE, SYS_APPEND_FILE) -- covering
- * fs.h's entire operation surface as of this slice -- falls through to
- * syscall_dispatch_core() for everything else. eax carries the syscall
- * number (num) and ebx the argument (arg) across int 0x80; the return
- * value here is what eax holds when it returns (see ring3.asm's
- * syscall_entry). */
+ * fs.h's entire operation surface -- falls through to
+ * syscall_dispatch_gfx() (not syscall_dispatch_core() directly
+ * anymore) for everything else. eax carries the syscall number (num)
+ * and ebx the argument (arg) across int 0x80; the return value here is
+ * what eax holds when it returns (see ring3.asm's syscall_entry). */
 int syscall_dispatch(int num, int arg);
 
 #endif
