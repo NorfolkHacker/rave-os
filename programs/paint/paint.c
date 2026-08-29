@@ -38,6 +38,119 @@ struct sys_window_open_args { int x; int y; int w; int h; const char *title; };
 #define RING3_EVENT_KEY 3
 struct sys_wait_event_args { int type; int x; int y; char key; };
 
+/* Forward declarations for functions that _start() calls directly */
+static int gfx_width(void);
+static int gfx_height(void);
+static void window_open(int x, int y, int w, int h, const char *title);
+static void draw_all(void);
+static void draw_canvas(void);
+static void draw_strip(void);
+static void draw_name_field(void);
+static void gfx_fill_rect(int x, int y, int w, int h, unsigned int rgb);
+static void gfx_present_rect(int x, int y, int w, int h);
+static void wait_event(int *type, int *x, int *y, char *key);
+static int hit_canvas(int cx, int cy, int *col, int *row);
+static int hit_strip(int cx, int cy, int *idx);
+static int hit_rect(int cx, int cy, int rx, int ry, int rw, int rh);
+static void do_save(void);
+static void do_load(void);
+
+/* --- layout (window-relative offsets; GRID/CELL match the old
+ * kernel-side canvas exactly, so the on-disk sprite format's 256-byte
+ * row-major shape lines up) --- */
+#define GRID 16
+#define CELL 16
+#define CANVAS_SIZE (GRID * CELL) /* 256 */
+#define PALETTE_COLORS 16
+#define OFF_X 8
+#define CANVAS_OFF_Y 8
+#define STRIP_OFF_Y (CANVAS_OFF_Y + CANVAS_SIZE + 4)  /* 268 */
+#define STRIP_H 20
+#define SWATCH_W (CANVAS_SIZE / PALETTE_COLORS)        /* 16 */
+#define NAME_OFF_Y (STRIP_OFF_Y + STRIP_H + 8)         /* 296 */
+#define NAME_H 20
+#define NAME_W CANVAS_SIZE                              /* 256 */
+#define BTN_OFF_Y (NAME_OFF_Y + NAME_H + 6)            /* 322 */
+#define BTN_H 22
+#define BTN_W ((CANVAS_SIZE - 8) / 2)                   /* 124 */
+#define WIN_W (OFF_X + CANVAS_SIZE + 8)                 /* 272 */
+#define WIN_H (BTN_OFF_Y + BTN_H + 8)                   /* 352 */
+
+/* Same 16-color palette as the old kernel-side paint_palette[]
+ * (kernel/kernel.c), copied verbatim so a sprite saved by the old
+ * implementation still looks the same reopened here. */
+static const unsigned int palette[PALETTE_COLORS] = {
+    0x050607, 0xFFFFFF, 0xFF3B30, 0xFF9500, 0xFFEB3B, 0x00FF66, 0x2979FF, 0xB026FF,
+    0x8D6E4C, 0xFF4FA3, 0x18E0E0, 0x0A6E3D, 0x1A2E8C, 0x808080, 0x2B2B2B, 0xCC3300,
+};
+
+static int grid[GRID][GRID];
+static int current_color = 1; /* white -- visible default against the near-black eraser color at index 0 */
+static char name[64] = "SPRITE";
+static int name_len = 6;
+static int win_x, win_y;
+
+void _start(void) {
+    int type, x, y;
+    char key;
+
+    win_x = 340 * gfx_width() / 640;  /* same 640x480 baseline every other window's own placement math uses */
+    win_y = 80 * gfx_height() / 480;
+
+    window_open(win_x, win_y, WIN_W, WIN_H, "RAVE-OS PAINT");
+    draw_all();
+
+    for (;;) {
+        wait_event(&type, &x, &y, &key);
+        if (type == RING3_EVENT_CLOSED) {
+            break;
+        } else if (type == RING3_EVENT_CLICK) {
+            int col, row, idx;
+            if (hit_canvas(x, y, &col, &row)) {
+                grid[row][col] = current_color;
+                gfx_fill_rect(win_x + OFF_X + col * CELL, win_y + CANVAS_OFF_Y + row * CELL, CELL, CELL,
+                              palette[current_color]);
+                gfx_present_rect(win_x + OFF_X + col * CELL, win_y + CANVAS_OFF_Y + row * CELL, CELL, CELL);
+            } else if (hit_strip(x, y, &idx)) {
+                current_color = idx;
+                draw_strip();
+                gfx_present_rect(win_x + OFF_X, win_y + STRIP_OFF_Y, CANVAS_SIZE, STRIP_H);
+            } else if (hit_rect(x, y, win_x + OFF_X, win_y + BTN_OFF_Y, BTN_W, BTN_H)) {
+                do_save();
+            } else if (hit_rect(x, y, win_x + OFF_X + BTN_W + 8, win_y + BTN_OFF_Y, BTN_W, BTN_H)) {
+                do_load();
+                draw_canvas();
+                gfx_present_rect(win_x + OFF_X, win_y + CANVAS_OFF_Y, CANVAS_SIZE, CANVAS_SIZE);
+            }
+        } else if (type == RING3_EVENT_KEY) {
+            if (key == '\b') {
+                if (name_len > 0) {
+                    name_len--;
+                }
+            } else if (key >= 32 && key < 127 && name_len < (int)sizeof(name) - 1) {
+                name[name_len++] = key;
+            }
+            name[name_len] = 0;
+            draw_name_field();
+            gfx_present_rect(win_x + OFF_X, win_y + NAME_OFF_Y, NAME_W, NAME_H);
+        }
+    }
+
+    /* The window is closed -- but enter_ring3() is a one-way jump
+     * (kernel/arch/ring3.asm), so this program's own execution never
+     * returns to kmain()'s original call site. Keep calling
+     * SYS_WAIT_EVENT forever, discarding whatever it returns (no
+     * window means no legitimate event will ever arrive): its own
+     * blocking loop (ring3_wait_event() in kernel/kernel.c) is what
+     * re-drives kmain_frame() at all, which is the only thing keeping
+     * the rest of the desktop (every other window) responsive after
+     * this one closes. See docs/superpowers/specs/2026-08-29-
+     * standalone-paint-design.md's Design section. */
+    for (;;) {
+        wait_event(&type, &x, &y, &key);
+    }
+}
+
 /* Same "eax=num/ebx=arg, int $0x80" ABI programs/hello/hello.c already
  * uses -- one shared helper here since paint.c makes many more syscalls
  * than hello.c's one-off proof did. */
@@ -119,41 +232,6 @@ static void text_puts(int x, int y, const char *s, unsigned int rgb, int scale) 
         cx += 6 * scale;
     }
 }
-
-/* --- layout (window-relative offsets; GRID/CELL match the old
- * kernel-side canvas exactly, so the on-disk sprite format's 256-byte
- * row-major shape lines up) --- */
-#define GRID 16
-#define CELL 16
-#define CANVAS_SIZE (GRID * CELL) /* 256 */
-#define PALETTE_COLORS 16
-#define OFF_X 8
-#define CANVAS_OFF_Y 8
-#define STRIP_OFF_Y (CANVAS_OFF_Y + CANVAS_SIZE + 4)  /* 268 */
-#define STRIP_H 20
-#define SWATCH_W (CANVAS_SIZE / PALETTE_COLORS)        /* 16 */
-#define NAME_OFF_Y (STRIP_OFF_Y + STRIP_H + 8)         /* 296 */
-#define NAME_H 20
-#define NAME_W CANVAS_SIZE                              /* 256 */
-#define BTN_OFF_Y (NAME_OFF_Y + NAME_H + 6)            /* 322 */
-#define BTN_H 22
-#define BTN_W ((CANVAS_SIZE - 8) / 2)                   /* 124 */
-#define WIN_W (OFF_X + CANVAS_SIZE + 8)                 /* 272 */
-#define WIN_H (BTN_OFF_Y + BTN_H + 8)                   /* 352 */
-
-/* Same 16-color palette as the old kernel-side paint_palette[]
- * (kernel/kernel.c), copied verbatim so a sprite saved by the old
- * implementation still looks the same reopened here. */
-static const unsigned int palette[PALETTE_COLORS] = {
-    0x050607, 0xFFFFFF, 0xFF3B30, 0xFF9500, 0xFFEB3B, 0x00FF66, 0x2979FF, 0xB026FF,
-    0x8D6E4C, 0xFF4FA3, 0x18E0E0, 0x0A6E3D, 0x1A2E8C, 0x808080, 0x2B2B2B, 0xCC3300,
-};
-
-static int grid[GRID][GRID];
-static int current_color = 1; /* white -- visible default against the near-black eraser color at index 0 */
-static char name[64] = "SPRITE";
-static int name_len = 6;
-static int win_x, win_y;
 
 static void draw_canvas(void) {
     int row, col;
@@ -300,66 +378,5 @@ static void do_load(void) {
             unsigned char v = bytes[r * GRID + c];
             grid[r][c] = (v < PALETTE_COLORS) ? v : 0;
         }
-    }
-}
-
-void _start(void) {
-    int type, x, y;
-    char key;
-
-    win_x = 340 * gfx_width() / 640;  /* same 640x480 baseline every other window's own placement math uses */
-    win_y = 80 * gfx_height() / 480;
-
-    window_open(win_x, win_y, WIN_W, WIN_H, "RAVE-OS PAINT");
-    draw_all();
-
-    for (;;) {
-        wait_event(&type, &x, &y, &key);
-        if (type == RING3_EVENT_CLOSED) {
-            break;
-        } else if (type == RING3_EVENT_CLICK) {
-            int col, row, idx;
-            if (hit_canvas(x, y, &col, &row)) {
-                grid[row][col] = current_color;
-                gfx_fill_rect(win_x + OFF_X + col * CELL, win_y + CANVAS_OFF_Y + row * CELL, CELL, CELL,
-                              palette[current_color]);
-                gfx_present_rect(win_x + OFF_X + col * CELL, win_y + CANVAS_OFF_Y + row * CELL, CELL, CELL);
-            } else if (hit_strip(x, y, &idx)) {
-                current_color = idx;
-                draw_strip();
-                gfx_present_rect(win_x + OFF_X, win_y + STRIP_OFF_Y, CANVAS_SIZE, STRIP_H);
-            } else if (hit_rect(x, y, win_x + OFF_X, win_y + BTN_OFF_Y, BTN_W, BTN_H)) {
-                do_save();
-            } else if (hit_rect(x, y, win_x + OFF_X + BTN_W + 8, win_y + BTN_OFF_Y, BTN_W, BTN_H)) {
-                do_load();
-                draw_canvas();
-                gfx_present_rect(win_x + OFF_X, win_y + CANVAS_OFF_Y, CANVAS_SIZE, CANVAS_SIZE);
-            }
-        } else if (type == RING3_EVENT_KEY) {
-            if (key == '\b') {
-                if (name_len > 0) {
-                    name_len--;
-                }
-            } else if (key >= 32 && key < 127 && name_len < (int)sizeof(name) - 1) {
-                name[name_len++] = key;
-            }
-            name[name_len] = 0;
-            draw_name_field();
-            gfx_present_rect(win_x + OFF_X, win_y + NAME_OFF_Y, NAME_W, NAME_H);
-        }
-    }
-
-    /* The window is closed -- but enter_ring3() is a one-way jump
-     * (kernel/arch/ring3.asm), so this program's own execution never
-     * returns to kmain()'s original call site. Keep calling
-     * SYS_WAIT_EVENT forever, discarding whatever it returns (no
-     * window means no legitimate event will ever arrive): its own
-     * blocking loop (ring3_wait_event() in kernel/kernel.c) is what
-     * re-drives kmain_frame() at all, which is the only thing keeping
-     * the rest of the desktop (every other window) responsive after
-     * this one closes. See docs/superpowers/specs/2026-08-29-
-     * standalone-paint-design.md's Design section. */
-    for (;;) {
-        wait_event(&type, &x, &y, &key);
     }
 }
