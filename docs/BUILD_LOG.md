@@ -4521,3 +4521,108 @@ diagnostic tracing, added and fully removed); `kernel/arch/gdt.c`
 `docs/superpowers/specs/2026-08-29-ring3-window-events-design.md`
 (design spec, written and committed before implementation);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- Content persistence for the ring-3 window (userspace sub-project C, content-persistence slice)
+
+The prior slice's own documented limitation: `SYS_WAIT_EVENT` delivered
+real click/close events, but the window's *content* (as opposed to its
+chrome) still reverted to a blank body on almost any redraw it didn't
+cause itself -- a second click's rect wiped the first click's, since
+`draw_window_by_index()` had nothing to restore beyond border/titlebar.
+See `docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md`.
+
+**The mechanism.** A second, kernel-owned 640x480 pixel buffer
+(`ring3_shadow[]`) mirrors every pixel a ring-3 program draws into its
+window: `SYS_GFX_PUT_PIXEL`/`SYS_GFX_FILL_RECT` (`syscall_gfx.c`) call
+through to `gfx_put_pixel()`/`gfx_fill_rect()` as before, but now also
+call new `ring3_shadow_put_pixel()`/`ring3_shadow_fill_rect()`
+mirrors (`SYS_GFX_CLEAR` deliberately not mirrored -- whole-screen, not
+window-scoped). `window_ring3_open()` pre-fills the shadow with the
+window's own body color (a new `window_body_color()` getter on
+`window.c`, so this file doesn't have to duplicate window.c's private
+color constant) so a freshly opened window's shadow starts consistent
+with what was actually drawn on screen. `draw_window_by_index()`'s
+`WIN_KIND_RING3` case now redraws chrome via `window_draw()` as before,
+then blits the entire shadow buffer back over the window's body rect --
+so any redraw this window didn't cause restores exactly what was there,
+pixel for pixel, rather than the flat backdrop color.
+
+**A real, previously-undiscovered bug surfaced and fixed mid-slice: the
+classic x86 VGA memory hole.** The shadow buffer's first version was an
+ordinary `static uint32_t ring3_shadow[640 * 480];` -- 1.2MB, placed
+wherever the linker's `.bss` allocation happened to put it. The very
+first screendump after wiring up the blit-back showed a solid white
+band across part of the window's body, plus an unrelated dotted
+pattern at the very top of the screen. The persistence logic itself was
+confirmed directionally correct throughout (both click rects stayed
+visible on screen despite the artifact), which helped rule out the
+mechanism above and point at the buffer's contents instead.
+Root-caused via direct evidence, not assumption, in escalating steps:
+disabling the blit loop entirely made the white band disappear
+(implicating the shadow buffer's own contents, not the blit or draw
+code); serial tracing inside the blit loop, then inside
+`window_ring3_open()`'s pre-fill call, then finally inside
+`ring3_shadow_put_pixel()` itself -- logging the written value and an
+*immediate* read-back of that same address -- found that most (x, y)
+pairs round-tripped correctly, but a handful (y=239, 240, 248, 249 at
+x=150) read back as `-1` immediately after writing a real value.
+Calculating those failing offsets' absolute physical address placed
+them squarely inside `0xA0000`-`0xBFFFF`: the classic x86 VGA memory
+hole, legacy MMIO reserved on real hardware and under QEMU's emulation
+alike -- not ordinary RAM, so writes there don't reliably persist.
+`nm` confirmed no other symbol occupied any address inside
+`ring3_shadow`'s own declared range, ruling out an ordinary
+linker-placement collision as the explanation; the hole was eating part
+of this one array outright. `kernel/gfx/graphics.c`'s own
+`backbuffer[]` had already solved this exact class of problem via a
+fixed physical address instead of relying on linker-assigned `.bss`
+placement -- that established precedent was reused rather than a new
+technique invented: `ring3_shadow` is now `static uint32_t *const
+ring3_shadow = (uint32_t *)0x400000;`, comfortably clear of
+`BACKBUFFER_ADDR`/`PROGRAM_LOAD_ADDR` (both 0x200000). All temporary
+diagnostic serial tracing was removed once the fix was confirmed (both
+the white band and the top dotted pattern gone in the same rebuild).
+
+**Accepted cosmetic tradeoff (documented at design time, unchanged):**
+`window_draw()` paints a window's body with rounded bottom corners;
+the shadow-buffer blit-back paints a plain rectangle on top, so the
+window's bottom two corners will show square pixels poking past the
+rounding once content is drawn near them. Not fixed this slice --
+correct would mean either clipping the blit to the rounded silhouette
+or storing per-pixel "was this corner rounded" state, both more
+machinery than this cosmetic edge case justifies yet.
+
+Verification, headless QEMU (same technique as every prior entry
+above): a temporary proof payload (open the ring-3 window, loop on
+`SYS_WAIT_EVENT`, draw a small filled rect at each click's coordinates,
+exit on close) confirmed, after the VGA-hole fix:
+
+- **First click** produced a rect at the exact reported coordinates,
+  with the window body otherwise clean -- no white band, no top
+  artifact.
+- **Second click, at a different position,** produced a second rect
+  *while the first one was still visible* -- the actual proof this
+  slice fixes the previously-documented "second click wipes the first"
+  bug, not just that persistence exists in principle.
+- **Final regression**, after removing the temporary payload: the
+  ordinary desktop through the boot-splash-hide transition, matching
+  every prior sub-project's steady-state screendump, with no leftover
+  window or artifact.
+
+Verified: host test suite (`test_syscall.c`; `gdt.c` untouched this
+slice, so not re-run) unchanged and passing; cross-compiler build
+clean, zero warnings beyond the pre-existing RWX-segment linker
+warning; `git diff` showed the temporary proof payload was never
+committed in the first place (removing it simply reverted those lines
+to the prior commit's baseline), leaving only the VGA-hole fix as a
+clean, isolated follow-up commit.
+
+Files: `kernel/gui/window.h`/`window.c` (`window_body_color()` getter,
+permanent); `kernel/arch/syscall_gfx.c` (shadow-mirror calls in
+`SYS_GFX_PUT_PIXEL`/`SYS_GFX_FILL_RECT`, permanent); `kernel/kernel.c`
+(`ring3_shadow[]` and its accessors, the `window_ring3_open()` pre-fill
+call, the `draw_window_by_index()` blit-back, all permanent; the
+temporary proof payload and all diagnostic tracing, added and fully
+removed); `docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md`
+(design spec, written and committed before implementation);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).

@@ -588,6 +588,25 @@ not a queue.
   not yet keyboard, not yet reliable content persistence across
   unrelated redraws, and still only one ring-3 program at a time.
 
+  Content persistence itself has now also shipped, 2026-08-29 (see
+  `docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md`
+  and `docs/BUILD_LOG.md`'s entry for the same date): a kernel-owned
+  shadow buffer mirrors every pixel a ring-3 program draws, and
+  `draw_window_by_index()` blits it back over the window's body on any
+  redraw the program didn't cause itself -- a second click's rect no
+  longer wipes the first's. Surfaced and fixed a real, subtle,
+  previously-latent bug in the process: the shadow buffer's first cut
+  was an ordinary static array, and the linker happened to place part
+  of it directly on the classic x86 VGA memory hole (0xA0000-0xBFFFF),
+  silently eating writes to that range; root-caused via serial tracing
+  down to the individual failing addresses, then fixed by giving the
+  buffer a fixed physical address, reusing `graphics.c`'s own
+  `backbuffer[]` precedent for the same class of problem. Remaining,
+  documented, accepted-as-is: the window's rounded bottom corners can
+  show square pixels where blitted content overlaps them (cosmetic
+  only); still no keyboard events; still only one ring-3 program at a
+  time.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
