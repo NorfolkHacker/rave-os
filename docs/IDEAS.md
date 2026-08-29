@@ -525,6 +525,24 @@ not a queue.
   first); `synth.h`'s much larger remaining API; true program
   relocation and running more than one loaded program at a time.
 
+  Raised 2026-08-29, during investigation into real event delivery:
+  **PAINT and FORTH (and, by the same reasoning, EDITOR/FILES/SHELL)
+  should eventually be their own separately-compiled binaries,
+  launched from userspace via (D)'s `program_load_and_run()`, not
+  built directly into the kernel binary the way all five are today.**
+  This is a natural extension of the same "separate from being baked
+  into the kernel binary" goal this entry's own Purpose section
+  originally named for (D) -- currently only satisfied for the one
+  `programs/hello/` demo, not any of the five real built-in apps.
+  Depends on both remaining deferred pieces above: real event delivery
+  (so a loaded program can actually receive its own window's
+  mouse/keyboard input, not just draw once and exit) and, likely,
+  `SYS_WINDOW_OPEN` gaining real content-ownership once more than one
+  ring-3 window can exist -- today's single `WIN_KIND_RING3` slot
+  assumes exactly one loaded program running at a time. Not scoped or
+  started; noted here so it isn't lost while the prerequisite pieces
+  are tackled.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
