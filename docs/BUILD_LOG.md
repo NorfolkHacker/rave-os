@@ -3865,3 +3865,99 @@ Files: `kernel/arch/syscall.h`, `kernel/arch/syscall_fs.c` (the four
 new syscall cases and args structs, permanent); `kernel/kernel.c` (the
 temporary proof payload, added and fully removed within this slice);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- A gfx syscall surface: width/height/clear/put_pixel/fill_rect/present_rect (userspace sub-project C, gfx slice)
+
+Starts sub-project (C)'s gfx syscall surface, alongside the now-complete
+`fs.h` surface: `SYS_GFX_WIDTH`, `SYS_GFX_HEIGHT`, `SYS_GFX_CLEAR`,
+`SYS_GFX_PUT_PIXEL`, `SYS_GFX_FILL_RECT`, and `SYS_GFX_PRESENT_RECT`,
+thin wrappers around `kernel/gfx/graphics.h`'s
+`gfx_width()`/`gfx_height()`/`gfx_clear()`/`gfx_put_pixel()`/
+`gfx_fill_rect()`/`gfx_present_rect()`, are now reachable from CPL 3
+through `int 0x80`. `gfx_get_pixel()`/`gfx_fill_rounded_rect_ex()`
+remain unwrapped -- not needed to prove the surface works, easy to add
+later if something needs them.
+
+**A new dispatcher-chain link, not a new architecture.** Unlike every
+prior fs syscall slice, `syscall_fs.c`'s `syscall_dispatch()` (the
+function `ring3.asm` calls directly) could not simply gain more `if`
+cases for gfx: doing so would mean `syscall_fs.c` -- and therefore
+`ring3.asm`'s link -- pulling in `graphics.h`, muddying a file whose
+whole reason to exist is being the *fs*-backed dispatcher. Instead, a
+new `kernel/arch/syscall_gfx.c` holds `syscall_dispatch_gfx()`, a real,
+`graphics.h`-touching dispatcher built the identical way
+`syscall_dispatch()` itself was: gfx cases first, falling through to
+`syscall_dispatch_core()` for anything else. `syscall_fs.c`'s
+`syscall_dispatch()` now falls through to `syscall_dispatch_gfx()`
+instead of calling `syscall_dispatch_core()` directly, chaining the
+three dispatchers: `syscall_dispatch()` (fs) -> `syscall_dispatch_gfx()`
+(gfx) -> `syscall_dispatch_core()` (pure fallback, still exactly what
+`kernel/tests/test_syscall.c` links and calls, zero dependency on
+either `fs.h` or `graphics.h`). `kernel/Makefile` gained a
+`syscall_gfx.o` rule and joined `C_OBJS`.
+
+**Deliberately no per-window clipping or ownership.** `graphics.h`'s
+API targets one shared, ownerless backbuffer -- any ring-3 program can
+draw anywhere on it, including over the desktop/taskbar, the same way
+every prior syscall has taken no stance on ring-3-supplied pointers.
+Brainstormed with the user before implementation: building real
+per-window ownership now would mean integrating with
+`kernel/gui/window.c`'s window model before any gfx syscall could
+ship at all -- explicitly deferred to whenever window-management
+syscalls are tackled, which needs that integration anyway.
+
+**The one-time ring-3 proof, cleanup, and closeout.** A temporary
+payload was added to `kernel/kernel.c`, at the same call site every
+fs syscall proof has used (`gfx_init()` itself runs much earlier in
+`kmain()` with no dependency on the filesystem being mounted, so this
+placement is more "proven and convenient" than "required"). Unlike
+the fs syscalls' proofs, there's no filesystem listing to gate success
+on here -- the real proof is visual: `SYS_GFX_WIDTH`/`SYS_GFX_HEIGHT`
+compute the screen's center, `SYS_GFX_CLEAR` fills the whole backbuffer
+red, `SYS_GFX_FILL_RECT` draws a 100x100 green square centered on it,
+`SYS_GFX_PUT_PIXEL` sets a single blue pixel at the exact center, then
+`SYS_GFX_PRESENT_RECT` pushes it all to the real screen, before the
+same deliberate `SYS_EXIT` + `cli` tail every prior proof has reused.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as every prior entry above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480), run from this
+slice's own worktree (`boot/`, not the sibling checkout's; `fs.img`
+did not yet exist there and was built fresh via `make fs.img` before
+the first boot):
+
+- **Proof screendump:** a full red screen with a centered green
+  square and a barely-visible blue dot at its exact center, with the
+  usual red panic banner (`PANIC: GENERAL PROTECTION FAULT` /
+  `CODE=0x00000000`) drawn on top -- the panic handler writes its
+  banner directly into the framebuffer without clearing the rest, so
+  the drawn scene stayed visible underneath it, giving both proofs
+  (correct drawing, syscall path didn't crash) in one screendump. On
+  the first attempt.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` came back empty, confirming the removal was exact.
+  A final rebuild and headless boot showed the ordinary desktop:
+  black backdrop, green cursor square, taskbar's green rule and
+  `MENU` label -- matching every prior sub-project's steady-state
+  regression screendump, confirming the six new gfx syscalls being
+  wired into the permanent dispatcher chain are still a true no-op
+  with nothing in the tree invoking them.
+
+Verified: host test suite (`kernel/tests/test_syscall.c`) unchanged
+and passing -- confirming `syscall_dispatch_core()` genuinely still
+has zero dependency on `graphics.h`, not just `fs.h`; cross-compiler
+build clean, zero warnings beyond the pre-existing RWX-segment linker
+warning; one proof screendump showing the exact expected drawn scene
+plus the expected panic banner; one final regression screendump
+matching every prior sub-project's steady-state desktop exactly;
+`git diff` showed a clean revert of the temporary test code with no
+leftover debug code. Working tree left with the permanent gfx syscall
+plumbing present but unused by anything in the tree; scratch
+`.ppm`/monitor-socket files cleaned up; no leftover QEMU processes.
+
+Files: `kernel/arch/syscall.h` (six new syscall cases and three args
+structs, permanent); `kernel/arch/syscall_fs.c` (one-line fallthrough
+change, permanent); `kernel/arch/syscall_gfx.c` (new file, permanent);
+`kernel/Makefile` (new build rule, permanent); `kernel/kernel.c` (the
+temporary proof payload, added and fully removed within this slice);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).

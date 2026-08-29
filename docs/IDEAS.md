@@ -409,6 +409,32 @@ not a queue.
   syscalls and (D) a loadable/relocatable program format remain
   entirely unbuilt, separate future work.
 
+  (C)'s first gfx slice has now also shipped, 2026-08-29 (see
+  `docs/BUILD_LOG.md`'s entry for the same date): `SYS_GFX_WIDTH`,
+  `SYS_GFX_HEIGHT`, `SYS_GFX_CLEAR`, `SYS_GFX_PUT_PIXEL`,
+  `SYS_GFX_FILL_RECT`, and `SYS_GFX_PRESENT_RECT`, thin wrappers
+  around `kernel/gfx/graphics.h`. Needed a new dispatcher-chain link
+  rather than just more `if` cases in an existing file: a new
+  `kernel/arch/syscall_gfx.c` holds the real, `graphics.h`-touching
+  `syscall_dispatch_gfx()`, and `syscall_fs.c`'s `syscall_dispatch()`
+  now falls through to it instead of calling `syscall_dispatch_core()`
+  directly -- keeping `syscall_dispatch_core()` (what the host test
+  links) dependency-free on both `fs.h` and `graphics.h`.
+  Deliberately no per-window clipping or ownership: brainstormed with
+  the user first, who chose the thin-wrapper approach over building
+  real ownership now, since that would require integrating with
+  `kernel/gui/window.c` before any gfx syscall could ship -- explicitly
+  deferred to the window-management slice, which needs that
+  integration anyway. Proven end to end in headless QEMU: a temporary
+  ring-3 payload cleared the screen red, drew a centered 100x100 green
+  square, set a blue pixel at its exact center (using
+  `SYS_GFX_WIDTH`/`SYS_GFX_HEIGHT` to compute the center), and
+  presented it -- confirmed directly in the proof screendump itself
+  (the panic banner drew on top without clearing the rest, so the
+  scene stayed visible underneath it), on the first attempt. Audio and
+  window-management syscalls and (D) a loadable/relocatable program
+  format remain entirely unbuilt, same as before.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
