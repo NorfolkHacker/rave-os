@@ -567,6 +567,27 @@ not a queue.
   removed the one blocker that made a syscall re-driving this loop
   structurally impossible before.
 
+  `SYS_WAIT_EVENT` itself has now also shipped, 2026-08-29 (see
+  `docs/superpowers/specs/2026-08-29-ring3-window-events-design.md`
+  and `docs/BUILD_LOG.md`'s entry for the same date): a ring-3 program
+  can now block on real click and window-close events instead of only
+  drawing once and sitting static, by re-driving `kmain_frame()` itself
+  from inside the syscall -- real input keeps being processed while
+  the program is "blocked," unlike every prior ring-3 proof's own
+  infinite loop, which always froze the desktop for good. Needed no
+  new architecture (dragging/raising/closing already worked generically
+  for the ring-3 window); did surface and fix a real, previously-latent
+  bug in the process (`draw_window_by_index()`'s ring-3 case really was
+  reachable, and really did get reached, corrupting the window's
+  display the moment any redraw swept its region -- fixed by redrawing
+  its chrome, though the content area still reverts to backdrop under
+  the same sweep, a real documented limitation, not solved here). On
+  the first *design*, but not the first *build* -- root-caused via
+  direct evidence after the first proof attempt showed the window
+  vanishing. Real per-window interactivity now means: click and close,
+  not yet keyboard, not yet reliable content persistence across
+  unrelated redraws, and still only one ring-3 program at a time.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the

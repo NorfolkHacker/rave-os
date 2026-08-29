@@ -4404,3 +4404,120 @@ Files: `kernel/kernel.c` (34 declarations promoted to file scope,
 `docs/superpowers/specs/2026-08-29-kmain-frame-extraction-design.md`
 (design spec, written and committed before implementation);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- Real ring-3 window event delivery: SYS_WAIT_EVENT (userspace sub-project C, window events slice)
+
+The payoff of both prerequisites shipped earlier today (the static
+ring-3 window and `kmain_frame()`'s extraction): a ring-3 program can
+now actually receive mouse clicks and its own window's close button as
+real events, instead of only being able to draw once and sit static.
+See `docs/superpowers/specs/2026-08-29-ring3-window-events-design.md`.
+
+**The mechanism.** `SYS_WAIT_EVENT` (syscall 24) blocks by looping
+`ring3_wait_event()`, which re-drives `kmain_frame()` itself -- the
+same function `kmain()`'s own loop calls -- until a
+`RING3_EVENT_CLICK` or `RING3_EVENT_CLOSED` becomes pending, then
+returns it via a `struct sys_wait_event_args` output parameter and
+clears the pending slot. Real mouse/keyboard input keeps arriving and
+getting processed on every one of those `kmain_frame()` calls, which
+is the entire point: a ring-3 program blocked in `SYS_WAIT_EVENT` does
+not freeze the desktop the way every prior ring-3 proof's own infinite
+loop always has. Click detection slots into `kmain_frame()`'s
+existing per-window topmost-click routing (one more `if
+(ring3_is_topmost && click_edge && <inside body rect>)` block, same
+shape every other window kind's own click handling already uses
+there); close detection slots into its existing close-button handling,
+alongside the `WIN_KIND_PAINT`-specific case that already lives there.
+Neither needed new architecture: dragging, raising, and closing
+already worked generically for `WIN_KIND_RING3` before this slice,
+confirmed by reading `kmain_frame()`'s code directly rather than
+assumed -- this slice only adds content-click and close *event
+reporting* on top of behavior that already existed.
+
+**A real, previously-undiscovered bug surfaced and fixed mid-slice.**
+Verifying the first version of this feature (via a temporary ring-3
+proof: open the window, loop on `SYS_WAIT_EVENT`, draw a rect on each
+click, exit on close) showed the window vanishing entirely partway
+through boot, with no crash. Root-caused via direct evidence -- serial
+tracing, not assumption -- to two things:
+
+1. `draw_window_by_index()`'s `WIN_KIND_RING3` case (added as a no-op
+   by the window-events design's own prerequisite work, to fix a prior
+   mis-drawn-as-PAINT bug) really was reachable, and really did get
+   reached: the very first real `update_and_present()` call (the boot
+   splash hiding) computed a damage rect that cascaded, via the
+   existing "expand to any overlapping region" algorithm, to nearly
+   the entire screen -- sweeping `WIN_KIND_RING3` into `redraw[]` even
+   though nothing about it had actually changed, and the same thing
+   recurred on every subsequent click too, not just that one frame.
+   The backdrop got correctly repainted over its area (as it should
+   for a genuinely touched region), but the no-op meant nothing drew
+   the window back. Fixed by redrawing the window's *chrome*
+   (`window_draw()`) in that case instead of nothing -- the one part
+   of this window the kernel actually owns. A real, now-documented
+   limitation remains: the *content* area (owned entirely by the
+   ring-3 program, since there is no `draw_*_group()` for it) still
+   reverts to plain backdrop whenever the window gets swept into a
+   redraw it didn't cause -- confirmed directly: a second test click
+   at a different position correctly drew its own rect, but the
+   *first* click's rect had already vanished, wiped by that second
+   click's own triggered redraw. `SYS_WAIT_EVENT` has no "please
+   repaint" event type, and adding one -- or giving this window a real
+   backing store, or excluding it from the shared damage-tracked
+   redraw entirely -- is out of this slice's scope; the chrome-only
+   fix is a real, meaningful improvement (a vanishing window is much
+   worse than one whose content can go stale) but not a complete
+   solution to a single window with kernel-opaque content living
+   inside code designed around fully kernel-owned window content.
+2. `syscall_kernel_stack` (`kernel/arch/gdt.c`), the small stack this
+   codebase's `int 0x80` handler runs on, was 4096 bytes -- fine for
+   every syscall before this one, each a thin wrapper with a shallow
+   call chain. `SYS_WAIT_EVENT` re-drives `kmain_frame()` from inside
+   that same stack, and `kmain_frame()` alone reserves 1916 bytes for
+   its own locals (confirmed via `objdump`, not estimated), on top of
+   the interrupt frame and the five-link dispatch chain's own
+   overhead. Not proven to have actually overflowed -- the chrome fix
+   above is what actually resolved the reproduced symptom -- but close
+   enough to the old limit to be worth real headroom regardless;
+   bumped to 16384.
+
+Verification, headless QEMU (same technique as every prior entry
+above), run twice: once mid-investigation with temporary serial
+tracing (added and fully removed) that pinpointed both root causes
+directly rather than by further guessing, once clean for the final
+recorded proof:
+
+- **Window persists.** The chrome (border/titlebar/title) stays
+  visible through the boot-splash-hide transition that used to wipe
+  it entirely.
+- **Click events, twice, at different positions.** Each produced a
+  filled rect at (approximately) the exact reported coordinates,
+  proving the event's coordinates are correct, not just that
+  *an* event arrived -- and confirming, as documented above, that only
+  the most recent click's mark survives.
+- **Close event.** Clicking the window's own close button produced the
+  usual `PANIC: GENERAL PROTECTION FAULT` / `CODE=0x00000000` banner --
+  reaching it requires `RING3_EVENT_CLOSED` to have actually fired and
+  the payload's own loop to have broken out cleanly.
+- **Final regression**, after removing the temporary payload: the
+  ordinary desktop, matching every prior sub-project's steady-state
+  screendump.
+
+Verified: host test suite, both `test_syscall.c` and `test_gdt.c`
+(the latter re-run specifically because `gdt.c` changed), unchanged
+and passing; cross-compiler build clean, zero warnings beyond the
+pre-existing RWX-segment linker warning; `git diff` showed a clean
+revert of the temporary test code with no leftover debug code (serial
+tracing included) after each investigation pass.
+
+Files: `kernel/arch/syscall.h` (`SYS_WAIT_EVENT`, `RING3_EVENT_*`,
+`struct sys_wait_event_args`, permanent); `kernel/arch/syscall_window.c`
+(one new dispatcher case, permanent); `kernel/kernel.c`
+(`ring3_event_pending`/`_x`/`_y`, `ring3_wait_event()`, the click/close
+detection additions to `kmain_frame()`, the `draw_window_by_index()`
+chrome-redraw fix, all permanent; the temporary proof payload and all
+diagnostic tracing, added and fully removed); `kernel/arch/gdt.c`
+(`syscall_kernel_stack` bumped to 16384, permanent);
+`docs/superpowers/specs/2026-08-29-ring3-window-events-design.md`
+(design spec, written and committed before implementation);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
