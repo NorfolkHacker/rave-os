@@ -4316,3 +4316,91 @@ permanent; the temporary proof call, added and fully removed within
 this slice); `docs/superpowers/specs/2026-08-29-loadable-program-design.md`
 (design spec, written and committed before implementation);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- kmain()'s per-frame loop extracted into kmain_frame() (prerequisite for real ring-3 window event delivery)
+
+A pure mechanical refactor, zero intended behavior change, prerequisite
+for the largest remaining piece of the "Real userspace" initiative: real
+event delivery to a ring-3 window (a `SYS_WAIT_EVENT` syscall). See
+`docs/superpowers/specs/2026-08-29-kmain-frame-extraction-design.md`.
+
+**Why this had to happen before `SYS_WAIT_EVENT` could exist at all.**
+Every ring-3 proof this session has relied on the same fact: once
+`kmain()` calls `enter_ring3()`, it never regains control -- its own
+per-frame update loop (mouse/keyboard polling, redrawing the desktop
+and the five built-in apps) simply stops running for good. A
+`SYS_WAIT_EVENT` syscall's CPL0 handler will need to re-drive that same
+per-frame work itself, in a loop, until an event lands on the calling
+ring-3 program's window -- impossible while that work is ~916 lines
+inlined directly inside `kmain()`, not callable from anywhere else.
+
+**The mechanical shape.** 34 of `kmain()`'s own local variables --
+verified by `grep`ing each candidate against the loop body's actual
+text, not guessed -- are referenced by the loop and were promoted to
+file scope as `static`, matching the precedent `windows[]`/`z_order[]`/
+`mx`/`my` already set (all three already file-scope before this
+change). Only two declarations (`ata_status`/`fs_status`) are true
+`kmain()`-only locals, confirmed by the same grep returning zero
+matches in the loop body for both -- these stayed exactly where they
+were. The ~916-line loop body itself moved, unchanged, into a new
+`static void kmain_frame(void)`; `kmain()` shrank to its existing
+one-time setup followed by `for (;;) { kmain_frame(); }`.
+
+Every variable's static initializer (`= 0`, `= -1`, `= CURSOR_IDLE_COLOR`)
+carried over unchanged from its original `kmain()`-local declaration --
+correct because a `static` initializer runs exactly once at program
+start, identical to `kmain()`'s own guarantee of running exactly once
+per boot, since it is never re-entered. The loop's own per-iteration
+damage-tracking `old_*` variables (`old_mx`, `old_ci_len`, etc.) needed
+no scope change at all: confirmed by reading the code directly (not
+assumed) that each one is declared and initialized fresh from live
+state at the top of every iteration, then compared against that same
+live state at the bottom -- no cross-iteration persistence requirement,
+so they moved into `kmain_frame()`'s body exactly as they were. The
+loop's one `break;` was confirmed, by reading its surrounding code, to
+sit inside a nested `for (idx...)` search loop in the FILES
+rename-handling block, not the outer frame loop -- extraction doesn't
+change its meaning.
+
+**The compiler caught zero missed relocations.** A clean build with no
+new warnings after the transformation is itself meaningful evidence
+here, not just a formality: any variable the loop body needed that
+wasn't promoted to file scope would have surfaced immediately as an
+"undeclared identifier" error. It didn't, on the first attempt.
+
+**Verification went further than any prior slice's, because this one
+had real regression risk prior slices didn't.** Every previous syscall
+slice was new, additive code with nothing existing to regress against;
+this one touches the single code path all five built-in apps
+(FORTH/FILES/SHELL/EDITOR/PAINT) depend on for every interaction, so
+"boots to a normal desktop" alone would not have been enough. Instead:
+a fixed interaction sequence was scripted via the QEMU monitor's
+`sendkey`/`mouse_move`/`mouse_button` commands (the same primitives
+already proven to drive real guest input earlier this session) --
+open the start menu, launch FORTH, click into its console input, type
+`42 . ` and press Enter (confirming keyboard routing and a real Forth
+evaluation), drag the FORTH window by its titlebar, type `PAINT` into
+the console to launch it via a cross-window Forth command, click on
+its canvas, then open FILES from the start menu -- screendumping after
+each step. This exact scripted sequence (including two deliberate
+lost-focus keystroke attempts from the original calibration run, kept
+in the replay so the input history stayed identical, not just its
+"working" subset) was run twice: once against the pre-refactor code,
+once against the post-refactor code, from otherwise-identical fresh
+`fs.img`/`disk.img` copies. All 9 corresponding screendumps compared
+byte-for-byte identical between the two runs (see the design spec's
+own Testing section for the full step list). Host test suite
+(`kernel/tests/test_syscall.c`) confirmed unaffected and still passing,
+as expected since this change touches only `kernel.c`.
+
+No new syscalls, no new window behavior, no visible change of any
+kind -- purely groundwork. `SYS_WAIT_EVENT` itself, and the input
+routing `WIN_KIND_RING3` still entirely lacks, remain separate,
+unstarted future work.
+
+Files: `kernel/kernel.c` (34 declarations promoted to file scope,
+`kmain_frame()` extracted, `kmain()` shrunk to setup + a one-line loop
+-- all permanent, no temporary code involved in this change at all);
+`docs/superpowers/specs/2026-08-29-kmain-frame-extraction-design.md`
+(design spec, written and committed before implementation);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).

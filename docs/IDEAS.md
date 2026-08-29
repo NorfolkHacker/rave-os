@@ -553,6 +553,20 @@ not a queue.
   its own startup script path) falls naturally out of both ideas above
   landing, rather than needing new design of its own.
 
+  A real prerequisite for event delivery shipped 2026-08-29 (see
+  `docs/superpowers/specs/2026-08-29-kmain-frame-extraction-design.md`
+  and `docs/BUILD_LOG.md`'s entry for the same date): `kmain()`'s
+  ~916-line per-frame loop is now a standalone `kmain_frame()`
+  function, not inlined directly inside `kmain()`. Pure mechanical
+  refactor, zero behavior change -- verified via a scripted QEMU-monitor
+  interaction sequence (menu, FORTH keyboard input, window drag,
+  cross-window PAINT launch, FILES) replayed identically against the
+  pre- and post-refactor builds, all 9 screendumps pixel-identical.
+  `SYS_WAIT_EVENT` itself, and the input routing `WIN_KIND_RING3` still
+  entirely lacks, remain separate, unstarted future work -- this only
+  removed the one blocker that made a syscall re-driving this loop
+  structurally impossible before.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
