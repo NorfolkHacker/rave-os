@@ -4626,3 +4626,80 @@ temporary proof payload and all diagnostic tracing, added and fully
 removed); `docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md`
 (design spec, written and committed before implementation);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- Keyboard events for the ring-3 window: RING3_EVENT_KEY (userspace sub-project C, keyboard slice)
+
+The last major gap named by both the window-events and
+content-persistence slices: a ring-3 program still had no way to
+receive a keystroke, even with its window topmost and clicked into.
+See `docs/superpowers/specs/2026-08-29-ring3-window-keyboard-events-design.md`.
+
+**The mechanism.** One new event type, `RING3_EVENT_KEY`, delivered
+through the existing `SYS_WAIT_EVENT` -- no new syscall number, just a
+`key` field added to `struct sys_wait_event_args`. A new persistent
+`ring3_focused` flag mirrors the single-focus-owner model every other
+window's own `.focused` field already uses in `kmain_frame()`
+(`ci.focused`, `shell_ci.focused`, `name_input.focused`, `ed.focused`,
+`paint_name_input.focused`): set on a click edge, true only if the
+ring-3 window is topmost *and* the click landed inside its body rect
+(reusing the same rect check the click-event block already computes);
+cleared by any click elsewhere. Confirmed with the user up front: no
+auto-focus-on-open, matching every existing window exactly, no
+special-casing for this one. The keyboard-routing chain
+(`if (ci.focused) {...} else if (...) {...}`) gains one more branch,
+`else if (ring3_focused) { ring3_event_pending = RING3_EVENT_KEY;
+ring3_event_key = c; }`, harvesting the exact same `char` value
+`keyboard_poll_char()` already produces for every other focused field
+-- printable ASCII, `'\b'`, `'\n'`, or the `KEY_UP`/`DOWN`/`LEFT`/
+`RIGHT`/`HOME`/`END`/`DELETE` pseudo-codes. No new decoding logic and
+no richer vocabulary than any other window already gets: raw
+scancodes and modifier keys stay invisible, exactly as
+`keyboard_poll_char()` already discards them before any caller sees
+them.
+
+**Deliberately not solved, same category as the click/close design's
+own accepted limitation:** `ring3_event_pending` is one slot, so a
+click and a keypress landing in the same `kmain_frame()` iteration can
+have one silently overwrite the other. Pre-existing, not made worse by
+this slice, and a real fix would need an event queue -- a bigger lift
+than this feature justifies yet.
+
+Verification, headless QEMU (same technique as every prior entry
+above): a temporary proof payload (open the window, loop on
+`SYS_WAIT_EVENT`, draw a magenta rect at each click position and a
+yellow rect advancing rightward at each keypress, exit on close)
+confirmed all four scenarios named in the design's own test plan:
+
+- **Click focuses and proves the mechanism** -- a magenta rect
+  appeared at the exact click position (same proof shape as the
+  events slice).
+- **A keypress while focused** produced a new yellow rect -- proof the
+  keystroke actually reached the ring-3 program.
+- **Clicking elsewhere defocuses** -- a keypress sent immediately
+  after produced *no* new yellow rect, proof focus is genuinely
+  required, not "any key always reaches the ring-3 window regardless."
+- **Clicking back inside reacquires focus** -- the next keypress
+  produced another new yellow rect, proof focus isn't a one-shot.
+- **Close** produced the usual `PANIC: GENERAL PROTECTION FAULT` /
+  `CODE=0x00000000` banner.
+- **Final regression**, after removing the temporary payload: the
+  ordinary desktop, matching every prior sub-project's steady-state
+  screendump.
+
+Verified: host test suite (`test_syscall.c`; `gdt.c` untouched this
+slice, so not re-run) unchanged and passing; cross-compiler build
+clean, zero warnings beyond the pre-existing RWX-segment linker
+warning; `git diff` showed the temporary proof payload was never
+committed in the first place, leaving a clean, minimal diff of exactly
+the permanent changes.
+
+Files: `kernel/arch/syscall.h` (`RING3_EVENT_KEY`, `key` field on
+`struct sys_wait_event_args`, permanent); `kernel/arch/syscall_window.c`
+(`ring3_wait_event()`'s extern declaration and call site updated for
+the new parameter, permanent); `kernel/kernel.c`
+(`ring3_event_key`/`ring3_focused`, the focus-assignment addition, the
+keyboard-chain's new branch, `ring3_wait_event()`'s new parameter, all
+permanent; the temporary proof payload, added and fully removed);
+`docs/superpowers/specs/2026-08-29-ring3-window-keyboard-events-design.md`
+(design spec, written and committed before implementation);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).

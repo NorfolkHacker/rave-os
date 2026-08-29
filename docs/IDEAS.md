@@ -604,8 +604,24 @@ not a queue.
   `backbuffer[]` precedent for the same class of problem. Remaining,
   documented, accepted-as-is: the window's rounded bottom corners can
   show square pixels where blitted content overlaps them (cosmetic
-  only); still no keyboard events; still only one ring-3 program at a
-  time.
+  only); still only one ring-3 program at a time.
+
+  Keyboard events shipped 2026-08-29 too (see
+  `docs/superpowers/specs/2026-08-29-ring3-window-keyboard-events-design.md`
+  and `docs/BUILD_LOG.md`'s entry for the same date): `RING3_EVENT_KEY`,
+  delivered through the existing `SYS_WAIT_EVENT`, driven by a new
+  persistent `ring3_focused` flag that mirrors every other window's own
+  focus model exactly (set on a click landing inside the body, cleared
+  by any click elsewhere -- no auto-focus-on-open, no special-casing).
+  Carries the same reduced-vocabulary `char` every other focused text
+  field in this kernel already gets from `keyboard_poll_char()` --
+  printable ASCII, backspace, newline, arrows/home/end/delete; no raw
+  scancodes, no modifier keys. Real per-window interactivity is now:
+  click, close, and keyboard, all three -- still only one ring-3
+  program at a time, and the single-pending-event slot still means a
+  click and a keypress landing in the exact same frame can silently
+  cost one of them (unsolved, same category as the pre-existing
+  click-vs-close race).
 
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
