@@ -68,13 +68,12 @@
  * not one of the five built-in apps above. Unlike them, its content is
  * whatever the ring-3 program itself drew via the gfx syscalls -- there
  * is no draw_*_group() for it; draw_window_by_index() (further down)
- * redraws only its chrome (border/titlebar/title, the part the kernel
- * actually owns) rather than falling through to a bare `else`, which
- * used to silently mis-draw it as PAINT. A real, documented limitation
- * remains: the *content* area still reverts to plain backdrop if this
- * window gets swept into a redraw the ring-3 program didn't cause and
- * has no way to react to -- see
- * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
+ * redraws its chrome (border/titlebar/title, the part the kernel
+ * actually owns) and then restores its content from a shadow buffer
+ * that mirrors every gfx syscall write, rather than falling through to
+ * a bare `else`, which used to silently mis-draw it as PAINT. See
+ * docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md
+ * and docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
 #define WIN_KIND_RING3 5
 
 /* A single pending ring-3 window event -- not a queue, deliberately:
@@ -88,6 +87,36 @@
  * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
 static int ring3_event_pending = RING3_EVENT_NONE;
 static int ring3_event_x, ring3_event_y; /* valid only for RING3_EVENT_CLICK */
+
+/* Mirrors every pixel a ring-3 program's own gfx syscalls write --
+ * safe to key off "any syscall_gfx.c write" without checking window
+ * ownership, since these syscalls are only ever callable from ring-3
+ * code. Sized to the fixed 640x480 resolution this codebase already
+ * commits to (README.md's own "one fixed resolution" limitation), not
+ * dynamically -- one flat buffer, no per-window bookkeeping, since
+ * there is still only one ring-3 window slot. Restored over the
+ * window's body rect by draw_window_by_index() (below) after
+ * redrawing chrome, so content survives redraws it didn't cause -- see
+ * docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md. */
+#define RING3_SHADOW_W 640
+#define RING3_SHADOW_H 480
+static uint32_t ring3_shadow[RING3_SHADOW_W * RING3_SHADOW_H];
+
+void ring3_shadow_put_pixel(int x, int y, uint32_t rgb) {
+    if (x < 0 || x >= RING3_SHADOW_W || y < 0 || y >= RING3_SHADOW_H) {
+        return;
+    }
+    ring3_shadow[y * RING3_SHADOW_W + x] = rgb;
+}
+
+void ring3_shadow_fill_rect(int x, int y, int w, int h, uint32_t rgb) {
+    int px, py;
+    for (py = y; py < y + h; py++) {
+        for (px = x; px < x + w; px++) {
+            ring3_shadow_put_pixel(px, py, rgb);
+        }
+    }
+}
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -1738,27 +1767,34 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
     } else if (idx == WIN_KIND_PAINT) {
         draw_paint_group(&windows[idx], wc->pt, wc->paint_name_input, wc->paint_save_btn, wc->paint_load_btn);
     } else if (idx == WIN_KIND_RING3) {
-        /* Redraws only the chrome (border/titlebar/title), the one
-         * part of this window the kernel actually owns -- there is no
-         * draw_*_group() for its content, which is whatever the
-         * ring-3 program itself painted via the gfx syscalls, and the
-         * kernel has no record of what that was. Found necessary, not
-         * theoretical: SYS_WAIT_EVENT's own first proof showed the
-         * whole window (chrome included) vanishing the moment any
-         * unrelated full-desktop redraw (here, the boot splash hiding)
-         * swept this window's rect into redraw[] via the existing
-         * damage-tracking expansion, same as it would for any other
-         * window -- a bare no-op left nothing to restore the chrome
-         * afterward. This does not solve the deeper problem: the
-         * *content* area still reverts to plain backdrop when swept
-         * into a redraw the ring-3 program didn't cause and has no way
-         * to react to (SYS_WAIT_EVENT only reports clicks and closes,
-         * not "your content might need repainting") -- a real,
-         * documented limitation of a single window with kernel-opaque
-         * content living inside a shared damage-tracked redraw, not
-         * something this slice's scope solves. See
-         * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
+        /* Redraws the chrome (border/titlebar/title) -- the one part
+         * of this window the kernel actually owns -- then restores its
+         * content from the shadow buffer that mirrors everything the
+         * ring-3 program has ever drawn there via the gfx syscalls.
+         * Necessary because window_draw() paints the window's entire
+         * silhouette (including the body) before layering titlebar/body
+         * colors on top -- there is no way to redraw only the border
+         * and titlebar without also touching the body, so restoring the
+         * body's real content has to happen as its own step afterward.
+         * See docs/superpowers/specs/2026-08-29-ring3-window-content-
+         * persistence-design.md, and
+         * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md
+         * for why this needed fixing at all (SYS_WAIT_EVENT's
+         * kmain_frame() re-entry makes this window reachable by
+         * unrelated redraws no prior ring-3 proof ever had to survive).
+         * Known cosmetic tradeoff: the body's own bottom two corners
+         * are rounded (window_draw()'s WINDOW_INNER_RADIUS), but this
+         * blit paints the full rectangular body rect, squaring off a
+         * ~6x6px triangle in each corner rather than duplicating
+         * gfx_fill_rounded_rect_ex()'s own circle-equation logic here. */
+        int sx, sy;
+
         window_draw(&windows[idx]);
+        for (sy = windows[idx].y; sy < windows[idx].y + windows[idx].h; sy++) {
+            for (sx = windows[idx].x; sx < windows[idx].x + windows[idx].w; sx++) {
+                gfx_put_pixel(sx, sy, ring3_shadow[sy * RING3_SHADOW_W + sx]);
+            }
+        }
     }
 }
 
@@ -1999,6 +2035,10 @@ void window_ring3_open(int x, int y, int w, int h, const char *title) {
     windows[WIN_KIND_RING3].h = h;
     windows[WIN_KIND_RING3].title = title;
     windows[WIN_KIND_RING3].state = WINDOW_OPEN;
+    /* Matches window_draw()'s own body-fill color, so the body looks
+     * correct even before the ring-3 program has drawn its first pixel
+     * -- not black, which is the shadow buffer's own default. */
+    ring3_shadow_fill_rect(x, y, w, h, window_body_color());
     raise_window(z_order, WIN_KIND_RING3);
     window_draw(&windows[WIN_KIND_RING3]);
     gfx_present_rect(x - 2, y - WINDOW_TITLEBAR_HEIGHT - 2,

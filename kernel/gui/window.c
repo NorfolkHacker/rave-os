@@ -82,6 +82,10 @@ static void window_draw_close_control(int x, int y, int hovered, uint32_t accent
              WINDOW_CONTROL_GLYPH_COLOR, 1);
 }
 
+uint32_t window_body_color(void) {
+    return WINDOW_BODY_COLOR;
+}
+
 void window_draw(const struct window *win) {
     int border_top = win->y - WINDOW_TITLEBAR_HEIGHT - 2;
     int border_height = win->h + WINDOW_TITLEBAR_HEIGHT + 4;

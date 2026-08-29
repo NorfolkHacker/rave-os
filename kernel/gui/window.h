@@ -29,6 +29,12 @@ struct window {
 
 void window_draw(const struct window *win);
 
+/* The exact fill color window_draw() itself paints a window's body --
+ * exposed so a caller needing to match it (e.g. pre-filling a shadow
+ * buffer before anything else has drawn there) doesn't have to
+ * duplicate window.c's own private color constant. */
+uint32_t window_body_color(void);
+
 /* Point-in-rect test against just the title bar strip, excluding the
  * minimize/close control cluster at its right end -- what a caller
  * should check before starting a drag, so grabbing a control doesn't
