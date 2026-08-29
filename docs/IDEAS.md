@@ -543,6 +543,16 @@ not a queue.
   started; noted here so it isn't lost while the prerequisite pieces
   are tackled.
 
+  Once each app is its own binary, its own settings could live in
+  `/ETC` (or `/HOME`) as real config files read via the already-shipped
+  fs syscalls, the same pattern `/ETC/CONFIG` already establishes for
+  one kernel-side setting today (`fx_default_from_config()`, seeding a
+  default if missing, read once at boot -- see `kernel/kernel.c`).
+  Extending that same idea per-program (a PAINT binary reading its own
+  `/ETC/PAINT.CFG` for e.g. last-used color, a FORTH binary reading
+  its own startup script path) falls naturally out of both ideas above
+  landing, rather than needing new design of its own.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
