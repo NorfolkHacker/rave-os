@@ -3769,3 +3769,99 @@ Files: `kernel/arch/syscall.h`, `kernel/arch/syscall_fs.c` (the two
 new syscall cases, permanent); `kernel/kernel.c` (the temporary proof
 payload, added and fully removed within this slice); `docs/BUILD_LOG.md`,
 `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- Completing the fs syscall surface: fs_rename + fs_move + fs_copy_file + fs_append_file (userspace sub-project C, fourth slice)
+
+Closes the fourth slice of sub-project (C) of `docs/IDEAS.md`'s "Real
+userspace" entry, and with it, `fs.h`'s entire operation surface:
+`SYS_RENAME`, `SYS_MOVE`, `SYS_COPY_FILE`, and `SYS_APPEND_FILE`,
+wrapping `fs_rename()`/`fs_move()`/`fs_copy_file()`/`fs_append_file()`
+(`kernel/fs/fs.h`), are now reachable from CPL 3 through `int 0x80`,
+alongside the five fs syscalls the prior three slices already
+shipped. Implemented directly, same as the third slice -- bounded, not
+architectural, since it adds no new syscall plumbing, only more of
+the same pattern: `SYS_RENAME`/`SYS_MOVE`/`SYS_COPY_FILE` each take
+two pointer arguments (`path` plus `new_name`/`dest_dir`), so each
+gets its own small args struct; `SYS_APPEND_FILE` mirrors
+`SYS_CREATE_FILE`'s three-field struct exactly, since
+`fs_append_file()` and `fs_create_file()` share a signature.
+`kernel/arch/syscall_fs.c` gained four more `if` cases, each a thin
+wrapper unpacking its args struct and calling straight through.
+
+**The one-time ring-3 proof, cleanup, and closeout.** A temporary
+payload was added to `kernel/kernel.c`, immediately after
+`fs_bootstrap_dirs();` in `kmain()` (the same ordering lesson every
+prior fs syscall proof has needed: the payload depends on `/TMP`,
+`/HOME`, and `/ETC` all existing, which `fs_bootstrap_dirs()`
+guarantees). The payload chains all four new syscalls together in one
+sequence: `SYS_CREATE_FILE` creates `/TMP/ORIG.TXT`, `SYS_APPEND_FILE`
+grows it, `SYS_COPY_FILE` duplicates it into `/HOME` (still under its
+original name), `SYS_RENAME` renames the `/TMP` copy to
+`RENAMED.TXT`, then `SYS_MOVE` relocates that renamed file into
+`/ETC` -- before the same `SYS_EXIT` + deliberate `cli` tail every
+prior sub-project's proof has reused. Success is gated on two final
+`SYS_LIST_DIR` calls rather than any individual return value: `/HOME`
+must contain `ORIG.TXT` (proving the copy landed) and `/ETC` must
+contain `RENAMED.TXT` (proving the rename and the move both landed).
+Several of the chained calls are write-once or
+already-exists-sensitive (`SYS_CREATE_FILE`, `SYS_COPY_FILE`,
+`SYS_MOVE`), so on a repeat boot against the same persistent `fs.img`
+some of them correctly fail without that being a real regression --
+same reasoning the second slice's `SYS_CREATE_FILE`/`SYS_LIST_DIR`
+proof already established. Once both listing checks are true, they
+stay true on every later boot, since the destination files aren't
+touched again after they first land.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as every prior entry above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480), run from this
+slice's own worktree (`boot/`, not the sibling checkout's; `fs.img`
+did not yet exist there and was built fresh via `make fs.img` before
+the first boot):
+
+- **Proof screendump:** the red panic banner appeared, reading
+  exactly:
+  ```
+  PANIC: GENERAL PROTECTION FAULT
+  CODE=0x00000000
+  ```
+  identical to every prior syscall sub-project's proof -- reaching it
+  on the first attempt (no ordering bug) is proof `/TMP/ORIG.TXT` was
+  created, appended to, copied into `/HOME`, renamed, and the renamed
+  file moved into `/ETC`, all confirmed via real, round-tripped
+  `SYS_LIST_DIR` calls, not just fixed-value plumbing.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` came back empty, confirming the removal was exact.
+  A final rebuild and headless boot showed the ordinary desktop: the
+  black backdrop, green cursor square, and the taskbar's green rule
+  and `MENU` label at the bottom -- matching every prior sub-project's
+  steady-state regression screendump, confirming all four new
+  syscalls being wired into the permanent `syscall_dispatch()` switch
+  are still a true no-op with nothing in the tree invoking them.
+
+Verified: host test suite (`kernel/tests/test_syscall.c`) unchanged
+and passing; cross-compiler build clean, zero warnings beyond the
+pre-existing RWX-segment linker warning; one proof screendump with the
+exact expected banner text; one final regression screendump matching
+every prior sub-project's steady-state desktop exactly; `git diff`
+showed a clean revert of the temporary test code with no leftover
+debug code. Working tree left with the permanent
+`SYS_RENAME`/`SYS_MOVE`/`SYS_COPY_FILE`/`SYS_APPEND_FILE` plumbing
+present but unused by anything in the tree; scratch `.ppm`/monitor-
+socket files cleaned up; no leftover QEMU processes.
+
+With this slice, sub-project (C)'s coverage of `kernel/fs/fs.h` is
+complete -- every real filesystem operation
+(`fs_create_file`/`fs_read_file`/`fs_append_file`/`fs_delete`/
+`fs_list_dir`/`fs_create_dir`/`fs_rename`/`fs_move`/`fs_copy_file`) is
+now reachable from ring 3. `fs_path_join()`/`fs_path_parent()` remain
+unwrapped, but both are pure path-string helpers with no filesystem
+side effect of their own -- not filesystem operations in the sense
+the rest of this syscall surface covers, and not planned as syscalls.
+gfx/audio/window-management syscalls and (D) a loadable/relocatable
+program format remain entirely unbuilt, separate future work.
+
+Files: `kernel/arch/syscall.h`, `kernel/arch/syscall_fs.c` (the four
+new syscall cases and args structs, permanent); `kernel/kernel.c` (the
+temporary proof payload, added and fully removed within this slice);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).

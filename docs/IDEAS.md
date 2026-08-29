@@ -387,6 +387,28 @@ not a queue.
   window-management syscalls and (D) a loadable/relocatable program
   format all remain entirely unbuilt, same as before.
 
+  (C)'s fourth slice, the last four real filesystem syscalls, has now
+  also shipped, 2026-08-29 (see `docs/BUILD_LOG.md`'s entry for the
+  same date): `SYS_RENAME`, `SYS_MOVE`, `SYS_COPY_FILE`, and
+  `SYS_APPEND_FILE`, thin wrappers around `kernel/fs/fs.c`'s existing
+  `fs_rename()`/`fs_move()`/`fs_copy_file()`/`fs_append_file()`.
+  Implemented directly, same as the third slice -- bounded, no new
+  syscall plumbing needed. Proven end to end in headless QEMU: a
+  temporary ring-3 payload chained all four together -- created
+  `/TMP/ORIG.TXT`, appended to it, copied it into `/HOME`, renamed the
+  `/TMP` copy to `RENAMED.TXT`, then moved that into `/ETC` -- gating
+  success on `/HOME` containing `ORIG.TXT` and `/ETC` containing
+  `RENAMED.TXT` via two `SYS_LIST_DIR` calls, then executing the same
+  deliberate CPL0-only instruction every prior proof used, producing
+  the identical `PANIC: GENERAL PROTECTION FAULT` / `CODE=0x00000000`
+  banner, on the first attempt. **With this slice, sub-project (C)'s
+  coverage of `kernel/fs/fs.h` is complete** -- every real filesystem
+  operation is now reachable from ring 3 (`fs_path_join()`/
+  `fs_path_parent()` are pure path-string helpers with no filesystem
+  side effect, not planned as syscalls). gfx/audio/window-management
+  syscalls and (D) a loadable/relocatable program format remain
+  entirely unbuilt, separate future work.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
