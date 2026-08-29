@@ -87,6 +87,16 @@
  * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
 static int ring3_event_pending = RING3_EVENT_NONE;
 static int ring3_event_x, ring3_event_y; /* valid only for RING3_EVENT_CLICK */
+static char ring3_event_key; /* valid only for RING3_EVENT_KEY */
+
+/* Persists across frames, exactly like ci.focused/shell_ci.focused/
+ * name_input.focused/ed.focused/paint_name_input.focused below -- set
+ * once on a click edge (see the focus-assignment block inside
+ * kmain_frame()) and read every frame after by the keyboard-routing
+ * chain. The ring-3 window has no sub-widgets, so its whole body rect
+ * is the target, unlike the other windows' own hit-test helpers. See
+ * docs/superpowers/specs/2026-08-29-ring3-window-keyboard-events-design.md. */
+static int ring3_focused;
 
 /* Mirrors every pixel a ring-3 program's own gfx syscalls write --
  * safe to key off "any syscall_gfx.c write" without checking window
@@ -2505,6 +2515,9 @@ static void kmain_frame(void) {
                     shell_ci.focused = shell_is_topmost && console_input_hit_test(&shell_ci, cx, cy);
                     ed.focused = editor_is_topmost && editor_hit_test(&ed, cx, cy);
                     paint_name_input.focused = paint_is_topmost && console_input_hit_test(&paint_name_input, cx, cy);
+                    ring3_focused = ring3_is_topmost &&
+                        cx >= windows[WIN_KIND_RING3].x && cx < windows[WIN_KIND_RING3].x + windows[WIN_KIND_RING3].w &&
+                        cy >= windows[WIN_KIND_RING3].y && cy < windows[WIN_KIND_RING3].y + windows[WIN_KIND_RING3].h;
                 }
 
                 /* Clicking ".." or a directory row navigates and re-lists
@@ -2989,6 +3002,9 @@ static void kmain_frame(void) {
                  * value is ignored) since a filename has no meaningful
                  * use for a literal newline. */
                 console_input_feed_char(&paint_name_input, c);
+            } else if (ring3_focused) {
+                ring3_event_pending = RING3_EVENT_KEY;
+                ring3_event_key = c;
             }
             had_event = 1;
         }
@@ -3122,13 +3138,14 @@ static void kmain_frame(void) {
  * does not freeze the desktop the way every prior ring-3 proof's own
  * infinite loop always has. See
  * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
-void ring3_wait_event(int *type, int *x, int *y) {
+void ring3_wait_event(int *type, int *x, int *y, char *key) {
     while (ring3_event_pending == RING3_EVENT_NONE) {
         kmain_frame();
     }
     *type = ring3_event_pending;
     *x = ring3_event_x;
     *y = ring3_event_y;
+    *key = ring3_event_key;
     ring3_event_pending = RING3_EVENT_NONE;
 }
 

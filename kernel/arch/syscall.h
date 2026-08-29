@@ -282,17 +282,25 @@ struct sys_window_open_args {
 #define RING3_EVENT_NONE 0
 #define RING3_EVENT_CLICK 1
 #define RING3_EVENT_CLOSED 2
+#define RING3_EVENT_KEY 3
 
-/* Mirrors ring3_wait_event()'s three output parameters
- * (kernel/kernel.c). type is one of the RING3_EVENT_* values above;
- * x/y are valid only when type == RING3_EVENT_CLICK, and are absolute
- * screen coordinates -- matching every other syscall a ring-3 program
- * already uses (SYS_WINDOW_OPEN's x/y, every gfx syscall), not a new
- * window-relative convention. */
+/* Mirrors ring3_wait_event()'s four output parameters (kernel/kernel.c).
+ * type is one of the RING3_EVENT_* values above; x/y are valid only
+ * when type == RING3_EVENT_CLICK, and are absolute screen coordinates
+ * -- matching every other syscall a ring-3 program already uses
+ * (SYS_WINDOW_OPEN's x/y, every gfx syscall), not a new window-relative
+ * convention. key is valid only when type == RING3_EVENT_KEY: the same
+ * char keyboard_poll_char() (kernel/drivers/keyboard.h) already
+ * produces -- printable ASCII, '\b', '\n', or one of the KEY_UP/DOWN/
+ * LEFT/RIGHT/HOME/END/DELETE pseudo-codes. No raw scancodes or
+ * modifier keys; ring-3 programs get the same reduced vocabulary every
+ * other focused text field in this kernel already receives. See
+ * docs/superpowers/specs/2026-08-29-ring3-window-keyboard-events-design.md. */
 struct sys_wait_event_args {
     int type;
     int x;
     int y;
+    char key;
 };
 
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
