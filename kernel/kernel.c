@@ -97,10 +97,31 @@ static int ring3_event_x, ring3_event_y; /* valid only for RING3_EVENT_CLICK */
  * there is still only one ring-3 window slot. Restored over the
  * window's body rect by draw_window_by_index() (below) after
  * redrawing chrome, so content survives redraws it didn't cause -- see
- * docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md. */
+ * docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md.
+ *
+ * Lives at a fixed physical address (RING3_SHADOW_ADDR), not as a
+ * normal static C array -- found necessary, not theoretical: a plain
+ * `static uint32_t ring3_shadow[640 * 480];` placed this same 1.2MB
+ * array via ordinary linker-assigned .bss allocation, which put roughly
+ * its middle third directly on top of the classic x86 VGA memory hole
+ * (0xA0000-0xBFFFF) -- legacy MMIO on real hardware and under QEMU
+ * alike, not ordinary RAM, so writes there don't reliably stick
+ * (confirmed via serial tracing: a write followed immediately by a
+ * read-back of the very same address came back as a completely
+ * different value). `kernel/gfx/graphics.c`'s own `backbuffer[]`
+ * already established this exact fix for this exact class of problem
+ * (see its own header comment) -- reused here rather than rediscovered
+ * as a new technique. Chosen address: comfortably above
+ * `BACKBUFFER_ADDR`/`PROGRAM_LOAD_ADDR` (both 0x200000, coincidentally
+ * the same address -- a separate, pre-existing, not-yet-fixed
+ * collision between those two unrelated subsystems, out of scope
+ * here), and does not need to be inside the one 4MB page directory
+ * entry `paging_set_user()` ever makes user-accessible, since only
+ * ring-0 code (this file, syscall_gfx.c) ever touches it directly. */
 #define RING3_SHADOW_W 640
 #define RING3_SHADOW_H 480
-static uint32_t ring3_shadow[RING3_SHADOW_W * RING3_SHADOW_H];
+#define RING3_SHADOW_ADDR 0x400000
+static uint32_t *const ring3_shadow = (uint32_t *)RING3_SHADOW_ADDR;
 
 void ring3_shadow_put_pixel(int x, int y, uint32_t rgb) {
     if (x < 0 || x >= RING3_SHADOW_W || y < 0 || y >= RING3_SHADOW_H) {
