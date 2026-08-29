@@ -27,5 +27,5 @@ int syscall_dispatch_gfx(int num, int arg) {
         gfx_present_rect(a->x, a->y, a->w, a->h);
         return 0;
     }
-    return syscall_dispatch_core(num, arg);
+    return syscall_dispatch_audio(num, arg);
 }

@@ -193,25 +193,88 @@ struct sys_gfx_present_rect_args {
     int h;
 };
 
+/* Sets voice's waveform, wrapping synth_set_voice_waveform()
+ * (kernel/audio/synth.h) with zero changes to its behavior. waveform
+ * is a plain int, not an enum synth_waveform -- syscall.h stays
+ * dependency-free on synth.h the same way it stays dependency-free on
+ * fs.h, so the caller passes the enum's underlying int value and
+ * syscall_audio.c casts it back. arg is the address of a struct
+ * sys_synth_set_waveform_args built by the caller. */
+#define SYS_SYNTH_SET_WAVEFORM 17
+
+/* Mirrors synth_set_voice_waveform()'s signature exactly
+ * (kernel/audio/synth.h), with waveform as plain int -- see above. */
+struct sys_synth_set_waveform_args {
+    int voice;
+    int waveform;
+};
+
+/* Sets voice's pitch (an index into ona_phase_increment[]), wrapping
+ * synth_set_ona() with zero changes to its behavior. arg is the
+ * address of a struct sys_synth_set_ona_args built by the caller. */
+#define SYS_SYNTH_SET_ONA 18
+
+/* Mirrors synth_set_ona()'s signature exactly (kernel/audio/synth.h). */
+struct sys_synth_set_ona_args {
+    int voice;
+    int ona;
+};
+
+/* Sets voice's ADSR envelope, wrapping synth_set_adsr() with zero
+ * changes to its behavior. arg is the address of a struct
+ * sys_synth_set_adsr_args built by the caller. */
+#define SYS_SYNTH_SET_ADSR 19
+
+/* Mirrors synth_set_adsr()'s signature exactly (kernel/audio/synth.h). */
+struct sys_synth_set_adsr_args {
+    int voice;
+    int attack_ms;
+    int decay_ms;
+    int sustain_percent;
+    int release_ms;
+};
+
+/* Starts/stops voice's envelope, wrapping synth_gate_on()/
+ * synth_gate_off() with zero changes to their behavior. Both take a
+ * single plain int argument, so unlike the multi-argument syscalls
+ * above, arg IS the voice index directly, not the address of a
+ * wrapping struct -- same shape as SYS_DELETE/SYS_GFX_CLEAR's
+ * single-value argument. */
+#define SYS_SYNTH_GATE_ON 20
+#define SYS_SYNTH_GATE_OFF 21
+
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
  * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h,
- * graphics.h, or any other kernel module. This is what
+ * graphics.h, synth.h, or any other kernel module. This is what
  * kernel/tests/test_syscall.c links and calls directly. */
 int syscall_dispatch_core(int num, int arg);
+
+/* Real, audio-backed -- defined in syscall_audio.c, not syscall.c,
+ * syscall_fs.c, or syscall_gfx.c. Handles the synth.h-backed syscalls
+ * (SYS_SYNTH_SET_WAVEFORM, SYS_SYNTH_SET_ONA, SYS_SYNTH_SET_ADSR,
+ * SYS_SYNTH_GATE_ON, SYS_SYNTH_GATE_OFF), falls through to
+ * syscall_dispatch_core() for everything else. Not the function
+ * ring3.asm calls directly -- syscall_dispatch_gfx() (below) calls
+ * this one as its own fallback, extending the same dispatcher chain
+ * gfx already added onto fs. Only a starter set of synth.h's much
+ * larger API (duty cycle, ring modulation, filter routing, arpeggio,
+ * and the global filter cutoff/resonance/mode are all still
+ * unwrapped) -- enough to make a voice play a note from ring 3, not
+ * full coverage, the same YAGNI scoping the gfx slice used. */
+int syscall_dispatch_audio(int num, int arg);
 
 /* Real, gfx-backed -- defined in syscall_gfx.c, not syscall.c or
  * syscall_fs.c. Handles the graphics.h-backed syscalls (SYS_GFX_WIDTH,
  * SYS_GFX_HEIGHT, SYS_GFX_CLEAR, SYS_GFX_PUT_PIXEL, SYS_GFX_FILL_RECT,
- * SYS_GFX_PRESENT_RECT), falls through to syscall_dispatch_core() for
- * everything else. Not the function ring3.asm calls directly --
- * syscall_dispatch() (below) calls this one as its own fallback,
- * chaining fs.h's dispatcher and graphics.h's dispatcher together the
- * same way syscall_dispatch() already chained into
- * syscall_dispatch_core(). Deliberately no per-window clipping or
- * ownership: a ring-3 program can draw anywhere in the shared
- * backbuffer, including over the desktop/taskbar -- real ownership is
- * out of scope for this slice, deferred to whenever window-management
- * syscalls are tackled. */
+ * SYS_GFX_PRESENT_RECT), falls through to syscall_dispatch_audio() (not
+ * syscall_dispatch_core() directly anymore) for everything else. Not
+ * the function ring3.asm calls directly -- syscall_dispatch() (below)
+ * calls this one as its own fallback, chaining fs.h's dispatcher,
+ * graphics.h's dispatcher, and synth.h's dispatcher together.
+ * Deliberately no per-window clipping or ownership: a ring-3 program
+ * can draw anywhere in the shared backbuffer, including over the
+ * desktop/taskbar -- real ownership is out of scope for this slice,
+ * deferred to whenever window-management syscalls are tackled. */
 int syscall_dispatch_gfx(int num, int arg);
 
 /* Real -- defined in syscall_fs.c, not syscall.c. This is the exact

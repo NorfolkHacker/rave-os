@@ -41,7 +41,7 @@ CFLAGS := -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-
 # is needed for compiler-generated code.
 ISR_CFLAGS := $(CFLAGS) -mgeneral-regs-only
 
-C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o sb16.o fs.o editor.o serial.o scheduler.o synth.o boot_splash.o paging.o hexfmt.o gdt.o syscall.o syscall_fs.o syscall_gfx.o
+C_OBJS := kernel.o keyboard.o mouse.o graphics.o font.o text.o idt.o pic.o isr.o window.o button.o textfield.o checkbox.o taskbar.o startmenu.o shell.o console_input.o console_history.o console_output.o forth.o ata.o sb16.o fs.o editor.o serial.o scheduler.o synth.o boot_splash.o paging.o hexfmt.o gdt.o syscall.o syscall_fs.o syscall_gfx.o syscall_audio.o
 
 all: kernel.bin
 
@@ -89,6 +89,9 @@ syscall_fs.o: arch/syscall_fs.c arch/syscall.h fs/fs.h
 
 syscall_gfx.o: arch/syscall_gfx.c arch/syscall.h gfx/graphics.h
 	$(CC) $(CFLAGS) -c arch/syscall_gfx.c -o syscall_gfx.o
+
+syscall_audio.o: arch/syscall_audio.c arch/syscall.h audio/synth.h
+	$(CC) $(CFLAGS) -c arch/syscall_audio.c -o syscall_audio.o
 
 graphics.o: gfx/graphics.c gfx/graphics.h boot_info.h
 	$(CC) $(CFLAGS) -c gfx/graphics.c -o graphics.o
