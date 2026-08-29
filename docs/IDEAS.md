@@ -366,6 +366,27 @@ not a queue.
   syscalls and (D) a loadable/relocatable program format all remain
   entirely unbuilt, same as before.
 
+  (C)'s third slice, two more real filesystem syscalls, has now also
+  shipped, 2026-08-29 (see `docs/BUILD_LOG.md`'s entry for the same
+  date): `SYS_DELETE` and `SYS_CREATE_DIR`, thin wrappers around
+  `kernel/fs/fs.c`'s existing `fs_delete()`/`fs_create_dir()`.
+  Implemented directly rather than through a full spec+plan+SDD cycle
+  -- bounded, not architectural, since it added no new syscall
+  plumbing: both take a single pointer argument, so unlike the prior
+  two slices' multi-argument syscalls, neither needed a new args
+  struct -- `ebx` carries the path pointer directly. Proven end to end
+  in headless QEMU: a temporary ring-3 payload created then deleted
+  `/TMP/DELME.TXT` via `SYS_CREATE_FILE`/`SYS_DELETE`, created
+  `/TMP/NEWDIR` via `SYS_CREATE_DIR`, then listed `/TMP` via
+  `SYS_LIST_DIR` and confirmed the final snapshot matched (`NEWDIR`
+  present, `DELME` absent), only then executing the same deliberate
+  CPL0-only instruction every prior proof used, producing the
+  identical `PANIC: GENERAL PROTECTION FAULT` / `CODE=0x00000000`
+  banner, on the first attempt. `fs_rename`, `fs_move`, `fs_copy_file`,
+  and `fs_append_file` still remain unwrapped, and gfx/audio/
+  window-management syscalls and (D) a loadable/relocatable program
+  format all remain entirely unbuilt, same as before.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the

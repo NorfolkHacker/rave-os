@@ -3681,3 +3681,91 @@ new syscall cases and args structs, permanent, landed in this
 sub-project's Task 1); `kernel/kernel.c` (the temporary proof payload,
 added and fully removed within this task); `docs/BUILD_LOG.md`,
 `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- Even more of the fs syscall surface: fs_delete + fs_create_dir (userspace sub-project C, third slice)
+
+Closes the third slice of sub-project (C) of `docs/IDEAS.md`'s "Real
+userspace" entry -- `SYS_DELETE` and `SYS_CREATE_DIR`, wrapping
+`fs_delete()`/`fs_create_dir()` (`kernel/fs/fs.h`), are now reachable
+from CPL 3 through `int 0x80`, alongside the three fs syscalls the
+first two slices already shipped. Implemented directly rather than
+through a full spec+plan+SDD cycle -- the change is bounded, not
+architectural: both prior slices had already proven the pure/real
+`syscall_dispatch_core()`/`syscall_dispatch()` split and the
+args-struct-over-`ebx` convention, and this slice adds no new
+architecture, only two more thin wrapper cases.
+
+One difference from the prior two slices: neither `fs_delete()` nor
+`fs_create_dir()` needed a new args struct. Both take a single
+pointer argument (`const char *path`), so `ebx` carries that pointer
+directly, the same shape `SYS_TEST`/`SYS_EXIT` already use for a plain
+value -- a struct only becomes necessary once a syscall needs more
+than one argument, as `SYS_READ_FILE`/`SYS_CREATE_FILE`/`SYS_LIST_DIR`
+did. `kernel/arch/syscall_fs.c` gained two more `if` cases:
+```c
+if (num == SYS_DELETE)      return fs_delete((const char *)arg);
+if (num == SYS_CREATE_DIR)  return fs_create_dir((const char *)arg);
+```
+
+**The one-time ring-3 proof, cleanup, and closeout.** A temporary
+payload was added to `kernel/kernel.c`, immediately after
+`fs_bootstrap_dirs();` in `kmain()` (the same ordering lesson both
+prior slices' own proofs learned): `paging_set_user(0, 1)` then
+`enter_ring3()` into a CPL3 function issuing `int 0x80` four times in
+sequence -- `SYS_CREATE_FILE` to create `/TMP/DELME.TXT`, `SYS_DELETE`
+on that same path, `SYS_CREATE_DIR` to create `/TMP/NEWDIR`, then
+`SYS_LIST_DIR` to list `/TMP` and scan the returned entries -- before
+`SYS_EXIT` and the same deliberate `cli` every prior sub-project's
+proof has reused. Like the second slice's proof, this one deliberately
+ignores the individual create/delete/mkdir return values and gates
+success only on the final `SYS_LIST_DIR` snapshot: `NEWDIR` present
+(type dir) and `DELME` absent. `fs_create_dir()` is write-once, so a
+repeat boot against the same persistent `fs.img` correctly returns
+`-1` for it -- not a failure; and since `/TMP/DELME.TXT` is created
+and deleted within the same boot every time, gating on its absence in
+the listing (rather than trusting `SYS_DELETE`'s own return value)
+keeps the proof self-verifying regardless of run history.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as every prior entry above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480), run from this
+task's own worktree (`boot/`, not the sibling checkout's; `fs.img` did
+not yet exist there and was built fresh via `make fs.img` before the
+first boot):
+
+- **Proof screendump:** the red panic banner appeared, reading
+  exactly:
+  ```
+  PANIC: GENERAL PROTECTION FAULT
+  CODE=0x00000000
+  ```
+  identical to every prior syscall sub-project's proof -- reaching it
+  on the first attempt (no ordering bug this time) is proof
+  `/TMP/NEWDIR` was created and `/TMP/DELME.TXT` was deleted, both
+  confirmed via a real, round-tripped `SYS_LIST_DIR` call, not just
+  fixed-value plumbing.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` came back empty, confirming the removal was exact.
+  A final rebuild and headless boot showed the ordinary desktop: the
+  black backdrop, green cursor square, and the taskbar's green rule
+  and `MENU` label at the bottom -- matching every prior sub-project's
+  steady-state regression screendump, confirming `SYS_DELETE`/
+  `SYS_CREATE_DIR` being wired into the permanent `syscall_dispatch()`
+  switch are still a true no-op with nothing in the tree invoking
+  them.
+
+Verified: host test suite (`kernel/tests/test_syscall.c`) unchanged
+and passing; cross-compiler build clean, zero warnings beyond the
+pre-existing RWX-segment linker warning; one proof screendump with the
+exact expected banner text; one final regression screendump matching
+every prior sub-project's steady-state desktop exactly; `git diff`
+showed a clean revert of the temporary test code with no leftover
+debug code. Working tree left with the permanent `SYS_DELETE`/
+`SYS_CREATE_DIR` plumbing present but unused by anything in the tree;
+scratch `.ppm`/monitor-socket files cleaned up; no leftover QEMU
+processes.
+
+Files: `kernel/arch/syscall.h`, `kernel/arch/syscall_fs.c` (the two
+new syscall cases, permanent); `kernel/kernel.c` (the temporary proof
+payload, added and fully removed within this slice); `docs/BUILD_LOG.md`,
+`docs/IDEAS.md` (this entry and closeout).
