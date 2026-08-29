@@ -4,11 +4,11 @@
 #define STARTMENU_BUTTON_WIDTH 64
 
 /* Popup item order, top of the popup to bottom (closest to the button).
- * FORTH, FILES, and SHELL are the three windows that exist at all now,
- * all launched directly since no window opens on its own at boot
- * anymore (see kmain()) and there's no desktop-icon fallback either
- * (removed on request -- every window already has a menu launcher, so
- * the icon column was pure redundancy). CONFIG/GAMES are the two folder
+ * FORTH, FILES, SHELL, and PAINT are the windows/programs launched
+ * directly since no window opens on its own at boot anymore (see
+ * kmain()) and there's no desktop-icon fallback either (removed on
+ * request -- every window already has a menu launcher, so the icon
+ * column was pure redundancy). CONFIG/GAMES are the two folder
  * shortcuts kept on request despite FILES already being able to browse
  * there itself -- unlike a plain FILES launch, they also navigate cwd
  * (kernel.c's open_files_at()). FX and EXIT are the two system actions
@@ -17,11 +17,12 @@
 #define STARTMENU_ITEM_FORTH 0
 #define STARTMENU_ITEM_FILES 1
 #define STARTMENU_ITEM_SHELL 2
-#define STARTMENU_ITEM_CONFIG 3
-#define STARTMENU_ITEM_GAMES 4
-#define STARTMENU_ITEM_FX 5
-#define STARTMENU_ITEM_EXIT 6
-#define STARTMENU_ITEM_COUNT 7
+#define STARTMENU_ITEM_PAINT 3
+#define STARTMENU_ITEM_CONFIG 4
+#define STARTMENU_ITEM_GAMES 5
+#define STARTMENU_ITEM_FX 6
+#define STARTMENU_ITEM_EXIT 7
+#define STARTMENU_ITEM_COUNT 8
 
 /* x/y/w/h describe the start button itself -- flush with the taskbar's
  * own left edge and the same height, so kernel.c narrows the taskbar's

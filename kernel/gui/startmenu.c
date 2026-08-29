@@ -80,6 +80,8 @@ static const char *startmenu_item_label(int index) {
         return "FILES";
     case STARTMENU_ITEM_SHELL:
         return "SHELL";
+    case STARTMENU_ITEM_PAINT:
+        return "PAINT";
     case STARTMENU_ITEM_CONFIG:
         return "CONFIG";
     case STARTMENU_ITEM_GAMES:

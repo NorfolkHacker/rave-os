@@ -2382,6 +2382,18 @@ static void kmain_frame(void) {
                 } else if (item == STARTMENU_ITEM_SHELL) {
                     windows[WIN_KIND_SHELL].state = WINDOW_OPEN;
                     raise_window(z_order, WIN_KIND_SHELL);
+                } else if (item == STARTMENU_ITEM_PAINT) {
+                    /* Unlike every other item above, this never returns --
+                     * program_load_and_run() -> enter_ring3() is a one-way
+                     * jump into ring 3 (kernel/arch/ring3.asm). The rest of
+                     * this function's own stack frame (and kmain()'s
+                     * original call to it) is simply abandoned; paint.bin's
+                     * own event loop is what keeps the desktop alive from
+                     * here on, exactly the way ring3_wait_event() already
+                     * does for the generic ring-3 window. See
+                     * docs/superpowers/specs/2026-08-29-standalone-paint-
+                     * design.md. */
+                    program_load_and_run("/BIN/PAINT.BIN");
                 } else if (item == STARTMENU_ITEM_CONFIG) {
                     open_files_at(cwd, (int)sizeof(cwd), "/ETC", windows, z_order, file_entries, &file_entry_count,
                                  &files_selected_mask);
