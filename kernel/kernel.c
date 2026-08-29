@@ -30,6 +30,7 @@
 #include "sb16.h"
 #include "synth.h"
 #include "fs.h"
+#include "syscall.h" /* RING3_EVENT_* -- single source of truth shared with syscall_window.c */
 
 /* Note: stage2 switches the display into a VBE graphics mode before the
  * kernel even starts, so raw VGA text-mode writes at 0xB8000 don't apply
@@ -66,14 +67,26 @@
 /* Owned by a ring-3 program (see window_ring3_open()/_close() below),
  * not one of the five built-in apps above. Unlike them, its content is
  * whatever the ring-3 program itself drew via the gfx syscalls -- there
- * is no draw_*_group() for it, and draw_window_by_index()'s dispatch
- * (further down) is never extended to handle it: that function's own
- * bare `else` fallback would incorrectly treat it as PAINT, but nothing
- * calls draw_window_by_index() again once a ring-3 program is running
- * (kmain() never resumes its own loop after enter_ring3()), so this is
- * a real but currently-unreachable gap, not a live bug. Whoever adds
- * real ring-3 event delivery later needs to fix that dispatch too. */
+ * is no draw_*_group() for it; draw_window_by_index() (further down)
+ * has an explicit no-op case for it rather than falling through to a
+ * bare `else`, which used to silently mis-draw it as PAINT (harmless
+ * only because nothing called draw_window_by_index() again once a
+ * ring-3 program was running, before SYS_WAIT_EVENT's kmain_frame()
+ * re-entry made that reachable -- see
+ * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md). */
 #define WIN_KIND_RING3 5
+
+/* A single pending ring-3 window event -- not a queue, deliberately:
+ * only one ring-3 program ever runs at a time, it consumes events
+ * synchronously (blocking inside SYS_WAIT_EVENT/ring3_wait_event()
+ * below), and real mouse clicks are naturally rate-limited by human
+ * interaction speed, so nothing in this design can generate events
+ * faster than one SYS_WAIT_EVENT call can drain them. RING3_EVENT_*
+ * come from syscall.h (included above), the single source of truth
+ * shared with syscall_window.c -- not redefined here. See
+ * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
+static int ring3_event_pending = RING3_EVENT_NONE;
+static int ring3_event_x, ring3_event_y; /* valid only for RING3_EVENT_CLICK */
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -1721,9 +1734,20 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
         draw_shell_group(&windows[idx], wc->shell_co, wc->shell_ci);
     } else if (idx == WIN_KIND_EDITOR) {
         draw_editor_group(&windows[idx], wc->ed, wc->save_btn);
-    } else {
+    } else if (idx == WIN_KIND_PAINT) {
         draw_paint_group(&windows[idx], wc->pt, wc->paint_name_input, wc->paint_save_btn, wc->paint_load_btn);
     }
+    /* WIN_KIND_RING3 deliberately has no case here: its content is
+     * drawn entirely by the ring-3 program itself via the gfx
+     * syscalls, not by any draw_*_group() this kernel owns. Before
+     * SYS_WAIT_EVENT, this function was never called again for it at
+     * all (kmain() never resumed its loop after enter_ring3()), so
+     * falling through to a bare `else` that mis-drew it as PAINT was
+     * a real but unreachable bug -- SYS_WAIT_EVENT's kmain_frame()
+     * re-entry makes it reachable (e.g. dragging the ring-3 window
+     * marks it touched[]), so the explicit no-op here replaces that
+     * bare `else` rather than leaving the gap the original comment on
+     * WIN_KIND_RING3's own #define already flagged. */
 }
 
 /* Full redraw of everything into the backbuffer: background, every open
@@ -2321,6 +2345,15 @@ static void kmain_frame(void) {
                         if (target == WIN_KIND_PAINT && paint_program_slot >= 0) {
                             scheduler_request_close(paint_program_slot);
                         }
+                        if (target == WIN_KIND_RING3) {
+                            /* Without this, a ring-3 program blocked in
+                             * SYS_WAIT_EVENT would spin forever after
+                             * its window closed -- there's no scheduler
+                             * slot for ring-3 programs the way PAINT's
+                             * Forth fiber has one above, so this is the
+                             * only signal it will ever get. */
+                            ring3_event_pending = RING3_EVENT_CLOSED;
+                        }
                     } else if (window_minimize_hit_test(&windows[target], cx, cy)) {
                         windows[target].state = WINDOW_MINIMIZED;
                     } else {
@@ -2366,7 +2399,27 @@ static void kmain_frame(void) {
                 int shell_is_topmost = topmost == WIN_KIND_SHELL;
                 int editor_is_topmost = topmost == WIN_KIND_EDITOR;
                 int paint_is_topmost = topmost == WIN_KIND_PAINT;
+                int ring3_is_topmost = topmost == WIN_KIND_RING3;
                 int click_edge = left_held && !prev_left_held;
+
+                /* Reports absolute screen coordinates, not
+                 * window-relative -- every other syscall a ring-3
+                 * program uses (SYS_WINDOW_OPEN's x/y, every gfx
+                 * syscall) already works in absolute screen space, so
+                 * this matches rather than inventing a second
+                 * convention. The rect check against
+                 * windows[WIN_KIND_RING3]'s own x/y/w/h naturally
+                 * excludes the titlebar with no extra logic: window.h's
+                 * own documented convention is that x/y/w/h already
+                 * describe the body only, so a titlebar click (which
+                 * starts a drag, handled earlier) never satisfies it. */
+                if (ring3_is_topmost && click_edge &&
+                    cx >= windows[WIN_KIND_RING3].x && cx < windows[WIN_KIND_RING3].x + windows[WIN_KIND_RING3].w &&
+                    cy >= windows[WIN_KIND_RING3].y && cy < windows[WIN_KIND_RING3].y + windows[WIN_KIND_RING3].h) {
+                    ring3_event_pending = RING3_EVENT_CLICK;
+                    ring3_event_x = cx;
+                    ring3_event_y = cy;
+                }
 
                 /* Any click edge sets focus: hitting the field itself
                  * focuses it, anything else (another window, the
@@ -2982,6 +3035,28 @@ static void kmain_frame(void) {
         } else {
             __asm__ volatile("hlt");
         }
+}
+
+/* Blocks -- by re-driving kmain_frame() itself, the same function this
+ * function's own for(;;) loop above calls -- until a ring-3 window
+ * event is available, then returns it and clears the pending slot.
+ * Not a syscall itself; SYS_WAIT_EVENT's handler
+ * (kernel/arch/syscall_window.c) calls this directly, the same
+ * extern-at-call-site convention window_ring3_open()/
+ * program_load_and_run() already use. Real mouse/keyboard input keeps
+ * arriving and getting processed on every kmain_frame() call this
+ * makes -- that's the entire point: a ring-3 program blocked in here
+ * does not freeze the desktop the way every prior ring-3 proof's own
+ * infinite loop always has. See
+ * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
+void ring3_wait_event(int *type, int *x, int *y) {
+    while (ring3_event_pending == RING3_EVENT_NONE) {
+        kmain_frame();
+    }
+    *type = ring3_event_pending;
+    *x = ring3_event_x;
+    *y = ring3_event_y;
+    ring3_event_pending = RING3_EVENT_NONE;
 }
 
 void kmain(void) {

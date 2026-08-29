@@ -272,6 +272,29 @@ struct sys_window_open_args {
  * spec's "Known limitation" section. Ignores arg. */
 #define SYS_WINDOW_CLOSE 23
 
+/* Blocks until a click or close event lands on the ring-3 window,
+ * wrapping the new ring3_wait_event() (kernel/kernel.c). arg is the
+ * address of a struct sys_wait_event_args the caller builds; its
+ * fields are filled in by the syscall, not read from by it. See
+ * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
+#define SYS_WAIT_EVENT 24
+
+#define RING3_EVENT_NONE 0
+#define RING3_EVENT_CLICK 1
+#define RING3_EVENT_CLOSED 2
+
+/* Mirrors ring3_wait_event()'s three output parameters
+ * (kernel/kernel.c). type is one of the RING3_EVENT_* values above;
+ * x/y are valid only when type == RING3_EVENT_CLICK, and are absolute
+ * screen coordinates -- matching every other syscall a ring-3 program
+ * already uses (SYS_WINDOW_OPEN's x/y, every gfx syscall), not a new
+ * window-relative convention. */
+struct sys_wait_event_args {
+    int type;
+    int x;
+    int y;
+};
+
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
  * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h,
  * graphics.h, synth.h, kernel.c's window state, or any other kernel
@@ -281,12 +304,17 @@ int syscall_dispatch_core(int num, int arg);
 
 /* Real, window-backed -- defined in syscall_window.c, not syscall.c,
  * syscall_fs.c, syscall_gfx.c, or syscall_audio.c. Handles
- * SYS_WINDOW_OPEN/SYS_WINDOW_CLOSE, falls through to
+ * SYS_WINDOW_OPEN/SYS_WINDOW_CLOSE/SYS_WAIT_EVENT, falls through to
  * syscall_dispatch_core() for everything else. Not the function
  * ring3.asm calls directly -- syscall_dispatch_audio() (below) calls
  * this one as its own fallback, extending the dispatcher chain to five
- * links. Only the sole ring-3 window slot, no dragging/event delivery
- * -- see docs/superpowers/specs/2026-08-29-ring3-window-design.md. */
+ * links. SYS_WAIT_EVENT is the first syscall in this codebase that can
+ * genuinely block for an unbounded time -- see
+ * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md for
+ * why that's safe (it re-drives kmain_frame() itself while blocked,
+ * rather than the desktop freezing). Dragging/raising/closing the
+ * ring-3 window already work the same as any other window kind; only
+ * content clicks and closes are reported as events. */
 int syscall_dispatch_window(int num, int arg);
 
 /* Real, audio-backed -- defined in syscall_audio.c, not syscall.c,
