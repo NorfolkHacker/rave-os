@@ -1,6 +1,6 @@
 # Rave-OS
 
-Rave-OS is a hobby x86 operating system built from scratch in C and assembly — its own two-stage bootloader, a mouse-driven windowing GUI, a flat-file filesystem with a Unix-like directory layout, a from-scratch Forth dialect as its scripting language, and an 8-voice SID-style software synthesizer, all running with no libc and no floating point. It exists as a learning project: a record of learning x86 assembly, freestanding C, and OS-level programming by building one, staged deliberately (bootable groundwork → GUI → Forth → self-hosting) rather than attempted all at once.
+Rave-OS is a hobby x86 operating system built from scratch in C and assembly — its own two-stage bootloader, a mouse-driven windowing GUI, a flat-file filesystem with a Unix-like directory layout, a from-scratch Forth dialect as its scripting language, and an 8-voice SID-style software synthesizer, all running with no libc and no floating point. It also has a real, if still foundational, userspace: identity-mapped paging, a ring 3 + `int 0x80` syscall ABI, a syscall surface covering filesystem/graphics/audio/window operations, and a loadable flat-binary program format (see [Userspace internals](#userspace-internals) below — none of this is user-reachable yet, it's kernel-level groundwork). It exists as a learning project: a record of learning x86 assembly, freestanding C, and OS-level programming by building one, staged deliberately (bootable groundwork → GUI → Forth → self-hosting → userspace) rather than attempted all at once.
 
 Everything below has been verified in QEMU. A real-hardware boot has not yet been attempted — see [Known limitations](#known-limitations).
 
@@ -119,6 +119,38 @@ There's only one shared filter (matching the real SID chip's own architecture), 
 GATE-ON
 ```
 
+## Userspace internals
+
+Rave-OS has a real, working ring 3 / syscall foundation, but **nothing
+in the desktop, Forth, or SHELL currently launches ring-3 code** — every
+piece below was proven with a temporary, throwaway test payload during
+development and then removed. There's no `RUN`-style command yet that
+loads and executes a real program. This section exists for anyone
+reading the source, not as a feature you can drive from the desktop.
+
+What exists at the kernel level:
+
+- **Paging + a minimal syscall ABI.** A single identity-mapped page
+  directory with one page-directory entry (the low 4MB) flippable
+  between supervisor-only and user-accessible; `enter_ring3()` drops
+  CPL0 → CPL3; a hand-written `int 0x80` trap gate carries one syscall
+  number and one argument (a plain value, or a pointer to a small args
+  struct for multi-argument calls) each way.
+- **A syscall surface**, `kernel/arch/syscall_{fs,gfx,audio,window}.c`:
+  every real `kernel/fs/fs.h` operation (create/read/append/delete/
+  list/mkdir/rename/move/copy); a handful of `kernel/gfx/graphics.h`
+  drawing primitives; enough of `kernel/audio/synth.h` to make a voice
+  play a note; and `SYS_WINDOW_OPEN`/`SYS_WINDOW_CLOSE` for a single,
+  non-interactive ring-3 window (no dragging, no event delivery back to
+  the program yet).
+- **A loadable program format**, `programs/hello/`: a real, separately
+  compiled flat binary (fixed load address, no relocation), loaded from
+  a real on-disk file via `kernel/kernel.c`'s `program_load_and_run()`.
+
+See `docs/IDEAS.md`'s "Real userspace" entry, the dated design specs
+under `docs/superpowers/specs/`, and `docs/BUILD_LOG.md` for the full
+design history and how each piece was verified.
+
 ## Project history and roadmap
 
 `docs/BUILD_LOG.md` is a running, detailed record of how the system was built — decisions, concepts learned, what was verified and how. `docs/IDEAS.md` is the informal backlog of things considered but not yet scoped. Design specs and implementation plans for individual features live under `docs/superpowers/`.
@@ -128,3 +160,4 @@ GATE-ON
 - **No real-hardware verification pass yet.** Everything is built and tested against QEMU; running on real x86 hardware hasn't been attempted.
 - **One fixed resolution** (640x480) — no display configuration.
 - Fixed-point arithmetic throughout (the kernel builds with `-mgeneral-regs-only`, so there is no floating point anywhere, including in the audio engine).
+- **No user-facing way to run a ring-3 program yet.** The syscall ABI, syscall surface, and loadable program format described in [Userspace internals](#userspace-internals) are real and working, but nothing in the desktop/Forth/SHELL currently loads or launches one — every proof so far used a temporary, since-removed test payload. There's also no real event delivery to a ring-3 window (it can only draw once and sit static) and no more than one loaded program can run at a time.
