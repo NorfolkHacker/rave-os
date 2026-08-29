@@ -4061,3 +4061,133 @@ permanent); `kernel/Makefile` (new build rule, permanent);
 `kernel/kernel.c` (the temporary proof payload, added and fully
 removed within this slice); `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this
 entry and closeout).
+
+## 2026-08-29 -- A static, non-interactive ring-3 window: SYS_WINDOW_OPEN/SYS_WINDOW_CLOSE (userspace sub-project C, window-management slice)
+
+Starts sub-project (C)'s window-management syscall surface, deliberately
+scoped much smaller than "real" window management after investigation
+(see `docs/superpowers/specs/2026-08-29-ring3-window-design.md`) showed
+what full interactivity would actually cost: `kernel.c`'s window system
+is five hardcoded slots (`WIN_KIND_FORTH`/`FILES`/`SHELL`/`EDITOR`/
+`PAINT`), each with bespoke inline content-drawing code, and there is no
+process/ownership concept anywhere in the kernel. Worse, once `kmain()`
+calls `enter_ring3()`, it never gets control back -- its own per-frame
+update loop simply stops running for good, the same limitation every
+prior ring-3 proof has already relied on (each one ends in a deliberate
+crash rather than returning). Real event delivery to a ring-3 window
+would need a blocking `SYS_WAIT_EVENT` whose CPL0 handler internally
+re-drives that per-frame loop -- but the loop is one large, deeply
+inlined function today, not something callable, and extracting it is a
+real refactor of working code five apps depend on, comparable in scope
+to sub-project (D). Brainstormed with the user, who chose to scope this
+slice down to a static window instead of committing to that bigger
+lift now.
+
+**What this slice actually ships:** a sixth window slot,
+`WIN_KIND_RING3`, alongside the five built-in apps (`MAX_WINDOWS`
+6, was 5). `SYS_WINDOW_OPEN` (`x, y, w, h, title`) and
+`SYS_WINDOW_CLOSE` (no args), thin syscalls wrapping two new
+`kernel.c`-private functions, `window_ring3_open()`/
+`window_ring3_close()` -- private because, unlike fs/gfx/audio, there
+is no pre-existing subsystem header for window management to wrap;
+`windows[]`/`z_order[]`/`raise_window()` are all `static` inside
+`kernel.c`. `window_ring3_open()` draws the window's chrome
+(`window_draw()`) and presents it (`gfx_present_rect()`)
+**synchronously, inside the syscall itself** -- since `kmain()`'s frame
+loop never runs again once `enter_ring3()` has been called, nothing
+else ever would. A ring-3 program draws its own content into the
+window body using the gfx syscalls the earlier slice already shipped;
+there is still no clipping. `SYS_WINDOW_CLOSE` only flips `state` to
+`WINDOW_CLOSED` -- it deliberately does not erase the already-presented
+pixels, since nothing will redraw over them either; documented as a
+real, understood limitation of this minimal scope, not a bug.
+
+**A real regression risk, caught before it could ship.** `WINDOW_OPEN`
+is `#define`d `0` -- an unset `state` field defaults to *open*, not
+closed. Boot-time init gained an explicit
+`windows[WIN_KIND_RING3].state = WINDOW_CLOSED;` alongside the other
+five windows' own identical lines; missing it would have shown a
+garbage window (zeroed geometry, no title) on every ordinary boot, not
+just when a ring-3 program actually opens one. Caught by design, then
+verified directly: a **baseline headless QEMU boot with the new slot
+wired in but no proof payload yet** showed the ordinary desktop with no
+stray window, before any temporary test code was added at all.
+
+**Extends the dispatcher chain a fifth link.** A new
+`kernel/arch/syscall_window.c` holds `syscall_dispatch_window()`, built
+the same way `syscall_dispatch_gfx()`/`syscall_dispatch_audio()` were.
+`syscall_dispatch_audio()` now falls through to it instead of
+`syscall_dispatch_core()` directly:
+`syscall_dispatch()` (fs) -> `syscall_dispatch_gfx()` (gfx) ->
+`syscall_dispatch_audio()` (audio) -> `syscall_dispatch_window()`
+(window) -> `syscall_dispatch_core()` (pure fallback, still zero
+dependency on any of the four subsystems -- confirmed by the host test
+still linking and passing unchanged). `kernel/Makefile` gained a
+`syscall_window.o` rule and joined `C_OBJS`.
+
+**One known gap, documented but not fixed.**
+`draw_window_by_index()`'s dispatcher (further down `kernel.c`) has a
+bare `else` fallback that treats any unrecognized window kind as
+`PAINT` -- a real latent bug for `WIN_KIND_RING3` once `kmain()`'s loop
+can run again with a ring-3 window present. Unreachable today (that
+loop never runs again once `enter_ring3()` is called), so left as a
+comment for whoever tackles real event delivery next, not fixed
+speculatively for a path this slice never exercises.
+
+**The one-time ring-3 proof, cleanup, and closeout.** A temporary
+payload was added to `kernel/kernel.c`, at the same call site every
+prior fs syscall proof has used. It opens the ring-3 window (`x=100,
+y=100, w=200, h=150, title="RING3 WIN"`), draws a filled cyan rect
+into its body via `SYS_GFX_FILL_RECT`/`SYS_GFX_PRESENT_RECT`, reads
+`windows[WIN_KIND_RING3]` back directly to confirm the open really
+landed (a legitimate read -- this function is defined in `kernel.c`
+itself, the same translation unit `windows[]` is declared in, no
+different from any other function in this file reading it), closes
+the window, confirms the state flip, then falls into the usual
+deliberate `SYS_EXIT` + `cli` tail gated on all of the above.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as every prior entry above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480), run from this
+slice's own worktree (`boot/`, not the sibling checkout's; `fs.img`
+did not yet exist there and was built fresh via `make fs.img` before
+the first boot):
+
+- **Baseline screendump** (new window slot wired in, no proof payload
+  yet): the ordinary desktop, confirming the `MAX_WINDOWS` bump and
+  boot-time init alone are a true no-op.
+- **Proof screendump:** a real bordered window rendered on the ordinary
+  black desktop -- titlebar reading "RING3 WIN" with minimize/close
+  controls, a white accent border (distinct from every built-in app's
+  own accent color), and the cyan content rect drawn via the gfx
+  syscalls -- with the usual red panic banner
+  (`PANIC: GENERAL PROTECTION FAULT` / `CODE=0x00000000`) at the top,
+  confirming both the visual rendering and the in-payload state checks
+  passed. On the first attempt.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` came back empty, confirming the removal was exact.
+  A final rebuild and headless boot showed the ordinary desktop again,
+  matching every prior sub-project's steady-state regression
+  screendump.
+
+Verified: host test suite (`kernel/tests/test_syscall.c`) unchanged
+and passing -- confirming `syscall_dispatch_core()` genuinely still has
+zero dependency on window state, on top of `fs.h`/`graphics.h`/
+`synth.h`; cross-compiler build clean, zero warnings beyond the
+pre-existing RWX-segment linker warning; one baseline screendump, one
+proof screendump, one final regression screendump, all as described
+above; `git diff` showed a clean revert of the temporary test code with
+no leftover debug code. Working tree left with the permanent window
+syscall plumbing present but unused by anything in the tree; scratch
+`.ppm`/monitor-socket files cleaned up; no leftover QEMU processes.
+
+Files: `kernel/arch/syscall.h` (two new syscall cases and one args
+struct, permanent); `kernel/arch/syscall_audio.c` (one-line fallthrough
+change, permanent); `kernel/arch/syscall_window.c` (new file,
+permanent); `kernel/Makefile` (new build rule, permanent);
+`kernel/kernel.c` (`MAX_WINDOWS`/`WIN_KIND_RING3`, boot-time init,
+`window_ring3_open()`/`window_ring3_close()`, all permanent; the
+temporary proof payload, added and fully removed within this slice);
+`docs/superpowers/specs/2026-08-29-ring3-window-design.md` (design
+spec, written and committed before implementation); `docs/BUILD_LOG.md`,
+`docs/IDEAS.md` (this entry and closeout).

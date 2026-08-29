@@ -458,6 +458,36 @@ not a queue.
   and (D) a loadable/relocatable program format remain entirely
   unbuilt, same as before.
 
+  (C)'s window-management slice has now also shipped, 2026-08-29 (see
+  `docs/superpowers/specs/2026-08-29-ring3-window-design.md` and
+  `docs/BUILD_LOG.md`'s entry for the same date) -- deliberately scoped
+  far smaller than full interactivity after investigation showed the
+  real cost: `kernel.c`'s window system is five hardcoded slots with
+  bespoke inline content-drawing, no process/ownership concept exists
+  anywhere, and `kmain()` never regains control once `enter_ring3()` is
+  called, so real event delivery would need extracting its per-frame
+  update loop into a callable function first -- comparable in scope to
+  (D). Brainstormed with the user, who chose a static, non-interactive
+  window instead of committing to that bigger lift now. Ships a sixth
+  window slot (`WIN_KIND_RING3`, `MAX_WINDOWS` now 6) and two syscalls,
+  `SYS_WINDOW_OPEN`/`SYS_WINDOW_CLOSE`, wrapping two new
+  `kernel.c`-private functions (no pre-existing subsystem header to
+  wrap, unlike fs/gfx/audio) that draw and present the window's chrome
+  synchronously inside the syscall itself. No dragging, no
+  click/keyboard event delivery -- a ring-3 program draws its own
+  content using the gfx syscalls already shipped. Extended the
+  dispatcher chain a fifth link. Proven end to end in headless QEMU: a
+  baseline boot (new slot wired in, no payload) confirmed the
+  `WINDOW_OPEN == 0` boot-time-init trap was caught before it could ship
+  a garbage window on every ordinary boot; the proof itself showed a
+  real bordered window -- titlebar, controls, distinct accent color,
+  drawn content -- rendered on the ordinary desktop, with the usual
+  panic banner confirming the in-payload open/close state checks also
+  passed. On the first attempt. Real event delivery/interactivity and
+  (D) a loadable/relocatable program format remain entirely unbuilt,
+  separate future work -- (D) may even be a prerequisite, since window
+  ownership arguably wants a real "program" concept first.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
