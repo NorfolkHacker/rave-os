@@ -435,6 +435,29 @@ not a queue.
   window-management syscalls and (D) a loadable/relocatable program
   format remain entirely unbuilt, same as before.
 
+  (C)'s first audio slice has now also shipped, 2026-08-29 (see
+  `docs/BUILD_LOG.md`'s entry for the same date): `SYS_SYNTH_SET_WAVEFORM`,
+  `SYS_SYNTH_SET_ONA`, `SYS_SYNTH_SET_ADSR`, `SYS_SYNTH_GATE_ON`, and
+  `SYS_SYNTH_GATE_OFF`, thin wrappers around `kernel/audio/synth.h` --
+  enough to make a voice play a note from ring 3, not synth.h's much
+  larger remaining API (duty cycle, ring modulation, filter routing,
+  arpeggio, global filter cutoff/resonance/mode), same YAGNI scoping
+  the gfx slice used. Extended the dispatcher chain a fourth link:
+  `syscall_dispatch_gfx()` now falls through to a new
+  `syscall_dispatch_audio()` (`kernel/arch/syscall_audio.c`) instead of
+  `syscall_dispatch_core()` directly. Proven end to end in headless
+  QEMU: since there's no screendump that can confirm sound, a temporary
+  ring-3 payload instead read `synth_voices[0]` back directly after
+  each call (a legitimate read -- PDE 0 is already fully
+  user-accessible, and `synth_voices[]` is an ordinary extern global,
+  not something the syscall boundary hides) to confirm each argument
+  actually reached and changed the real kernel state: waveform, pitch,
+  envelope stage after gate-on, the ADSR's exact sustain-level scaling,
+  and envelope stage after gate-off, all before the usual deliberate
+  `#GP` proof tail. On the first attempt. Window-management syscalls
+  and (D) a loadable/relocatable program format remain entirely
+  unbuilt, same as before.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the

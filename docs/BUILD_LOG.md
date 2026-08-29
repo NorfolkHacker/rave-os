@@ -3961,3 +3961,103 @@ change, permanent); `kernel/arch/syscall_gfx.c` (new file, permanent);
 `kernel/Makefile` (new build rule, permanent); `kernel/kernel.c` (the
 temporary proof payload, added and fully removed within this slice);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- An audio syscall surface: set_waveform/set_ona/set_adsr/gate_on/gate_off (userspace sub-project C, audio slice)
+
+Starts sub-project (C)'s audio syscall surface, alongside the now-shipped
+gfx surface: `SYS_SYNTH_SET_WAVEFORM`, `SYS_SYNTH_SET_ONA`,
+`SYS_SYNTH_SET_ADSR`, `SYS_SYNTH_GATE_ON`, and `SYS_SYNTH_GATE_OFF`,
+thin wrappers around `kernel/audio/synth.h`'s
+`synth_set_voice_waveform()`/`synth_set_ona()`/`synth_set_adsr()`/
+`synth_gate_on()`/`synth_gate_off()`, are now reachable from CPL 3
+through `int 0x80` -- enough to make a voice play a note from ring 3.
+`synth.h`'s much larger remaining API (duty cycle, ring modulation,
+filter routing, arpeggio, the global filter cutoff/resonance/mode) is
+still unwrapped -- deliberately, same YAGNI scoping the gfx slice used.
+
+**Extends the dispatcher chain again, same pattern the gfx slice
+established.** A new `kernel/arch/syscall_audio.c` holds
+`syscall_dispatch_audio()`, a real, `synth.h`-touching dispatcher built
+the identical way `syscall_dispatch_gfx()` was. `syscall_dispatch_gfx()`
+now falls through to `syscall_dispatch_audio()` instead of calling
+`syscall_dispatch_core()` directly, extending the chain to four links:
+`syscall_dispatch()` (fs) -> `syscall_dispatch_gfx()` (gfx) ->
+`syscall_dispatch_audio()` (audio) -> `syscall_dispatch_core()` (pure
+fallback, still zero dependency on `fs.h`, `graphics.h`, or `synth.h`
+-- confirmed by the host test still linking and passing unchanged).
+`kernel/Makefile` gained a `syscall_audio.o` rule and joined `C_OBJS`.
+`waveform` is carried through `struct sys_synth_set_waveform_args` as a
+plain `int`, not `enum synth_waveform` -- `syscall.h` stays
+dependency-free on `synth.h` the same way it already is on `fs.h` (via
+`fs_dirent`'s forward declaration) and `graphics.h`; the caller passes
+the enum's underlying int value and `syscall_audio.c` casts it back.
+
+**The one-time ring-3 proof, cleanup, and closeout.** A temporary
+payload was added to `kernel/kernel.c`, at the same call site every
+prior proof has used (`synth_init()` runs even earlier in `kmain()`,
+same relationship `gfx_init()` has to its own proof's call site).
+Unlike gfx, there's no screendump that can confirm sound -- instead the
+payload reads `synth_voices[0]` directly after each call. This is a
+legitimate read, not a shortcut around the syscall boundary: PDE 0 is
+already fully user-accessible via `paging_set_user(0, 1)` (the same
+mapping every ring-3 payload's own local variables already depend on
+to work at all), and `synth_voices[]` is an ordinary `extern` global
+(`kernel/audio/synth.h`), not something a syscall is hiding -- only the
+syscall path can ever *write* it, so a correct post-call value still
+proves the argument really crossed the `int 0x80` boundary and reached
+`synth_set_*()`/`synth_gate_*()`. Checked, in order:
+`synth_voices[0].waveform == WAVE_PULSE` (after `SYS_SYNTH_SET_WAVEFORM`);
+`.phase_increment == ona_phase_increment[47]` (after `SYS_SYNTH_SET_ONA`
+with `ona = 48`); `.envelope_stage == ENV_ATTACK` and
+`.sustain_level` matching `synth_set_adsr()`'s own exact Q8 scaling
+formula for `sustain_percent = 80` (after `SYS_SYNTH_SET_ADSR` then
+`SYS_SYNTH_GATE_ON`); and finally `.envelope_stage == ENV_RELEASE`
+(after `SYS_SYNTH_GATE_OFF`) -- gating the usual `SYS_EXIT` + deliberate
+`cli` tail on all of these together, not just on the syscalls not
+crashing.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as every prior entry above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480), run from this
+slice's own worktree (`boot/`, not the sibling checkout's; `fs.img`
+did not yet exist there and was built fresh via `make fs.img` before
+the first boot):
+
+- **Proof screendump:** the red panic banner appeared, reading
+  exactly:
+  ```
+  PANIC: GENERAL PROTECTION FAULT
+  CODE=0x00000000
+  ```
+  identical to every prior syscall sub-project's proof -- reaching it
+  is proof all five checks above passed, confirming all five syscalls'
+  arguments really reached and changed `synth_voices[0]`'s real state,
+  not just fixed-value plumbing. On the first attempt.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` came back empty, confirming the removal was exact.
+  A final rebuild and headless boot showed the ordinary desktop:
+  black backdrop, green cursor square, taskbar's green rule and
+  `MENU` label -- matching every prior sub-project's steady-state
+  regression screendump, confirming the five new audio syscalls being
+  wired into the permanent dispatcher chain are still a true no-op
+  with nothing in the tree invoking them.
+
+Verified: host test suite (`kernel/tests/test_syscall.c`) unchanged
+and passing -- confirming `syscall_dispatch_core()` genuinely still
+has zero dependency on `synth.h`, on top of `fs.h`/`graphics.h`;
+cross-compiler build clean, zero warnings beyond the pre-existing
+RWX-segment linker warning; one proof screendump with the exact
+expected banner text; one final regression screendump matching every
+prior sub-project's steady-state desktop exactly; `git diff` showed a
+clean revert of the temporary test code with no leftover debug code.
+Working tree left with the permanent audio syscall plumbing present
+but unused by anything in the tree; scratch `.ppm`/monitor-socket
+files cleaned up; no leftover QEMU processes.
+
+Files: `kernel/arch/syscall.h` (five new syscall cases and three args
+structs, permanent); `kernel/arch/syscall_gfx.c` (one-line fallthrough
+change, permanent); `kernel/arch/syscall_audio.c` (new file,
+permanent); `kernel/Makefile` (new build rule, permanent);
+`kernel/kernel.c` (the temporary proof payload, added and fully
+removed within this slice); `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this
+entry and closeout).
