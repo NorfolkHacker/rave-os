@@ -67,6 +67,19 @@ struct sys_list_dir_args {
     unsigned int *out_count;
 };
 
+/* Removes the entry at path, wrapping fs_delete() (kernel/fs/fs.h) with
+ * zero changes to its behavior -- including failing on a non-empty
+ * directory. fs_delete() takes a single pointer argument, so unlike the
+ * multi-argument syscalls above, arg IS the path pointer directly, not
+ * the address of a wrapping struct. */
+#define SYS_DELETE 5
+
+/* Creates a new directory at path, wrapping fs_create_dir()
+ * (kernel/fs/fs.h) with zero changes to its behavior -- including its
+ * write-once semantics. Same single-pointer-argument shape as
+ * SYS_DELETE: arg IS the path pointer directly. */
+#define SYS_CREATE_DIR 6
+
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
  * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h or
  * any other kernel module. This is what kernel/tests/test_syscall.c
@@ -77,9 +90,9 @@ int syscall_dispatch_core(int num, int arg);
  * name ring3.asm's syscall_entry already calls; giving the real
  * dispatcher this name in a different file means ring3.asm needs no
  * changes at all. Handles the fs.h-backed syscalls (SYS_READ_FILE,
- * SYS_CREATE_FILE, SYS_LIST_DIR), falls through to
- * syscall_dispatch_core() for everything else. eax carries the
- * syscall number (num) and ebx the argument (arg) across int 0x80;
+ * SYS_CREATE_FILE, SYS_LIST_DIR, SYS_DELETE, SYS_CREATE_DIR), falls
+ * through to syscall_dispatch_core() for everything else. eax carries
+ * the syscall number (num) and ebx the argument (arg) across int 0x80;
  * the return value here is what eax holds when it returns (see
  * ring3.asm's syscall_entry). */
 int syscall_dispatch(int num, int arg);

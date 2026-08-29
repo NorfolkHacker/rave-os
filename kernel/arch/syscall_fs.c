@@ -14,5 +14,11 @@ int syscall_dispatch(int num, int arg) {
         const struct sys_list_dir_args *a = (const struct sys_list_dir_args *)arg;
         return fs_list_dir(a->path, a->out, a->max_entries, a->out_count);
     }
+    if (num == SYS_DELETE) {
+        return fs_delete((const char *)arg);
+    }
+    if (num == SYS_CREATE_DIR) {
+        return fs_create_dir((const char *)arg);
+    }
     return syscall_dispatch_core(num, arg);
 }
