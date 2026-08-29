@@ -80,6 +80,60 @@ struct sys_list_dir_args {
  * SYS_DELETE: arg IS the path pointer directly. */
 #define SYS_CREATE_DIR 6
 
+/* Renames the entry at path to new_name in place, wrapping fs_rename()
+ * (kernel/fs/fs.h) with zero changes to its behavior. arg is the
+ * address of a struct sys_rename_args built by the caller. */
+#define SYS_RENAME 7
+
+/* Mirrors fs_rename()'s signature exactly (kernel/fs/fs.h). */
+struct sys_rename_args {
+    const char *path;
+    const char *new_name;
+};
+
+/* Relocates the file at path into dest_dir, wrapping fs_move()
+ * (kernel/fs/fs.h) with zero changes to its behavior -- a metadata-only
+ * move, no file data is read or rewritten. arg is the address of a
+ * struct sys_move_args built by the caller. */
+#define SYS_MOVE 8
+
+/* Mirrors fs_move()'s signature exactly (kernel/fs/fs.h). */
+struct sys_move_args {
+    const char *path;
+    const char *dest_dir;
+};
+
+/* Duplicates the file at path into dest_dir, wrapping fs_copy_file()
+ * (kernel/fs/fs.h) with zero changes to its behavior -- unlike
+ * SYS_MOVE, this allocates and writes a real second copy of the data.
+ * arg is the address of a struct sys_copy_file_args built by the
+ * caller. */
+#define SYS_COPY_FILE 9
+
+/* Same two fields as struct sys_move_args, in the same order -- kept
+ * as its own type rather than reused because it mirrors
+ * fs_copy_file()'s own signature, a separate function from fs_move(),
+ * not because the layout needs to differ. */
+struct sys_copy_file_args {
+    const char *path;
+    const char *dest_dir;
+};
+
+/* Appends data to an existing file (or creates it, same as
+ * SYS_CREATE_FILE, if it doesn't exist yet), wrapping fs_append_file()
+ * (kernel/fs/fs.h) with zero changes to its behavior. arg is the
+ * address of a struct sys_append_file_args built by the caller. */
+#define SYS_APPEND_FILE 10
+
+/* Mirrors fs_append_file()'s signature exactly (kernel/fs/fs.h); same
+ * field shape as struct sys_create_file_args since both functions
+ * share that signature. */
+struct sys_append_file_args {
+    const char *path;
+    const void *data;
+    unsigned int size;
+};
+
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
  * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h or
  * any other kernel module. This is what kernel/tests/test_syscall.c
@@ -90,11 +144,13 @@ int syscall_dispatch_core(int num, int arg);
  * name ring3.asm's syscall_entry already calls; giving the real
  * dispatcher this name in a different file means ring3.asm needs no
  * changes at all. Handles the fs.h-backed syscalls (SYS_READ_FILE,
- * SYS_CREATE_FILE, SYS_LIST_DIR, SYS_DELETE, SYS_CREATE_DIR), falls
- * through to syscall_dispatch_core() for everything else. eax carries
- * the syscall number (num) and ebx the argument (arg) across int 0x80;
- * the return value here is what eax holds when it returns (see
- * ring3.asm's syscall_entry). */
+ * SYS_CREATE_FILE, SYS_LIST_DIR, SYS_DELETE, SYS_CREATE_DIR,
+ * SYS_RENAME, SYS_MOVE, SYS_COPY_FILE, SYS_APPEND_FILE) -- covering
+ * fs.h's entire operation surface as of this slice -- falls through to
+ * syscall_dispatch_core() for everything else. eax carries the syscall
+ * number (num) and ebx the argument (arg) across int 0x80; the return
+ * value here is what eax holds when it returns (see ring3.asm's
+ * syscall_entry). */
 int syscall_dispatch(int num, int arg);
 
 #endif

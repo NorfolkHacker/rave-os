@@ -20,5 +20,21 @@ int syscall_dispatch(int num, int arg) {
     if (num == SYS_CREATE_DIR) {
         return fs_create_dir((const char *)arg);
     }
+    if (num == SYS_RENAME) {
+        const struct sys_rename_args *a = (const struct sys_rename_args *)arg;
+        return fs_rename(a->path, a->new_name);
+    }
+    if (num == SYS_MOVE) {
+        const struct sys_move_args *a = (const struct sys_move_args *)arg;
+        return fs_move(a->path, a->dest_dir);
+    }
+    if (num == SYS_COPY_FILE) {
+        const struct sys_copy_file_args *a = (const struct sys_copy_file_args *)arg;
+        return fs_copy_file(a->path, a->dest_dir);
+    }
+    if (num == SYS_APPEND_FILE) {
+        const struct sys_append_file_args *a = (const struct sys_append_file_args *)arg;
+        return fs_append_file(a->path, a->data, a->size);
+    }
     return syscall_dispatch_core(num, arg);
 }
