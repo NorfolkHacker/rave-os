@@ -68,12 +68,13 @@
  * not one of the five built-in apps above. Unlike them, its content is
  * whatever the ring-3 program itself drew via the gfx syscalls -- there
  * is no draw_*_group() for it; draw_window_by_index() (further down)
- * has an explicit no-op case for it rather than falling through to a
- * bare `else`, which used to silently mis-draw it as PAINT (harmless
- * only because nothing called draw_window_by_index() again once a
- * ring-3 program was running, before SYS_WAIT_EVENT's kmain_frame()
- * re-entry made that reachable -- see
- * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md). */
+ * redraws only its chrome (border/titlebar/title, the part the kernel
+ * actually owns) rather than falling through to a bare `else`, which
+ * used to silently mis-draw it as PAINT. A real, documented limitation
+ * remains: the *content* area still reverts to plain backdrop if this
+ * window gets swept into a redraw the ring-3 program didn't cause and
+ * has no way to react to -- see
+ * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
 #define WIN_KIND_RING3 5
 
 /* A single pending ring-3 window event -- not a queue, deliberately:
@@ -1736,18 +1737,29 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
         draw_editor_group(&windows[idx], wc->ed, wc->save_btn);
     } else if (idx == WIN_KIND_PAINT) {
         draw_paint_group(&windows[idx], wc->pt, wc->paint_name_input, wc->paint_save_btn, wc->paint_load_btn);
+    } else if (idx == WIN_KIND_RING3) {
+        /* Redraws only the chrome (border/titlebar/title), the one
+         * part of this window the kernel actually owns -- there is no
+         * draw_*_group() for its content, which is whatever the
+         * ring-3 program itself painted via the gfx syscalls, and the
+         * kernel has no record of what that was. Found necessary, not
+         * theoretical: SYS_WAIT_EVENT's own first proof showed the
+         * whole window (chrome included) vanishing the moment any
+         * unrelated full-desktop redraw (here, the boot splash hiding)
+         * swept this window's rect into redraw[] via the existing
+         * damage-tracking expansion, same as it would for any other
+         * window -- a bare no-op left nothing to restore the chrome
+         * afterward. This does not solve the deeper problem: the
+         * *content* area still reverts to plain backdrop when swept
+         * into a redraw the ring-3 program didn't cause and has no way
+         * to react to (SYS_WAIT_EVENT only reports clicks and closes,
+         * not "your content might need repainting") -- a real,
+         * documented limitation of a single window with kernel-opaque
+         * content living inside a shared damage-tracked redraw, not
+         * something this slice's scope solves. See
+         * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
+        window_draw(&windows[idx]);
     }
-    /* WIN_KIND_RING3 deliberately has no case here: its content is
-     * drawn entirely by the ring-3 program itself via the gfx
-     * syscalls, not by any draw_*_group() this kernel owns. Before
-     * SYS_WAIT_EVENT, this function was never called again for it at
-     * all (kmain() never resumed its loop after enter_ring3()), so
-     * falling through to a bare `else` that mis-drew it as PAINT was
-     * a real but unreachable bug -- SYS_WAIT_EVENT's kmain_frame()
-     * re-entry makes it reachable (e.g. dragging the ring-3 window
-     * marks it touched[]), so the explicit no-op here replaces that
-     * bare `else` rather than leaving the gap the original comment on
-     * WIN_KIND_RING3's own #define already flagged. */
 }
 
 /* Full redraw of everything into the backbuffer: background, every open

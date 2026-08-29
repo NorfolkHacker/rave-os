@@ -32,7 +32,28 @@ struct tss_entry {
 static struct gdt_entry gdt[GDT_ENTRY_COUNT];
 static struct gdt_ptr gdtp;
 static struct tss_entry tss;
-static uint8_t syscall_kernel_stack[4096] __attribute__((aligned(16)));
+/* 4096 was enough for every syscall before SYS_WAIT_EVENT: each one
+ * was a thin wrapper with a shallow call chain and small locals.
+ * SYS_WAIT_EVENT re-drives kmain_frame() (kernel/kernel.c) from
+ * inside this same stack -- confirmed via objdump that kmain_frame()
+ * alone reserves 0x77c (1916) bytes for its own locals, on top of the
+ * int 0x80 interrupt frame and the syscall_entry -> syscall_dispatch
+ * -> _gfx -> _audio -> _window -> ring3_wait_event call chain's own
+ * overhead, plus update_and_present() (0x13c/316 bytes) whenever a
+ * real redraw happens inside that call -- close enough to 4096 to be
+ * worth real headroom, even though the actual bug this investigation
+ * was chasing (SYS_WAIT_EVENT's first proof showing a clean-looking
+ * desktop with no window ever drawn) turned out to be a different,
+ * separately-fixed problem (draw_window_by_index()'s WIN_KIND_RING3
+ * case, see its own comment) -- this stack was never proven to
+ * overflow, only shown to be closer to its limit than any syscall
+ * before it came near. Sized generously here rather than trimmed
+ * tightly, matching this codebase's own established preference (e.g.
+ * PROGRAM_LOAD_MAX_SIZE) for headroom over a minimal-fit calculation
+ * that would need re-deriving every time a syscall's own call depth
+ * changes. See
+ * docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
+static uint8_t syscall_kernel_stack[16384] __attribute__((aligned(16)));
 
 void gdt_init(void) {
     gdt_pack_entry(&gdt[0], 0, 0, 0, 0);                    /* null */
