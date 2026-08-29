@@ -4191,3 +4191,128 @@ temporary proof payload, added and fully removed within this slice);
 `docs/superpowers/specs/2026-08-29-ring3-window-design.md` (design
 spec, written and committed before implementation); `docs/BUILD_LOG.md`,
 `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-29 -- A loadable, fixed-address flat-binary program format (userspace sub-project D)
+
+Ships the last remaining piece of `docs/IDEAS.md`'s "Real userspace"
+initiative (see
+`docs/superpowers/specs/2026-08-29-loadable-program-design.md`): the
+first ring-3 code that exists as a genuinely separate, on-disk file --
+every prior proof across sub-projects (B) and (C)'s nine syscalls
+(fs/gfx/audio/window) was a C function compiled directly into
+`kernel.c` itself, entered via `enter_ring3()`.
+
+**Rejected up front: a real relocatable format.** RaveOS has no
+malloc/heap anywhere -- the scheduler uses fixed static stacks, there
+is exactly one static page directory -- every existing subsystem
+favors simple, static, fully-understood mechanisms over general
+infrastructure. A relocatable loader (header + relocation table, closer
+to a minimal ELF/a.out) would need a free-address allocator at minimum,
+new infrastructure nothing else in this codebase needs. Investigated
+and discussed with the user, who chose a single fixed load address
+instead, chosen once and left there -- matching that same philosophy.
+True relocation stays a named, deferred idea for whenever this codebase
+needs more than one loaded program alive at a time.
+
+**The fixed address itself was checked empirically, not guessed.**
+`nm` on a real build showed the kernel's own `.bss` ending at
+`0x440b0` -- comfortably below the `0x00200000` (2MB) chosen for
+`PROGRAM_LOAD_ADDR`, and still inside the one 4MB page directory entry
+(`PDE 0`) `paging_set_user()` has ever made user-accessible.
+
+**A new `programs/` directory holds the actual "format".** This is the
+real deliverable: `programs/hello/hello.c` (a tiny freestanding
+program, no libc, `void _start(void)` not `int main(void)` since there
+is no C runtime to call it) calls `SYS_TEST` then falls into the same
+deliberate `#GP` proof tail every prior sub-project has used;
+`programs/hello/hello.ld` fixes its origin to `PROGRAM_LOAD_ADDR`;
+`programs/hello/Makefile` uses the same cross-toolchain and base flags
+`kernel/Makefile` already does, producing a raw flat binary via
+`objcopy -O binary` -- the identical technique `kernel.bin` itself
+already uses. `hello.c` deliberately does not include
+`kernel/arch/syscall.h` (kernel-internal); `SYS_TEST`/`SYS_EXIT` are
+re-declared locally as the same fixed numbers, matching how every
+kernel-side proof payload's own inline asm already does this.
+
+**The loader needed no new syscalls at all.** `program_load_and_run(path)`
+(`kernel/kernel.c`) reads `path`'s real content via the already-shipped
+`fs_read_file()` straight into `PROGRAM_LOAD_ADDR`, then `enter_ring3()`s
+into it -- not a syscall, since loading a program is inherently
+something ring 0 does, not something a ring-3 program calls on itself.
+Silently does nothing if the file doesn't exist or is too big, matching
+`fs_read_file()`'s own existing "too big for the caller's buffer"
+contract rather than inventing new error handling. `hello.bin`'s
+compiled bytes (a real build's actual output, not hand-written) are
+embedded as a `static const unsigned char[]` and seeded onto `fs.img`
+as `/BIN/USERPROG.BIN` via `fs_create_file()` in `kmain()`, the same
+write-once shape `/BIN/HELLO` already uses -- this repo has no
+host-side disk-image tooling, so this is how the demo binary gets onto
+disk at all; `program_load_and_run()` itself is generic and reads
+whatever real file ends up at that path.
+
+**The one-time proof, cleanup, and closeout.** A temporary one-line
+call, `program_load_and_run("/BIN/USERPROG.BIN");`, was added to
+`kmain()` immediately after the `/BIN/USERPROG.BIN` seeding -- the
+same ordering lesson every prior ring-3 proof has already learned.
+
+Verification, headless QEMU (`-accel kvm -display none`, monitor
+socket + `socat`, same technique as every prior entry above),
+`disk.img`/`fs.img` built at `VBE_MODE=0x112` (640x480), run from this
+slice's own worktree (`boot/`, not the sibling checkout's; `fs.img`
+did not yet exist there and was built fresh via `make fs.img` before
+the first boot):
+
+- **Baseline screendump** (loader + seeding wired in, no proof call
+  yet): the ordinary desktop, confirming that plumbing alone is a true
+  no-op.
+- **Proof screendump:** the red panic banner appeared, reading
+  exactly:
+  ```
+  PANIC: GENERAL PROTECTION FAULT
+  CODE=0x00000000
+  ```
+  identical to every prior syscall sub-project's proof -- reaching it
+  here requires `hello.bin`'s own compiled code, loaded fresh from a
+  real on-disk file at `0x00200000`, to have actually executed and
+  gotten `SYS_TEST`'s correct fixed return value, not just that the
+  loader's own plumbing ran. On the first attempt.
+- **Final regression, after removing the temporary code:** `git diff
+  kernel/kernel.c` came back empty, confirming the removal was exact.
+  A final rebuild and headless boot showed the ordinary desktop again,
+  matching every prior sub-project's steady-state regression
+  screendump.
+
+Verified: `programs/hello/` builds standalone with the cross-toolchain
+(`i686-elf-nm`/`objdump` confirmed `_start` really links at
+`0x00200000` before the final `objcopy` strips it to raw bytes); host
+test suite (`kernel/tests/test_syscall.c`) unchanged and passing;
+cross-compiler kernel build clean, zero warnings beyond the
+pre-existing RWX-segment linker warning; one baseline screendump, one
+proof screendump, one final regression screendump, all as described
+above; `git diff` showed a clean revert of the temporary test code
+with no leftover debug code. Working tree left with the permanent
+`program_load_and_run()`/`/BIN/USERPROG.BIN` seeding plumbing present
+but uncalled by anything in the tree; scratch `.ppm`/monitor-socket
+files cleaned up; no leftover QEMU processes.
+
+With this slice, all four sub-projects of `docs/IDEAS.md`'s "Real
+userspace" entry -- (A) paging, (B) ring 3 + a minimal syscall ABI, (C)
+a real syscall surface (fs/gfx/audio/window), and (D) a loadable
+program format -- have shipped in some form. What remains, all
+explicitly deferred rather than built: `fs.h`'s three still-unwrapped
+pure path helpers (not real gaps -- see the fs-surface entries above);
+`synth.h`'s much larger remaining API (duty cycle, ring modulation,
+filter routing, arpeggio, global filter settings); real per-window
+interactivity (dragging, event delivery -- needs extracting `kmain()`'s
+per-frame loop into a callable function first); and true program
+relocation/multiple loaded programs. None of these are small --
+several are comparable in scope to what's already shipped.
+
+Files: `programs/hello/hello.c`, `programs/hello/hello.ld`,
+`programs/hello/Makefile` (new files, permanent);
+`kernel/kernel.c` (`PROGRAM_LOAD_ADDR`/`PROGRAM_LOAD_MAX_SIZE`,
+`program_load_and_run()`, the `/BIN/USERPROG.BIN` seeding, all
+permanent; the temporary proof call, added and fully removed within
+this slice); `docs/superpowers/specs/2026-08-29-loadable-program-design.md`
+(design spec, written and committed before implementation);
+`docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).

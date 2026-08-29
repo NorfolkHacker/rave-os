@@ -488,6 +488,43 @@ not a queue.
   separate future work -- (D) may even be a prerequisite, since window
   ownership arguably wants a real "program" concept first.
 
+  (D), a loadable program format, has now also shipped, 2026-08-29 (see
+  `docs/superpowers/specs/2026-08-29-loadable-program-design.md` and
+  `docs/BUILD_LOG.md`'s entry for the same date) -- the last remaining
+  piece of this entire "Real userspace" entry. A real *relocatable*
+  format was investigated and rejected: RaveOS has no malloc/heap
+  anywhere, so a relocatable loader's free-address allocator would be
+  new infrastructure nothing else in this codebase needs. Instead, one
+  fixed load address, `0x00200000`, checked empirically (`nm` on a real
+  build showed the kernel's own `.bss` ending at `0x440b0`, comfortably
+  clear) rather than guessed. `programs/hello/` is the actual format
+  deliverable -- a tiny freestanding program, its own linker script
+  fixing its origin, and a `Makefile` using the same cross-toolchain
+  `kernel/` already does to produce a raw flat binary via `objcopy -O
+  binary`, identical to how `kernel.bin` itself is built. Needed no new
+  syscalls at all: `program_load_and_run()` (`kernel/kernel.c`) reads a
+  path's real content via the already-shipped `fs_read_file()` straight
+  into the fixed address and `enter_ring3()`s into it -- loading a
+  program is something ring 0 does, not something a ring-3 program
+  calls on itself. The compiled demo binary is seeded onto `fs.img` as
+  `/BIN/USERPROG.BIN` the same write-once way `/BIN/HELLO` already is
+  (this repo has no host-side disk-image tooling). Proven end to end in
+  headless QEMU: reaching the usual `#GP` proof banner required
+  `hello.bin`'s own compiled code, loaded fresh from a real on-disk
+  file, to have actually executed and gotten `SYS_TEST`'s correct
+  return value -- not just that the loader's plumbing ran. On the first
+  attempt.
+
+  **With this slice, all four sub-projects of this entry -- (A) paging,
+  (B) ring 3 + a minimal syscall ABI, (C) a real syscall surface
+  (fs/gfx/audio/window), and (D) a loadable program format -- have
+  shipped in some form.** What remains, all explicitly deferred rather
+  than built, several comparable in scope to what's already here: real
+  per-window interactivity (dragging, event delivery -- needs
+  extracting `kmain()`'s per-frame loop into a callable function
+  first); `synth.h`'s much larger remaining API; true program
+  relocation and running more than one loaded program at a time.
+
 - **Real floating-point arithmetic.** Raised 2026-08-26. Every
   `kernel/Makefile` build uses `-mgeneral-regs-only`, which forbids the
   FPU/SSE registers entirely -- there's no float/double anywhere in the
