@@ -243,24 +243,65 @@ struct sys_synth_set_adsr_args {
 #define SYS_SYNTH_GATE_ON 20
 #define SYS_SYNTH_GATE_OFF 21
 
+/* Opens the sole ring-3-owned window slot (WIN_KIND_RING3,
+ * kernel/kernel.c), wrapping the new window_ring3_open() with zero
+ * ambiguity about what it does -- there's no pre-existing subsystem
+ * header for window management the way fs.h/graphics.h/synth.h exist
+ * for the other syscall families, since kernel.c's window system has
+ * no reusable API of its own yet, only inline logic. Draws and
+ * presents the window's chrome synchronously, inside the syscall
+ * itself -- kmain()'s own frame loop never runs again once
+ * enter_ring3() has been called, so nothing else ever would. No
+ * dragging, no click/keyboard event delivery to the ring-3 program --
+ * see docs/superpowers/specs/2026-08-29-ring3-window-design.md. arg is
+ * the address of a struct sys_window_open_args built by the caller. */
+#define SYS_WINDOW_OPEN 22
+
+/* Mirrors window_ring3_open()'s signature exactly (kernel/kernel.c). */
+struct sys_window_open_args {
+    int x;
+    int y;
+    int w;
+    int h;
+    const char *title;
+};
+
+/* Marks the ring-3 window closed, wrapping the new window_ring3_close().
+ * Does NOT erase its already-presented pixels -- see
+ * window_ring3_close()'s own comment (kernel/kernel.c) and the design
+ * spec's "Known limitation" section. Ignores arg. */
+#define SYS_WINDOW_CLOSE 23
+
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
  * renamed. SYS_TEST/SYS_EXIT/default only, zero dependency on fs.h,
- * graphics.h, synth.h, or any other kernel module. This is what
- * kernel/tests/test_syscall.c links and calls directly. */
+ * graphics.h, synth.h, kernel.c's window state, or any other kernel
+ * module. This is what kernel/tests/test_syscall.c links and calls
+ * directly. */
 int syscall_dispatch_core(int num, int arg);
+
+/* Real, window-backed -- defined in syscall_window.c, not syscall.c,
+ * syscall_fs.c, syscall_gfx.c, or syscall_audio.c. Handles
+ * SYS_WINDOW_OPEN/SYS_WINDOW_CLOSE, falls through to
+ * syscall_dispatch_core() for everything else. Not the function
+ * ring3.asm calls directly -- syscall_dispatch_audio() (below) calls
+ * this one as its own fallback, extending the dispatcher chain to five
+ * links. Only the sole ring-3 window slot, no dragging/event delivery
+ * -- see docs/superpowers/specs/2026-08-29-ring3-window-design.md. */
+int syscall_dispatch_window(int num, int arg);
 
 /* Real, audio-backed -- defined in syscall_audio.c, not syscall.c,
  * syscall_fs.c, or syscall_gfx.c. Handles the synth.h-backed syscalls
  * (SYS_SYNTH_SET_WAVEFORM, SYS_SYNTH_SET_ONA, SYS_SYNTH_SET_ADSR,
  * SYS_SYNTH_GATE_ON, SYS_SYNTH_GATE_OFF), falls through to
- * syscall_dispatch_core() for everything else. Not the function
- * ring3.asm calls directly -- syscall_dispatch_gfx() (below) calls
- * this one as its own fallback, extending the same dispatcher chain
- * gfx already added onto fs. Only a starter set of synth.h's much
- * larger API (duty cycle, ring modulation, filter routing, arpeggio,
- * and the global filter cutoff/resonance/mode are all still
- * unwrapped) -- enough to make a voice play a note from ring 3, not
- * full coverage, the same YAGNI scoping the gfx slice used. */
+ * syscall_dispatch_window() (not syscall_dispatch_core() directly
+ * anymore) for everything else. Not the function ring3.asm calls
+ * directly -- syscall_dispatch_gfx() (below) calls this one as its own
+ * fallback, extending the same dispatcher chain gfx already added onto
+ * fs. Only a starter set of synth.h's much larger API (duty cycle,
+ * ring modulation, filter routing, arpeggio, and the global filter
+ * cutoff/resonance/mode are all still unwrapped) -- enough to make a
+ * voice play a note from ring 3, not full coverage, the same YAGNI
+ * scoping the gfx slice used. */
 int syscall_dispatch_audio(int num, int arg);
 
 /* Real, gfx-backed -- defined in syscall_gfx.c, not syscall.c or

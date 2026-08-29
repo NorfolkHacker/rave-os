@@ -57,12 +57,23 @@
  * widget framework -- there are exactly three content kinds, not an
  * open-ended number, so a small switch is simpler than a real
  * polymorphic app system. */
-#define MAX_WINDOWS 5
+#define MAX_WINDOWS 6
 #define WIN_KIND_FORTH 0
 #define WIN_KIND_FILES 1
 #define WIN_KIND_SHELL 2
 #define WIN_KIND_EDITOR 3
 #define WIN_KIND_PAINT 4
+/* Owned by a ring-3 program (see window_ring3_open()/_close() below),
+ * not one of the five built-in apps above. Unlike them, its content is
+ * whatever the ring-3 program itself drew via the gfx syscalls -- there
+ * is no draw_*_group() for it, and draw_window_by_index()'s dispatch
+ * (further down) is never extended to handle it: that function's own
+ * bare `else` fallback would incorrectly treat it as PAINT, but nothing
+ * calls draw_window_by_index() again once a ring-3 program is running
+ * (kmain() never resumes its own loop after enter_ring3()), so this is
+ * a real but currently-unreachable gap, not a live bug. Whoever adds
+ * real ring-3 event delivery later needs to fix that dispatch too. */
+#define WIN_KIND_RING3 5
 
 /* Shared text colors for the androidacid.com-derived palette (see
  * backdrop_color() below for how the flat-RGB values were derived from
@@ -1935,6 +1946,40 @@ static void update_and_present(int w, int h, const struct window *windows, int f
     gfx_present_rect(dx0, dy0, dx1 - dx0, dy1 - dy0);
 }
 
+/* Opens the sole ring-3-owned window slot (WIN_KIND_RING3), called
+ * synchronously from SYS_WINDOW_OPEN's syscall handler
+ * (kernel/arch/syscall_window.c, which declares this extern directly
+ * at its own call site -- windows[]/z_order[]/raise_window() are all
+ * private to this file, the same reason fs.h/graphics.h/synth.h don't
+ * exist for window management). Draws and presents the window's
+ * chrome right here rather than waiting for kmain()'s own frame loop,
+ * because that loop never runs again once enter_ring3() has been
+ * called -- the same limitation every ring-3 proof so far has already
+ * relied on. */
+void window_ring3_open(int x, int y, int w, int h, const char *title) {
+    windows[WIN_KIND_RING3].x = x;
+    windows[WIN_KIND_RING3].y = y;
+    windows[WIN_KIND_RING3].w = w;
+    windows[WIN_KIND_RING3].h = h;
+    windows[WIN_KIND_RING3].title = title;
+    windows[WIN_KIND_RING3].state = WINDOW_OPEN;
+    raise_window(z_order, WIN_KIND_RING3);
+    window_draw(&windows[WIN_KIND_RING3]);
+    gfx_present_rect(x - 2, y - WINDOW_TITLEBAR_HEIGHT - 2,
+                      w + 4, h + WINDOW_TITLEBAR_HEIGHT + 4);
+}
+
+/* Marks the ring-3 window closed. Does NOT erase its already-presented
+ * pixels -- nothing redraws the screen after this point either, same
+ * reasoning as window_ring3_open() above, so there is nothing that
+ * would paint over them. A real close needs the same per-frame-loop
+ * machinery real event delivery would (see
+ * docs/superpowers/specs/2026-08-29-ring3-window-design.md's Out of
+ * Scope) -- this is a known, documented limitation, not a bug. */
+void window_ring3_close(void) {
+    windows[WIN_KIND_RING3].state = WINDOW_CLOSED;
+}
+
 void kmain(void) {
     int w, h;
     int prev_left_held = 0;
@@ -2160,6 +2205,17 @@ void kmain(void) {
     windows[WIN_KIND_PAINT].minimize_hovered = 0;
     windows[WIN_KIND_PAINT].close_hovered = 0;
 
+    /* Closed at boot like every window above -- WINDOW_OPEN is #define'd
+     * 0, so leaving this unset would default the slot to open and show
+     * a garbage window (zeroed x/y/w/h/title) on every ordinary boot.
+     * Geometry/title are left at their zeroed defaults until a ring-3
+     * program calls SYS_WINDOW_OPEN; there's no launcher for this one,
+     * matching PAINT/EDITOR's own "no start-menu entry" precedent. */
+    windows[WIN_KIND_RING3].state = WINDOW_CLOSED;
+    windows[WIN_KIND_RING3].minimize_hovered = 0;
+    windows[WIN_KIND_RING3].close_hovered = 0;
+    windows[WIN_KIND_RING3].accent_color = 0xFFFFFF; /* white -- distinct from every built-in app's own accent */
+
     /* z_order still needs a valid starting permutation even though every
      * window opens closed now -- topmost_window_at()/raise_window() both
      * assume it's always a full ordering of every window index, not just
@@ -2170,6 +2226,7 @@ void kmain(void) {
     z_order[2] = WIN_KIND_SHELL;
     z_order[3] = WIN_KIND_EDITOR;
     z_order[4] = WIN_KIND_PAINT;
+    z_order[5] = WIN_KIND_RING3;
 
     /* Narrowed to leave room for the start menu's button at the same y,
      * so the two together read as one continuous bottom bar. */

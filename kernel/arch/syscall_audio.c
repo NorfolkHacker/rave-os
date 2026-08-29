@@ -25,5 +25,5 @@ int syscall_dispatch_audio(int num, int arg) {
         synth_gate_off(arg);
         return 0;
     }
-    return syscall_dispatch_core(num, arg);
+    return syscall_dispatch_window(num, arg);
 }
