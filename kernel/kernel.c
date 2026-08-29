@@ -1980,6 +1980,40 @@ void window_ring3_close(void) {
     windows[WIN_KIND_RING3].state = WINDOW_CLOSED;
 }
 
+/* Fixed, not relocatable -- see docs/superpowers/specs/2026-08-29-
+ * loadable-program-design.md's Purpose for why. Must match the origin
+ * programs/hello/hello.ld (and any future program's own linker script)
+ * links against. Comfortably clear of the kernel's own .bss (ends at
+ * 0x440b0 in a real build, confirmed via nm) and still inside the one
+ * 4MB page directory entry (PDE 0) paging_set_user() has ever made
+ * user-accessible. */
+#define PROGRAM_LOAD_ADDR 0x00200000
+/* Everything free below PDE 0's 4MB end -- generous on purpose, not a
+ * real limit on how big a loaded program could be; fs_read_file()'s
+ * own "too big for the caller's buffer" check is what actually
+ * protects an oversized file from overrunning this. */
+#define PROGRAM_LOAD_MAX_SIZE (0x00400000 - PROGRAM_LOAD_ADDR)
+
+/* Reads path's real, on-disk content via fs_read_file() straight into
+ * the fixed ring-3 load address, then enters it. Not a syscall -- ring
+ * 0 calls this directly (this slice's own temporary proof payload is
+ * the only current caller); there is no notion yet of a ring-3
+ * program loading another one. Silently does nothing if path doesn't
+ * exist or is too big, matching fs_read_file()'s own existing
+ * contract -- no new error handling invented here. */
+void program_load_and_run(const char *path) {
+    unsigned int out_size;
+    static uint8_t program_stack[4096] __attribute__((aligned(16)));
+    extern void enter_ring3(void (*entry)(void), void *user_stack_top);
+
+    if (fs_read_file(path, (void *)PROGRAM_LOAD_ADDR, PROGRAM_LOAD_MAX_SIZE, &out_size) != 0) {
+        return;
+    }
+    paging_set_user(0, 1);
+    enter_ring3((void (*)(void))PROGRAM_LOAD_ADDR,
+                program_stack + sizeof(program_stack));
+}
+
 void kmain(void) {
     int w, h;
     int prev_left_held = 0;
@@ -2419,6 +2453,26 @@ void kmain(void) {
     {
         static const char demo_script[] = ": GREET 42 . CR ;\nGREET\n";
         fs_create_file("/BIN/HELLO", demo_script, (unsigned int)(sizeof(demo_script) - 1));
+    }
+
+    /* Seeds the first genuinely standalone ring-3 program onto disk --
+     * a compiled, freestanding flat binary (programs/hello/, built with
+     * the same cross-toolchain, fixed at PROGRAM_LOAD_ADDR by its own
+     * linker script; see docs/superpowers/specs/2026-08-29-loadable-
+     * program-design.md), not a C function linked into this kernel
+     * binary the way every prior ring-3 proof has been. There is no
+     * host-side disk-image tooling in this repo, so embedding the real
+     * build output's bytes and seeding them via fs_create_file() (same
+     * write-once shape as /BIN/HELLO above) is how it gets onto
+     * fs.img at all -- program_load_and_run() itself is generic and
+     * reads whatever real file ends up at this path. */
+    {
+        static const unsigned char hello_bin[] = {
+            0x55, 0x89, 0xe5, 0x53, 0x83, 0xec, 0x10, 0xb8, 0x00, 0x00, 0x00, 0x00, 0xbb, 0x00, 0x00, 0x00,
+            0x00, 0xcd, 0x80, 0x89, 0x45, 0xf8, 0x81, 0x7d, 0xf8, 0x34, 0x12, 0x00, 0x00, 0x75, 0x0e, 0xb8,
+            0x01, 0x00, 0x00, 0x00, 0xbb, 0x00, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xfa, 0x90, 0x90, 0xeb, 0xfd
+        };
+        fs_create_file("/BIN/USERPROG.BIN", hello_bin, (unsigned int)sizeof(hello_bin));
     }
 
     /* Read once here (and again only when a navigation click actually
