@@ -2014,501 +2014,58 @@ void program_load_and_run(const char *path) {
                 program_stack + sizeof(program_stack));
 }
 
-void kmain(void) {
-    int w, h;
-    int prev_left_held = 0;
-    int prev_right_held = 0;
-    int dragging_window = -1;
-    int taskbar_hovered = -1;
-    int menu_hovered_item = -1;
-    int fx_enabled = 0;
-    uint32_t cursor_color = CURSOR_IDLE_COLOR;
-    struct console_output co;
-    struct console_input ci;
-    struct console_history hist;
-    struct forth_vm vm;
-    struct console_output shell_co;
-    struct console_input shell_ci;
-    struct console_history shell_hist;
-    struct shell sh;
-    struct taskbar bar;
-    struct startmenu menu;
-    struct boot_splash splash;
-    struct button delete_btn;
-    struct button new_dir_btn;
-    struct button cut_btn;
-    struct button copy_btn;
-    struct button paste_btn;
-    struct files_clipboard clipboard;
-    struct console_input name_input;
-    struct editor ed;
-    struct button save_btn;
-    char editor_path[FS_PATH_MAX];
-    char editor_title[FS_PATH_MAX + 16];
-    const char *ata_status;
-    const char *fs_status;
-    char cwd[FILES_PATH_MAX];
-    struct fs_dirent file_entries[FS_LIST_MAX];
-    unsigned int file_entry_count;
-    uint32_t files_selected_mask = 0;
+/* Per-frame desktop state, file scope so kmain_frame() (below) can
+ * reach it -- promoted here, unchanged otherwise, from what used to
+ * be kmain()'s own locals, matching how windows[]/z_order[]/mx/my
+ * (above) already had to be file scope for the same reason. See
+ * docs/superpowers/specs/2026-08-29-kmain-frame-extraction-design.md.
+ * Every initializer here is unchanged from kmain()'s own original
+ * declaration -- a static initializer runs once at program start,
+ * identical to kmain()'s own one-time run, since kmain() itself is
+ * never re-entered. */
+static int w, h;
+static int prev_left_held = 0;
+static int prev_right_held = 0;
+static int dragging_window = -1;
+static int taskbar_hovered = -1;
+static int menu_hovered_item = -1;
+static int fx_enabled = 0;
+static uint32_t cursor_color = CURSOR_IDLE_COLOR;
+static struct console_output co;
+static struct console_input ci;
+static struct console_history hist;
+static struct forth_vm vm;
+static struct console_output shell_co;
+static struct console_input shell_ci;
+static struct console_history shell_hist;
+static struct shell sh;
+static struct taskbar bar;
+static struct startmenu menu;
+static struct boot_splash splash;
+static struct button delete_btn;
+static struct button new_dir_btn;
+static struct button cut_btn;
+static struct button copy_btn;
+static struct button paste_btn;
+static struct files_clipboard clipboard;
+static struct console_input name_input;
+static struct editor ed;
+static struct button save_btn;
+static char editor_path[FS_PATH_MAX];
+static char editor_title[FS_PATH_MAX + 16];
+static char cwd[FILES_PATH_MAX];
+static struct fs_dirent file_entries[FS_LIST_MAX];
+static unsigned int file_entry_count;
+static uint32_t files_selected_mask = 0;
 
-    gfx_init();
-    w = gfx_width();
-    h = gfx_height();
-    boot_splash_init(&splash);
-
-    /* Sized/positioned clear of the taskbar strip below it. */
-    windows[WIN_KIND_FORTH].x = 170 * w / BASELINE_W;
-    windows[WIN_KIND_FORTH].y = 230 * h / BASELINE_H;
-    windows[WIN_KIND_FORTH].w = 400;
-    windows[WIN_KIND_FORTH].h = 180;
-    windows[WIN_KIND_FORTH].title = "RAVE-OS FORTH";
-    /* Each window kind gets its own accent_color (border + hovered-control
-     * highlight, see window_draw()) so they read as visually distinct at a
-     * glance -- reusing PAINT's own already-vetted palette colors rather
-     * than inventing new ones. FORTH keeps the original androidacid.com
-     * accent green since it's the OS's own first/primary window. */
-    windows[WIN_KIND_FORTH].accent_color = 0x00FF66;
-    /* Closed at boot, same as every other window now -- see the z_order
-     * comment below for why. Opened via the start menu's FORTH item --
-     * there's no desktop-icon fallback anymore (removed on request, since
-     * every window now has a direct menu launcher, making the icon
-     * column pure redundancy). */
-    windows[WIN_KIND_FORTH].state = WINDOW_CLOSED;
-    windows[WIN_KIND_FORTH].minimize_hovered = 0;
-    windows[WIN_KIND_FORTH].close_hovered = 0;
-
-    /* Sized for ~8 visible listing lines (see draw_files_group()) --
-     * plenty for the current tree. Overlapping the other windows' corners
-     * is fine, same as every other window here. */
-    windows[WIN_KIND_FILES].x = 420 * w / BASELINE_W;
-    windows[WIN_KIND_FILES].y = 120 * h / BASELINE_H;
-    windows[WIN_KIND_FILES].w = 180;
-    /* 26px taller than Stage D's height -- room for the new name-entry
-     * field above the button footer, without shrinking the list's
-     * existing ~8-row capacity (draw_files_group()'s row clip stops
-     * before the footer, not at the old fixed window bottom, so growing
-     * the footer here doesn't eat into the list either). */
-    /* 28px taller than before -- room for a second button row
-     * (CUT/COPY/PASTE) below NEW DIR/DELETE without shrinking the list's
-     * existing visible-row capacity, since name_input/new_dir_btn/
-     * delete_btn's own y positions (computed from this h below) end up
-     * completely unchanged; only the new row appends below them. */
-    windows[WIN_KIND_FILES].h = 278;
-    windows[WIN_KIND_FILES].title = "RAVE-OS FILES";
-    windows[WIN_KIND_FILES].accent_color = 0x2979FF; /* blue, same as PAINT's own palette index 6 */
-    /* Closed at boot -- opened via the start menu's FILES item (a plain
-     * launch) or CONFIG/GAMES (which also navigate cwd -- see
-     * open_files_at()). */
-    windows[WIN_KIND_FILES].state = WINDOW_CLOSED;
-    windows[WIN_KIND_FILES].minimize_hovered = 0;
-    windows[WIN_KIND_FILES].close_hovered = 0;
-
-    /* Footer button row: NEW DIR (left half) and DELETE (right half),
-     * side by side -- narrower than Stage D's full-width DELETE, but
-     * still comfortably wide enough for either label at this font size.
-     * NEW DIR creates name_input's typed name as a directory in cwd;
-     * Enter inside name_input (below) creates it as a file instead, so
-     * a file needs no button of its own. DELETE unchanged from Stage D
-     * (right-click a row to select it, then this button removes it). */
-    new_dir_btn.x = windows[WIN_KIND_FILES].x + 8;
-    /* -58, not -30 -- the old "-30 from the bottom" position now belongs
-     * to the new CUT/COPY/PASTE row below this one (Step 2). Since h grew
-     * by exactly 28 to compensate, this still evaluates to the exact same
-     * absolute y it always has, so name_input and the list area above it
-     * are visually unchanged. */
-    new_dir_btn.y = windows[WIN_KIND_FILES].y + windows[WIN_KIND_FILES].h - 58;
-    new_dir_btn.w = (windows[WIN_KIND_FILES].w - 16 - 8) / 2;
-    new_dir_btn.h = 22;
-    new_dir_btn.label = "NEW DIR";
-    new_dir_btn.hovered = 0;
-    new_dir_btn.pressed = 0;
-
-    delete_btn.x = new_dir_btn.x + new_dir_btn.w + 8;
-    delete_btn.y = new_dir_btn.y;
-    delete_btn.w = new_dir_btn.w;
-    delete_btn.h = 22;
-    delete_btn.label = "DELETE";
-    delete_btn.hovered = 0;
-    delete_btn.pressed = 0;
-
-    /* Second footer row, CUT/COPY/PASTE, directly below NEW DIR/DELETE --
-     * three buttons instead of two, so each gets a third of the same
-     * margin/gap formula NEW DIR/DELETE already use rather than a new
-     * layout scheme. paste_btn absorbs the integer-division remainder so
-     * the row still fills edge-to-edge symmetrically (margins match on
-     * both sides). */
-    cut_btn.x = new_dir_btn.x;
-    cut_btn.y = windows[WIN_KIND_FILES].y + windows[WIN_KIND_FILES].h - 30;
-    cut_btn.w = (windows[WIN_KIND_FILES].w - 16 - 16) / 3;
-    cut_btn.h = 22;
-    cut_btn.label = "CUT";
-    cut_btn.hovered = 0;
-    cut_btn.pressed = 0;
-
-    copy_btn.x = cut_btn.x + cut_btn.w + 8;
-    copy_btn.y = cut_btn.y;
-    copy_btn.w = cut_btn.w;
-    copy_btn.h = 22;
-    copy_btn.label = "COPY";
-    copy_btn.hovered = 0;
-    copy_btn.pressed = 0;
-
-    paste_btn.x = copy_btn.x + copy_btn.w + 8;
-    paste_btn.y = cut_btn.y;
-    paste_btn.w = (windows[WIN_KIND_FILES].x + windows[WIN_KIND_FILES].w - 8) - paste_btn.x;
-    paste_btn.h = 22;
-    paste_btn.label = "PASTE";
-    paste_btn.hovered = 0;
-    paste_btn.pressed = 0;
-
-    clipboard.count = 0;
-    clipboard.is_cut = 0;
-    clipboard.source_dir[0] = 0;
-
-    /* Name-entry field for both NEW DIR and Enter-creates-file, sitting
-     * just above the button row. */
-    name_input.x = windows[WIN_KIND_FILES].x + 8;
-    name_input.y = new_dir_btn.y - 20 - 6;
-    name_input.w = windows[WIN_KIND_FILES].w - 16;
-    name_input.h = 20;
-    name_input.text[0] = 0;
-    name_input.len = 0;
-    name_input.cursor = 0;
-    name_input.focused = 0;
-
-    /* Same console-pane shape FORTH uses, at a different position so the
-     * two don't land exactly on top of each other at boot (overlap
-     * itself is harmless and expected -- every window here is
-     * draggable). */
-    windows[WIN_KIND_SHELL].x = 200 * w / BASELINE_W;
-    windows[WIN_KIND_SHELL].y = 260 * h / BASELINE_H;
-    windows[WIN_KIND_SHELL].w = 400;
-    windows[WIN_KIND_SHELL].h = 180;
-    windows[WIN_KIND_SHELL].title = "RAVE-OS SHELL";
-    windows[WIN_KIND_SHELL].accent_color = 0xFF9500; /* orange, same as PAINT's own palette index 3 */
-    /* Closed at boot, same as FORTH/FILES -- opened via the start
-     * menu's SHELL item. */
-    windows[WIN_KIND_SHELL].state = WINDOW_CLOSED;
-    windows[WIN_KIND_SHELL].minimize_hovered = 0;
-    windows[WIN_KIND_SHELL].close_hovered = 0;
-
-    /* Same 400x180 footprint FORTH/SHELL's own console panes already
-     * use -- this is a single-region editable pane, not a
-     * windowed-list-plus-footer shape like FILES. */
-    windows[WIN_KIND_EDITOR].x = 240 * w / BASELINE_W;
-    windows[WIN_KIND_EDITOR].y = 240 * h / BASELINE_H;
-    windows[WIN_KIND_EDITOR].w = 400;
-    windows[WIN_KIND_EDITOR].h = 180;
-    windows[WIN_KIND_EDITOR].title = "RAVE-OS EDIT";
-    windows[WIN_KIND_EDITOR].accent_color = 0xB026FF; /* purple, same as PAINT's own palette index 7 */
-    /* Closed at boot, same as every other window -- opened only via
-     * SHELL's EDIT command (see handle_edit_command(), added in the
-     * next task), no start-menu launcher (EDIT is deliberately
-     * SHELL-only for v1). This literal string is never actually shown
-     * on screen: the window stays closed until EDIT has already
-     * overwritten .title with the real, dynamically-formatted one. */
-    windows[WIN_KIND_EDITOR].state = WINDOW_CLOSED;
-    windows[WIN_KIND_EDITOR].minimize_hovered = 0;
-    windows[WIN_KIND_EDITOR].close_hovered = 0;
-
-    /* 272x356 -- room for the 256x256 canvas (16px/cell x 16 cells),
-     * the current-color swatch (the popup overlays the canvas itself
-     * rather than needing its own row), a filename field, and a SAVE
-     * button,
-     * all with 8px margins (the filename field adds 26px over the
-     * original 330 -- its own 20px height plus a 6px gap above SAVE,
-     * same spacing FILES' name_input/NEW DIR pair already uses). y=80
-     * keeps this comfortably inside clamp_window_to_screen()'s own
-     * max_y for a window this tall (98, on a 640x480/24px-taskbar
-     * screen) -- the same invariant a prior stage's default window
-     * position violated and had to fix; checked deliberately this
-     * time, including after this height change. This invariant still
-     * holds for any h >= 480 after the position became screen-size-scaled,
-     * not just the 640x480 baseline this was originally checked against. */
-    windows[WIN_KIND_PAINT].x = 340 * w / BASELINE_W;
-    windows[WIN_KIND_PAINT].y = 80 * h / BASELINE_H;
-    windows[WIN_KIND_PAINT].w = 272;
-    windows[WIN_KIND_PAINT].h = 356;
-    windows[WIN_KIND_PAINT].title = "RAVE-OS PAINT";
-    windows[WIN_KIND_PAINT].accent_color = 0xFF3B30; /* red, same as PAINT's own palette index 2 */
-    /* Closed at boot, opened only via the PAINT Forth word (Task 3) --
-     * no start-menu launcher, matching EDIT's own SHELL-only
-     * precedent. */
-    windows[WIN_KIND_PAINT].state = WINDOW_CLOSED;
-    windows[WIN_KIND_PAINT].minimize_hovered = 0;
-    windows[WIN_KIND_PAINT].close_hovered = 0;
-
-    /* Closed at boot like every window above -- WINDOW_OPEN is #define'd
-     * 0, so leaving this unset would default the slot to open and show
-     * a garbage window (zeroed x/y/w/h/title) on every ordinary boot.
-     * Geometry/title are left at their zeroed defaults until a ring-3
-     * program calls SYS_WINDOW_OPEN; there's no launcher for this one,
-     * matching PAINT/EDITOR's own "no start-menu entry" precedent. */
-    windows[WIN_KIND_RING3].state = WINDOW_CLOSED;
-    windows[WIN_KIND_RING3].minimize_hovered = 0;
-    windows[WIN_KIND_RING3].close_hovered = 0;
-    windows[WIN_KIND_RING3].accent_color = 0xFFFFFF; /* white -- distinct from every built-in app's own accent */
-
-    /* z_order still needs a valid starting permutation even though every
-     * window opens closed now -- topmost_window_at()/raise_window() both
-     * assume it's always a full ordering of every window index, not just
-     * the currently-open ones. Order is otherwise meaningless until the
-     * user opens something. */
-    z_order[0] = WIN_KIND_FORTH;
-    z_order[1] = WIN_KIND_FILES;
-    z_order[2] = WIN_KIND_SHELL;
-    z_order[3] = WIN_KIND_EDITOR;
-    z_order[4] = WIN_KIND_PAINT;
-    z_order[5] = WIN_KIND_RING3;
-
-    /* Narrowed to leave room for the start menu's button at the same y,
-     * so the two together read as one continuous bottom bar. */
-    bar.x = STARTMENU_BUTTON_WIDTH;
-    bar.y = h - TASKBAR_HEIGHT;
-    bar.w = w - STARTMENU_BUTTON_WIDTH;
-    bar.h = TASKBAR_HEIGHT;
-
-    menu.x = 0;
-    menu.y = h - TASKBAR_HEIGHT;
-    menu.w = STARTMENU_BUTTON_WIDTH;
-    menu.h = TASKBAR_HEIGHT;
-    menu.open = 0;
-
-    /* Console input line sits along the bottom of the Forth window's
-     * body; the output pane fills the rest above it, with a small gap
-     * separating the two. */
-    {
-        int body_x = windows[WIN_KIND_FORTH].x;
-        int body_y = windows[WIN_KIND_FORTH].y;
-        int body_w = windows[WIN_KIND_FORTH].w;
-        int body_h = windows[WIN_KIND_FORTH].h;
-        int input_h = 20;
-        int input_margin = 10;
-
-        ci.h = input_h;
-        ci.y = body_y + body_h - input_margin - input_h;
-        ci.x = body_x + 8;
-        ci.w = body_w - 16;
-        ci.text[0] = 0;
-        ci.len = 0;
-        ci.cursor = 0;
-        ci.focused = 0;
-        console_history_init(&hist);
-
-        console_output_init(&co, body_x + 4, body_y + 6, body_w - 8, ci.y - (body_y + 6) - 8);
-        console_output_append_line(&co, "RAVE-OS FORTH");
-    }
-    forth_init(&vm);
-
-    /* Console input line sits along the bottom of the Shell window's
-     * body, same layout FORTH's own block above already uses. */
-    {
-        int body_x = windows[WIN_KIND_SHELL].x;
-        int body_y = windows[WIN_KIND_SHELL].y;
-        int body_w = windows[WIN_KIND_SHELL].w;
-        int body_h = windows[WIN_KIND_SHELL].h;
-        int input_h = 20;
-        int input_margin = 10;
-
-        shell_ci.h = input_h;
-        shell_ci.y = body_y + body_h - input_margin - input_h;
-        shell_ci.x = body_x + 8;
-        shell_ci.w = body_w - 16;
-        shell_ci.text[0] = 0;
-        shell_ci.len = 0;
-        shell_ci.cursor = 0;
-        shell_ci.focused = 0;
-        console_history_init(&shell_hist);
-
-        console_output_init(&shell_co, body_x + 4, body_y + 6, body_w - 8, shell_ci.y - (body_y + 6) - 8);
-        console_output_append_line(&shell_co, "RAVE-OS SHELL");
-    }
-    shell_init(&sh);
-
-    /* Full-window editable text region with a SAVE button along the
-     * bottom -- same margin/gap formula FILES' own footer row already
-     * uses (button.y = win.y + win.h - 30, 8px side margins), not
-     * FORTH/SHELL's single-input-line-at-the-bottom shape, since
-     * there's no separate command line here: the whole body is the
-     * buffer. */
-    {
-        int body_x = windows[WIN_KIND_EDITOR].x;
-        int body_y = windows[WIN_KIND_EDITOR].y;
-        int body_w = windows[WIN_KIND_EDITOR].w;
-        int body_h = windows[WIN_KIND_EDITOR].h;
-
-        save_btn.x = body_x + 8;
-        save_btn.y = body_y + body_h - 30;
-        save_btn.w = body_w - 16;
-        save_btn.h = 22;
-        save_btn.label = "SAVE";
-        save_btn.hovered = 0;
-        save_btn.pressed = 0;
-
-        editor_init(&ed, body_x + 4, body_y + 6, body_w - 8, save_btn.y - 6 - (body_y + 6));
-    }
-    editor_path[0] = 0;
-    editor_title[0] = 0;
-
-    /* Filename field, same widget FILES' own name_input already uses,
-     * stacked directly above SAVE the same way FILES stacks name_input
-     * above NEW DIR. Pre-filled with "SPRITE" so leaving it untouched
-     * reproduces the exact fixed /HOME/SPRITE path this used to always
-     * save to -- existing muscle memory (or a headless test) still
-     * gets the same result without typing anything. */
-    paint_name_input.x = windows[WIN_KIND_PAINT].x + 8;
-    paint_name_input.y = windows[WIN_KIND_PAINT].y + 8 + PAINT_GRID_SIZE * PAINT_CELL_PX + 4 + 24 + 8;
-    paint_name_input.w = PAINT_GRID_SIZE * PAINT_CELL_PX;
-    paint_name_input.h = 20;
-    console_input_set_text(&paint_name_input, "SPRITE");
-    paint_name_input.focused = 0;
-
-    /* SAVE/LOAD side by side, same "(total - 16 - 8) / 2, second.x =
-     * first.x + first.w + 8" split FILES' own NEW DIR/DELETE pair
-     * already uses -- no window resize needed, since this row already
-     * had exactly one button's worth of width to spare. */
-    paint_save_btn.x = windows[WIN_KIND_PAINT].x + 8;
-    paint_save_btn.y = paint_name_input.y + paint_name_input.h + 6;
-    paint_save_btn.w = (PAINT_GRID_SIZE * PAINT_CELL_PX - 8) / 2;
-    paint_save_btn.h = 22;
-    paint_save_btn.label = "SAVE";
-    paint_save_btn.hovered = 0;
-    paint_save_btn.pressed = 0;
-
-    paint_load_btn.x = paint_save_btn.x + paint_save_btn.w + 8;
-    paint_load_btn.y = paint_save_btn.y;
-    paint_load_btn.w = paint_save_btn.w;
-    paint_load_btn.h = 22;
-    paint_load_btn.label = "LOAD";
-    paint_load_btn.hovered = 0;
-    paint_load_btn.pressed = 0;
-
-    paint.current_color = 1; /* white -- a visible default against the near-black eraser color at index 0 */
-    paint.opened_once = 0;
-
-    mx = w / 2;
-    my = h - 100; /* clear of the taskbar/start menu strip below it */
-
-    /* IDT/PIC set up first (masked, no sti yet), then the mouse's polling
-     * handshake runs with IRQ12 still masked so it can't race the new
-     * interrupt handler for the same bytes, then interrupts are actually
-     * enabled once both are ready. */
-    gdt_init();
-    serial_init();
-    interrupts_init();
-
-    /* extern, not declared in a header -- matches this codebase's
-     * existing convention for asm-defined symbols only ever referenced
-     * at their one call site (see kernel/sched/scheduler.c's own
-     * extern void context_switch(...) declaration). */
-    {
-        extern void syscall_entry(void);
-        idt_set_gate(0x80, (void *)syscall_entry, IDT_TYPE_TRAP_GATE_32_DPL3);
-    }
-
-    paging_enable();
-    mouse_init();
-    interrupts_enable();
-
-    /* No IRQ14 involved (see ata.h) -- this is a synchronous polling call,
-     * safe to run any time after interrupts_enable(), not tied to the
-     * masked-PIC ordering the line above exists for. */
-    ata_status = ata_selftest();
-    sb16_init();
-    synth_init();
-    fs_status = fs_selftest();
-    fs_bootstrap_dirs();
-
-    /* Real logging, not just a name on disk: one line per boot, appended
-     * (not overwritten) to /VAR/LOG -- ata_status/fs_status already read
-     * "ATA: ..."/"FS: ..." (ata.h/fs.h), so no extra labeling needed.
-     * fs_append_file() creates the file on the first boot and genuinely
-     * grows it on every boot after, proving the append path works
-     * across real reboots, not just within one running session. */
-    {
-        char log_line[64];
-        int pos = 0;
-        str_append(log_line, &pos, (int)sizeof(log_line), ata_status);
-        str_append(log_line, &pos, (int)sizeof(log_line), " ");
-        str_append(log_line, &pos, (int)sizeof(log_line), fs_status);
-        str_append(log_line, &pos, (int)sizeof(log_line), "\n");
-        fs_append_file("/VAR/LOG", log_line, (unsigned int)pos);
-    }
-
-    /* fx_enabled was set to a hardcoded 0 above, before the filesystem
-     * was even mounted -- overwritten here now that /ETC/CONFIG can
-     * actually be read. Nothing reads fx_enabled before draw_scene()
-     * further down, so this reassignment is safe. */
-    fx_enabled = fx_default_from_config();
-
-    seed_bin_paint_script();
-    seed_bin_synth_demos();
-
-    /* Seeds one real script into /BIN so RUN has something to actually
-     * run -- there's no in-OS text editor yet, so this is the only way
-     * a script with real content ends up on disk, same reasoning as
-     * fs_selftest()'s own NESTED.TXT. fs_create_file() is write-once,
-     * so this is a silent no-op every boot after the first. */
-    {
-        static const char demo_script[] = ": GREET 42 . CR ;\nGREET\n";
-        fs_create_file("/BIN/HELLO", demo_script, (unsigned int)(sizeof(demo_script) - 1));
-    }
-
-    /* Seeds the first genuinely standalone ring-3 program onto disk --
-     * a compiled, freestanding flat binary (programs/hello/, built with
-     * the same cross-toolchain, fixed at PROGRAM_LOAD_ADDR by its own
-     * linker script; see docs/superpowers/specs/2026-08-29-loadable-
-     * program-design.md), not a C function linked into this kernel
-     * binary the way every prior ring-3 proof has been. There is no
-     * host-side disk-image tooling in this repo, so embedding the real
-     * build output's bytes and seeding them via fs_create_file() (same
-     * write-once shape as /BIN/HELLO above) is how it gets onto
-     * fs.img at all -- program_load_and_run() itself is generic and
-     * reads whatever real file ends up at this path. */
-    {
-        static const unsigned char hello_bin[] = {
-            0x55, 0x89, 0xe5, 0x53, 0x83, 0xec, 0x10, 0xb8, 0x00, 0x00, 0x00, 0x00, 0xbb, 0x00, 0x00, 0x00,
-            0x00, 0xcd, 0x80, 0x89, 0x45, 0xf8, 0x81, 0x7d, 0xf8, 0x34, 0x12, 0x00, 0x00, 0x75, 0x0e, 0xb8,
-            0x01, 0x00, 0x00, 0x00, 0xbb, 0x00, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xfa, 0x90, 0x90, 0xeb, 0xfd
-        };
-        fs_create_file("/BIN/USERPROG.BIN", hello_bin, (unsigned int)sizeof(hello_bin));
-    }
-
-    /* Read once here (and again only when a navigation click actually
-     * changes cwd, below), not on every redraw -- this kernel's event loop
-     * redraws on essentially any mouse movement, and re-reading the
-     * directory sector that often would mean a PIO polling round-trip on
-     * nearly every frame once this window exists. */
-    /* /HOME, not root -- makes /HOME real in the way a Unix home
-     * directory is, not just a name that exists (fs_bootstrap_dirs()
-     * already guarantees it exists by this point in boot). ".."
-     * navigation still reaches real root normally; this only changes
-     * where the window starts. */
-    {
-        int pos = 0;
-        str_append(cwd, &pos, (int)sizeof(cwd), "/HOME");
-    }
-    if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
-        file_entry_count = 0;
-    }
-
-    {
-        struct window_content wc = {
-            .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
-            .file_entries = file_entries, .file_entry_count = file_entry_count,
-            .files_selected_mask = files_selected_mask, .name_input = &name_input,
-            .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
-            .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
-            .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
-            .paint_load_btn = &paint_load_btn,
-        };
-        draw_scene(w, h, windows, fx_enabled, &wc, z_order, &bar, taskbar_hovered, &menu, menu_hovered_item, mx, my,
-                  cursor_color, &splash);
-    }
-    gfx_present();
-
-    for (;;) {
+/* The per-frame body kmain()'s own for(;;) loop used to contain
+ * directly, unchanged -- see the file-scope declarations directly
+ * above for why this had to move to be callable on its own,
+ * docs/superpowers/specs/2026-08-29-kmain-frame-extraction-design.md
+ * for the full reasoning. Purely mechanical: this function's body
+ * is byte-for-byte identical to what was previously inline in
+ * kmain()'s loop. */
+static void kmain_frame(void) {
         int had_event = 0;
         int splash_just_hid;
         int dx, dy, buttons;
@@ -3425,5 +2982,469 @@ void kmain(void) {
         } else {
             __asm__ volatile("hlt");
         }
+}
+
+void kmain(void) {
+    const char *ata_status;
+    const char *fs_status;
+
+    gfx_init();
+    w = gfx_width();
+    h = gfx_height();
+    boot_splash_init(&splash);
+
+    /* Sized/positioned clear of the taskbar strip below it. */
+    windows[WIN_KIND_FORTH].x = 170 * w / BASELINE_W;
+    windows[WIN_KIND_FORTH].y = 230 * h / BASELINE_H;
+    windows[WIN_KIND_FORTH].w = 400;
+    windows[WIN_KIND_FORTH].h = 180;
+    windows[WIN_KIND_FORTH].title = "RAVE-OS FORTH";
+    /* Each window kind gets its own accent_color (border + hovered-control
+     * highlight, see window_draw()) so they read as visually distinct at a
+     * glance -- reusing PAINT's own already-vetted palette colors rather
+     * than inventing new ones. FORTH keeps the original androidacid.com
+     * accent green since it's the OS's own first/primary window. */
+    windows[WIN_KIND_FORTH].accent_color = 0x00FF66;
+    /* Closed at boot, same as every other window now -- see the z_order
+     * comment below for why. Opened via the start menu's FORTH item --
+     * there's no desktop-icon fallback anymore (removed on request, since
+     * every window now has a direct menu launcher, making the icon
+     * column pure redundancy). */
+    windows[WIN_KIND_FORTH].state = WINDOW_CLOSED;
+    windows[WIN_KIND_FORTH].minimize_hovered = 0;
+    windows[WIN_KIND_FORTH].close_hovered = 0;
+
+    /* Sized for ~8 visible listing lines (see draw_files_group()) --
+     * plenty for the current tree. Overlapping the other windows' corners
+     * is fine, same as every other window here. */
+    windows[WIN_KIND_FILES].x = 420 * w / BASELINE_W;
+    windows[WIN_KIND_FILES].y = 120 * h / BASELINE_H;
+    windows[WIN_KIND_FILES].w = 180;
+    /* 26px taller than Stage D's height -- room for the new name-entry
+     * field above the button footer, without shrinking the list's
+     * existing ~8-row capacity (draw_files_group()'s row clip stops
+     * before the footer, not at the old fixed window bottom, so growing
+     * the footer here doesn't eat into the list either). */
+    /* 28px taller than before -- room for a second button row
+     * (CUT/COPY/PASTE) below NEW DIR/DELETE without shrinking the list's
+     * existing visible-row capacity, since name_input/new_dir_btn/
+     * delete_btn's own y positions (computed from this h below) end up
+     * completely unchanged; only the new row appends below them. */
+    windows[WIN_KIND_FILES].h = 278;
+    windows[WIN_KIND_FILES].title = "RAVE-OS FILES";
+    windows[WIN_KIND_FILES].accent_color = 0x2979FF; /* blue, same as PAINT's own palette index 6 */
+    /* Closed at boot -- opened via the start menu's FILES item (a plain
+     * launch) or CONFIG/GAMES (which also navigate cwd -- see
+     * open_files_at()). */
+    windows[WIN_KIND_FILES].state = WINDOW_CLOSED;
+    windows[WIN_KIND_FILES].minimize_hovered = 0;
+    windows[WIN_KIND_FILES].close_hovered = 0;
+
+    /* Footer button row: NEW DIR (left half) and DELETE (right half),
+     * side by side -- narrower than Stage D's full-width DELETE, but
+     * still comfortably wide enough for either label at this font size.
+     * NEW DIR creates name_input's typed name as a directory in cwd;
+     * Enter inside name_input (below) creates it as a file instead, so
+     * a file needs no button of its own. DELETE unchanged from Stage D
+     * (right-click a row to select it, then this button removes it). */
+    new_dir_btn.x = windows[WIN_KIND_FILES].x + 8;
+    /* -58, not -30 -- the old "-30 from the bottom" position now belongs
+     * to the new CUT/COPY/PASTE row below this one (Step 2). Since h grew
+     * by exactly 28 to compensate, this still evaluates to the exact same
+     * absolute y it always has, so name_input and the list area above it
+     * are visually unchanged. */
+    new_dir_btn.y = windows[WIN_KIND_FILES].y + windows[WIN_KIND_FILES].h - 58;
+    new_dir_btn.w = (windows[WIN_KIND_FILES].w - 16 - 8) / 2;
+    new_dir_btn.h = 22;
+    new_dir_btn.label = "NEW DIR";
+    new_dir_btn.hovered = 0;
+    new_dir_btn.pressed = 0;
+
+    delete_btn.x = new_dir_btn.x + new_dir_btn.w + 8;
+    delete_btn.y = new_dir_btn.y;
+    delete_btn.w = new_dir_btn.w;
+    delete_btn.h = 22;
+    delete_btn.label = "DELETE";
+    delete_btn.hovered = 0;
+    delete_btn.pressed = 0;
+
+    /* Second footer row, CUT/COPY/PASTE, directly below NEW DIR/DELETE --
+     * three buttons instead of two, so each gets a third of the same
+     * margin/gap formula NEW DIR/DELETE already use rather than a new
+     * layout scheme. paste_btn absorbs the integer-division remainder so
+     * the row still fills edge-to-edge symmetrically (margins match on
+     * both sides). */
+    cut_btn.x = new_dir_btn.x;
+    cut_btn.y = windows[WIN_KIND_FILES].y + windows[WIN_KIND_FILES].h - 30;
+    cut_btn.w = (windows[WIN_KIND_FILES].w - 16 - 16) / 3;
+    cut_btn.h = 22;
+    cut_btn.label = "CUT";
+    cut_btn.hovered = 0;
+    cut_btn.pressed = 0;
+
+    copy_btn.x = cut_btn.x + cut_btn.w + 8;
+    copy_btn.y = cut_btn.y;
+    copy_btn.w = cut_btn.w;
+    copy_btn.h = 22;
+    copy_btn.label = "COPY";
+    copy_btn.hovered = 0;
+    copy_btn.pressed = 0;
+
+    paste_btn.x = copy_btn.x + copy_btn.w + 8;
+    paste_btn.y = cut_btn.y;
+    paste_btn.w = (windows[WIN_KIND_FILES].x + windows[WIN_KIND_FILES].w - 8) - paste_btn.x;
+    paste_btn.h = 22;
+    paste_btn.label = "PASTE";
+    paste_btn.hovered = 0;
+    paste_btn.pressed = 0;
+
+    clipboard.count = 0;
+    clipboard.is_cut = 0;
+    clipboard.source_dir[0] = 0;
+
+    /* Name-entry field for both NEW DIR and Enter-creates-file, sitting
+     * just above the button row. */
+    name_input.x = windows[WIN_KIND_FILES].x + 8;
+    name_input.y = new_dir_btn.y - 20 - 6;
+    name_input.w = windows[WIN_KIND_FILES].w - 16;
+    name_input.h = 20;
+    name_input.text[0] = 0;
+    name_input.len = 0;
+    name_input.cursor = 0;
+    name_input.focused = 0;
+
+    /* Same console-pane shape FORTH uses, at a different position so the
+     * two don't land exactly on top of each other at boot (overlap
+     * itself is harmless and expected -- every window here is
+     * draggable). */
+    windows[WIN_KIND_SHELL].x = 200 * w / BASELINE_W;
+    windows[WIN_KIND_SHELL].y = 260 * h / BASELINE_H;
+    windows[WIN_KIND_SHELL].w = 400;
+    windows[WIN_KIND_SHELL].h = 180;
+    windows[WIN_KIND_SHELL].title = "RAVE-OS SHELL";
+    windows[WIN_KIND_SHELL].accent_color = 0xFF9500; /* orange, same as PAINT's own palette index 3 */
+    /* Closed at boot, same as FORTH/FILES -- opened via the start
+     * menu's SHELL item. */
+    windows[WIN_KIND_SHELL].state = WINDOW_CLOSED;
+    windows[WIN_KIND_SHELL].minimize_hovered = 0;
+    windows[WIN_KIND_SHELL].close_hovered = 0;
+
+    /* Same 400x180 footprint FORTH/SHELL's own console panes already
+     * use -- this is a single-region editable pane, not a
+     * windowed-list-plus-footer shape like FILES. */
+    windows[WIN_KIND_EDITOR].x = 240 * w / BASELINE_W;
+    windows[WIN_KIND_EDITOR].y = 240 * h / BASELINE_H;
+    windows[WIN_KIND_EDITOR].w = 400;
+    windows[WIN_KIND_EDITOR].h = 180;
+    windows[WIN_KIND_EDITOR].title = "RAVE-OS EDIT";
+    windows[WIN_KIND_EDITOR].accent_color = 0xB026FF; /* purple, same as PAINT's own palette index 7 */
+    /* Closed at boot, same as every other window -- opened only via
+     * SHELL's EDIT command (see handle_edit_command(), added in the
+     * next task), no start-menu launcher (EDIT is deliberately
+     * SHELL-only for v1). This literal string is never actually shown
+     * on screen: the window stays closed until EDIT has already
+     * overwritten .title with the real, dynamically-formatted one. */
+    windows[WIN_KIND_EDITOR].state = WINDOW_CLOSED;
+    windows[WIN_KIND_EDITOR].minimize_hovered = 0;
+    windows[WIN_KIND_EDITOR].close_hovered = 0;
+
+    /* 272x356 -- room for the 256x256 canvas (16px/cell x 16 cells),
+     * the current-color swatch (the popup overlays the canvas itself
+     * rather than needing its own row), a filename field, and a SAVE
+     * button,
+     * all with 8px margins (the filename field adds 26px over the
+     * original 330 -- its own 20px height plus a 6px gap above SAVE,
+     * same spacing FILES' name_input/NEW DIR pair already uses). y=80
+     * keeps this comfortably inside clamp_window_to_screen()'s own
+     * max_y for a window this tall (98, on a 640x480/24px-taskbar
+     * screen) -- the same invariant a prior stage's default window
+     * position violated and had to fix; checked deliberately this
+     * time, including after this height change. This invariant still
+     * holds for any h >= 480 after the position became screen-size-scaled,
+     * not just the 640x480 baseline this was originally checked against. */
+    windows[WIN_KIND_PAINT].x = 340 * w / BASELINE_W;
+    windows[WIN_KIND_PAINT].y = 80 * h / BASELINE_H;
+    windows[WIN_KIND_PAINT].w = 272;
+    windows[WIN_KIND_PAINT].h = 356;
+    windows[WIN_KIND_PAINT].title = "RAVE-OS PAINT";
+    windows[WIN_KIND_PAINT].accent_color = 0xFF3B30; /* red, same as PAINT's own palette index 2 */
+    /* Closed at boot, opened only via the PAINT Forth word (Task 3) --
+     * no start-menu launcher, matching EDIT's own SHELL-only
+     * precedent. */
+    windows[WIN_KIND_PAINT].state = WINDOW_CLOSED;
+    windows[WIN_KIND_PAINT].minimize_hovered = 0;
+    windows[WIN_KIND_PAINT].close_hovered = 0;
+
+    /* Closed at boot like every window above -- WINDOW_OPEN is #define'd
+     * 0, so leaving this unset would default the slot to open and show
+     * a garbage window (zeroed x/y/w/h/title) on every ordinary boot.
+     * Geometry/title are left at their zeroed defaults until a ring-3
+     * program calls SYS_WINDOW_OPEN; there's no launcher for this one,
+     * matching PAINT/EDITOR's own "no start-menu entry" precedent. */
+    windows[WIN_KIND_RING3].state = WINDOW_CLOSED;
+    windows[WIN_KIND_RING3].minimize_hovered = 0;
+    windows[WIN_KIND_RING3].close_hovered = 0;
+    windows[WIN_KIND_RING3].accent_color = 0xFFFFFF; /* white -- distinct from every built-in app's own accent */
+
+    /* z_order still needs a valid starting permutation even though every
+     * window opens closed now -- topmost_window_at()/raise_window() both
+     * assume it's always a full ordering of every window index, not just
+     * the currently-open ones. Order is otherwise meaningless until the
+     * user opens something. */
+    z_order[0] = WIN_KIND_FORTH;
+    z_order[1] = WIN_KIND_FILES;
+    z_order[2] = WIN_KIND_SHELL;
+    z_order[3] = WIN_KIND_EDITOR;
+    z_order[4] = WIN_KIND_PAINT;
+    z_order[5] = WIN_KIND_RING3;
+
+    /* Narrowed to leave room for the start menu's button at the same y,
+     * so the two together read as one continuous bottom bar. */
+    bar.x = STARTMENU_BUTTON_WIDTH;
+    bar.y = h - TASKBAR_HEIGHT;
+    bar.w = w - STARTMENU_BUTTON_WIDTH;
+    bar.h = TASKBAR_HEIGHT;
+
+    menu.x = 0;
+    menu.y = h - TASKBAR_HEIGHT;
+    menu.w = STARTMENU_BUTTON_WIDTH;
+    menu.h = TASKBAR_HEIGHT;
+    menu.open = 0;
+
+    /* Console input line sits along the bottom of the Forth window's
+     * body; the output pane fills the rest above it, with a small gap
+     * separating the two. */
+    {
+        int body_x = windows[WIN_KIND_FORTH].x;
+        int body_y = windows[WIN_KIND_FORTH].y;
+        int body_w = windows[WIN_KIND_FORTH].w;
+        int body_h = windows[WIN_KIND_FORTH].h;
+        int input_h = 20;
+        int input_margin = 10;
+
+        ci.h = input_h;
+        ci.y = body_y + body_h - input_margin - input_h;
+        ci.x = body_x + 8;
+        ci.w = body_w - 16;
+        ci.text[0] = 0;
+        ci.len = 0;
+        ci.cursor = 0;
+        ci.focused = 0;
+        console_history_init(&hist);
+
+        console_output_init(&co, body_x + 4, body_y + 6, body_w - 8, ci.y - (body_y + 6) - 8);
+        console_output_append_line(&co, "RAVE-OS FORTH");
+    }
+    forth_init(&vm);
+
+    /* Console input line sits along the bottom of the Shell window's
+     * body, same layout FORTH's own block above already uses. */
+    {
+        int body_x = windows[WIN_KIND_SHELL].x;
+        int body_y = windows[WIN_KIND_SHELL].y;
+        int body_w = windows[WIN_KIND_SHELL].w;
+        int body_h = windows[WIN_KIND_SHELL].h;
+        int input_h = 20;
+        int input_margin = 10;
+
+        shell_ci.h = input_h;
+        shell_ci.y = body_y + body_h - input_margin - input_h;
+        shell_ci.x = body_x + 8;
+        shell_ci.w = body_w - 16;
+        shell_ci.text[0] = 0;
+        shell_ci.len = 0;
+        shell_ci.cursor = 0;
+        shell_ci.focused = 0;
+        console_history_init(&shell_hist);
+
+        console_output_init(&shell_co, body_x + 4, body_y + 6, body_w - 8, shell_ci.y - (body_y + 6) - 8);
+        console_output_append_line(&shell_co, "RAVE-OS SHELL");
+    }
+    shell_init(&sh);
+
+    /* Full-window editable text region with a SAVE button along the
+     * bottom -- same margin/gap formula FILES' own footer row already
+     * uses (button.y = win.y + win.h - 30, 8px side margins), not
+     * FORTH/SHELL's single-input-line-at-the-bottom shape, since
+     * there's no separate command line here: the whole body is the
+     * buffer. */
+    {
+        int body_x = windows[WIN_KIND_EDITOR].x;
+        int body_y = windows[WIN_KIND_EDITOR].y;
+        int body_w = windows[WIN_KIND_EDITOR].w;
+        int body_h = windows[WIN_KIND_EDITOR].h;
+
+        save_btn.x = body_x + 8;
+        save_btn.y = body_y + body_h - 30;
+        save_btn.w = body_w - 16;
+        save_btn.h = 22;
+        save_btn.label = "SAVE";
+        save_btn.hovered = 0;
+        save_btn.pressed = 0;
+
+        editor_init(&ed, body_x + 4, body_y + 6, body_w - 8, save_btn.y - 6 - (body_y + 6));
+    }
+    editor_path[0] = 0;
+    editor_title[0] = 0;
+
+    /* Filename field, same widget FILES' own name_input already uses,
+     * stacked directly above SAVE the same way FILES stacks name_input
+     * above NEW DIR. Pre-filled with "SPRITE" so leaving it untouched
+     * reproduces the exact fixed /HOME/SPRITE path this used to always
+     * save to -- existing muscle memory (or a headless test) still
+     * gets the same result without typing anything. */
+    paint_name_input.x = windows[WIN_KIND_PAINT].x + 8;
+    paint_name_input.y = windows[WIN_KIND_PAINT].y + 8 + PAINT_GRID_SIZE * PAINT_CELL_PX + 4 + 24 + 8;
+    paint_name_input.w = PAINT_GRID_SIZE * PAINT_CELL_PX;
+    paint_name_input.h = 20;
+    console_input_set_text(&paint_name_input, "SPRITE");
+    paint_name_input.focused = 0;
+
+    /* SAVE/LOAD side by side, same "(total - 16 - 8) / 2, second.x =
+     * first.x + first.w + 8" split FILES' own NEW DIR/DELETE pair
+     * already uses -- no window resize needed, since this row already
+     * had exactly one button's worth of width to spare. */
+    paint_save_btn.x = windows[WIN_KIND_PAINT].x + 8;
+    paint_save_btn.y = paint_name_input.y + paint_name_input.h + 6;
+    paint_save_btn.w = (PAINT_GRID_SIZE * PAINT_CELL_PX - 8) / 2;
+    paint_save_btn.h = 22;
+    paint_save_btn.label = "SAVE";
+    paint_save_btn.hovered = 0;
+    paint_save_btn.pressed = 0;
+
+    paint_load_btn.x = paint_save_btn.x + paint_save_btn.w + 8;
+    paint_load_btn.y = paint_save_btn.y;
+    paint_load_btn.w = paint_save_btn.w;
+    paint_load_btn.h = 22;
+    paint_load_btn.label = "LOAD";
+    paint_load_btn.hovered = 0;
+    paint_load_btn.pressed = 0;
+
+    paint.current_color = 1; /* white -- a visible default against the near-black eraser color at index 0 */
+    paint.opened_once = 0;
+
+    mx = w / 2;
+    my = h - 100; /* clear of the taskbar/start menu strip below it */
+
+    /* IDT/PIC set up first (masked, no sti yet), then the mouse's polling
+     * handshake runs with IRQ12 still masked so it can't race the new
+     * interrupt handler for the same bytes, then interrupts are actually
+     * enabled once both are ready. */
+    gdt_init();
+    serial_init();
+    interrupts_init();
+
+    /* extern, not declared in a header -- matches this codebase's
+     * existing convention for asm-defined symbols only ever referenced
+     * at their one call site (see kernel/sched/scheduler.c's own
+     * extern void context_switch(...) declaration). */
+    {
+        extern void syscall_entry(void);
+        idt_set_gate(0x80, (void *)syscall_entry, IDT_TYPE_TRAP_GATE_32_DPL3);
+    }
+
+    paging_enable();
+    mouse_init();
+    interrupts_enable();
+
+    /* No IRQ14 involved (see ata.h) -- this is a synchronous polling call,
+     * safe to run any time after interrupts_enable(), not tied to the
+     * masked-PIC ordering the line above exists for. */
+    ata_status = ata_selftest();
+    sb16_init();
+    synth_init();
+    fs_status = fs_selftest();
+    fs_bootstrap_dirs();
+
+    /* Real logging, not just a name on disk: one line per boot, appended
+     * (not overwritten) to /VAR/LOG -- ata_status/fs_status already read
+     * "ATA: ..."/"FS: ..." (ata.h/fs.h), so no extra labeling needed.
+     * fs_append_file() creates the file on the first boot and genuinely
+     * grows it on every boot after, proving the append path works
+     * across real reboots, not just within one running session. */
+    {
+        char log_line[64];
+        int pos = 0;
+        str_append(log_line, &pos, (int)sizeof(log_line), ata_status);
+        str_append(log_line, &pos, (int)sizeof(log_line), " ");
+        str_append(log_line, &pos, (int)sizeof(log_line), fs_status);
+        str_append(log_line, &pos, (int)sizeof(log_line), "\n");
+        fs_append_file("/VAR/LOG", log_line, (unsigned int)pos);
+    }
+
+    /* fx_enabled was set to a hardcoded 0 above, before the filesystem
+     * was even mounted -- overwritten here now that /ETC/CONFIG can
+     * actually be read. Nothing reads fx_enabled before draw_scene()
+     * further down, so this reassignment is safe. */
+    fx_enabled = fx_default_from_config();
+
+    seed_bin_paint_script();
+    seed_bin_synth_demos();
+
+    /* Seeds one real script into /BIN so RUN has something to actually
+     * run -- there's no in-OS text editor yet, so this is the only way
+     * a script with real content ends up on disk, same reasoning as
+     * fs_selftest()'s own NESTED.TXT. fs_create_file() is write-once,
+     * so this is a silent no-op every boot after the first. */
+    {
+        static const char demo_script[] = ": GREET 42 . CR ;\nGREET\n";
+        fs_create_file("/BIN/HELLO", demo_script, (unsigned int)(sizeof(demo_script) - 1));
+    }
+
+    /* Seeds the first genuinely standalone ring-3 program onto disk --
+     * a compiled, freestanding flat binary (programs/hello/, built with
+     * the same cross-toolchain, fixed at PROGRAM_LOAD_ADDR by its own
+     * linker script; see docs/superpowers/specs/2026-08-29-loadable-
+     * program-design.md), not a C function linked into this kernel
+     * binary the way every prior ring-3 proof has been. There is no
+     * host-side disk-image tooling in this repo, so embedding the real
+     * build output's bytes and seeding them via fs_create_file() (same
+     * write-once shape as /BIN/HELLO above) is how it gets onto
+     * fs.img at all -- program_load_and_run() itself is generic and
+     * reads whatever real file ends up at this path. */
+    {
+        static const unsigned char hello_bin[] = {
+            0x55, 0x89, 0xe5, 0x53, 0x83, 0xec, 0x10, 0xb8, 0x00, 0x00, 0x00, 0x00, 0xbb, 0x00, 0x00, 0x00,
+            0x00, 0xcd, 0x80, 0x89, 0x45, 0xf8, 0x81, 0x7d, 0xf8, 0x34, 0x12, 0x00, 0x00, 0x75, 0x0e, 0xb8,
+            0x01, 0x00, 0x00, 0x00, 0xbb, 0x00, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xfa, 0x90, 0x90, 0xeb, 0xfd
+        };
+        fs_create_file("/BIN/USERPROG.BIN", hello_bin, (unsigned int)sizeof(hello_bin));
+    }
+
+    /* Read once here (and again only when a navigation click actually
+     * changes cwd, below), not on every redraw -- this kernel's event loop
+     * redraws on essentially any mouse movement, and re-reading the
+     * directory sector that often would mean a PIO polling round-trip on
+     * nearly every frame once this window exists. */
+    /* /HOME, not root -- makes /HOME real in the way a Unix home
+     * directory is, not just a name that exists (fs_bootstrap_dirs()
+     * already guarantees it exists by this point in boot). ".."
+     * navigation still reaches real root normally; this only changes
+     * where the window starts. */
+    {
+        int pos = 0;
+        str_append(cwd, &pos, (int)sizeof(cwd), "/HOME");
+    }
+    if (fs_list_dir(cwd, file_entries, FS_LIST_MAX, &file_entry_count) != 0) {
+        file_entry_count = 0;
+    }
+
+    {
+        struct window_content wc = {
+            .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
+            .file_entries = file_entries, .file_entry_count = file_entry_count,
+            .files_selected_mask = files_selected_mask, .name_input = &name_input,
+            .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
+            .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
+            .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
+            .paint_load_btn = &paint_load_btn,
+        };
+        draw_scene(w, h, windows, fx_enabled, &wc, z_order, &bar, taskbar_hovered, &menu, menu_hovered_item, mx, my,
+                  cursor_color, &splash);
+    }
+    gfx_present();
+
+    for (;;) {
+        kmain_frame();
     }
 }
