@@ -4,7 +4,7 @@
    this is fixed rather than relocatable. */
 ENTRY(_start)
 SECTIONS {
-    . = 0x00200000;
+    . = 0x00340000;
     .text   : { *(.text) }
     .rodata : { *(.rodata) }
     .data   : { *(.data) }
