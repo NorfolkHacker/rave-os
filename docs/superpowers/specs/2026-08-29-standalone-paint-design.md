@@ -89,9 +89,21 @@ that trigger.
 - **A second launch path.** Only the new Start Menu entry launches it;
   `RUN PAINT` in a console goes away with the Forth script it used to
   run (there is nothing left at `/BIN/PAINT` for it to run).
-- **Any drag/raise/close-button behavior.** The generic `WIN_KIND_RING3`
-  window slot already handles all of that identically to every other
-  window kind; nothing paint-specific is needed there.
+- **Dragging the window.** The generic `WIN_KIND_RING3` window slot
+  handles raising and the close button identically to every other
+  window kind, but *not* dragging: `move_window_content()` (kernel.c)
+  has no `WIN_KIND_RING3` arm to translate `ring3_shadow` (a
+  screen-space buffer -- it would blit at the window's new position
+  showing pixels never written there) or to tell the running program
+  its window moved (a ring-3 program has no move event, and caches its
+  own click-coordinate state, e.g. `win_x`/`win_y`, once at startup).
+  A real fix means adding a move event plus shadow-buffer geometry
+  translation -- out of scope for a branch about *moving PAINT out of
+  the kernel*, not adding ring-3 window mobility. Dragging is disabled
+  for `WIN_KIND_RING3` windows (title-bar drag is a no-op; the window
+  simply doesn't move) rather than shipping broken-but-draggable. This
+  is generic to every ring-3 window, not paint-specific, the same kind
+  of limitation as "only one ring-3 program at a time" above.
 
 ## Design
 

@@ -1687,18 +1687,47 @@ void window_ring3_close(void) {
  * protects an oversized file from overrunning this. */
 #define PROGRAM_LOAD_MAX_SIZE (0x00400000 - PROGRAM_LOAD_ADDR)
 
+/* Zeroes the whole PROGRAM_LOAD_ADDR..+PROGRAM_LOAD_MAX_SIZE window,
+ * uint32_t at a time (PROGRAM_LOAD_MAX_SIZE is a multiple of 4 by
+ * construction -- both PROGRAM_LOAD_ADDR and 0x00400000 are page-
+ * aligned). No libc/memset dependency here (freestanding kernel); same
+ * plain-loop style gfx_init() already uses to zero the backbuffer
+ * (kernel/gfx/graphics.c). */
+static void program_load_zero_window(void *addr, unsigned int size) {
+    uint32_t *p = (uint32_t *)addr;
+    unsigned int count = size / sizeof(uint32_t);
+    unsigned int i;
+    for (i = 0; i < count; i++) {
+        p[i] = 0;
+    }
+}
+
 /* Reads path's real, on-disk content via fs_read_file() straight into
  * the fixed ring-3 load address, then enters it. Not a syscall -- ring
  * 0 calls this directly (this slice's own temporary proof payload is
  * the only current caller); there is no notion yet of a ring-3
  * program loading another one. Silently does nothing if path doesn't
  * exist or is too big, matching fs_read_file()'s own existing
- * contract -- no new error handling invented here. */
+ * contract -- no new error handling invented here.
+ *
+ * Zeroes the whole load window before reading the file in: a flat
+ * binary has no .bss section at all (objcopy -O binary drops it, same
+ * as the kernel's own .bss story documented in graphics.c), so a
+ * program's uninitialized statics (e.g. programs/paint/paint.c's
+ * grid[16][16], read before any cell is painted) are just whatever was
+ * in this memory already. That happened to always be zero under QEMU's
+ * zeroed cold-boot RAM, but isn't guaranteed on a warm reset or real
+ * hardware -- an uninitialized grid[][] value would index paint[]'s
+ * palette[] out of bounds. The zero fills in for the missing .bss
+ * (a no-op for whatever the read below overwrites -- .text/.rodata/
+ * .data) and gives every loaded program the C ABI's normal "statics
+ * start zeroed" guarantee. */
 void program_load_and_run(const char *path) {
     unsigned int out_size;
     static uint8_t program_stack[4096] __attribute__((aligned(16)));
     extern void enter_ring3(void (*entry)(void), void *user_stack_top);
 
+    program_load_zero_window((void *)PROGRAM_LOAD_ADDR, PROGRAM_LOAD_MAX_SIZE);
     if (fs_read_file(path, (void *)PROGRAM_LOAD_ADDR, PROGRAM_LOAD_MAX_SIZE, &out_size) != 0) {
         return;
     }
@@ -2005,7 +2034,18 @@ static void kmain_frame(void) {
                         windows[target].state = WINDOW_MINIMIZED;
                     } else {
                         raise_window(z_order, target);
-                        if (window_titlebar_hit_test(&windows[target], cx, cy)) {
+                        /* WIN_KIND_RING3 never starts a drag: dragging is
+                         * disabled for this window kind rather than shipped
+                         * broken, since move_window_content() has no
+                         * WIN_KIND_RING3 arm (ring3_shadow, a screen-space
+                         * buffer, has no translation) and a ring-3 program's
+                         * own cached click-coordinate state (e.g. paint.c's
+                         * win_x/win_y) has no way to learn its window moved.
+                         * See docs/superpowers/specs/2026-08-29-standalone-
+                         * paint-design.md's Out-of-scope section. Raising
+                         * still works above; only the drag itself is
+                         * skipped. */
+                        if (target != WIN_KIND_RING3 && window_titlebar_hit_test(&windows[target], cx, cy)) {
                             dragging_window = target;
                         }
                     }
