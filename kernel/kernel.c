@@ -1338,80 +1338,6 @@ static int fx_default_from_config(void) {
     return 0;
 }
 
-#define BIN_PAINT_PATH "/BIN/PAINT"
-
-/* Seeds /BIN/PAINT with the default interactive drawing loop if
- * missing -- same idempotent fs_create_file() write-once shape
- * fx_default_from_config() already uses for /ETC/CONFIG, so a user who
- * opens this in EDITOR and rewrites it keeps their own version across
- * reboots (fs_create_file() only ever succeeds the very first time a
- * path exists). While the left button is held and the cursor is over
- * the canvas, paints the current color at the cursor's cell; stops
- * when the right button is pressed or the window is closed
- * (WINDOW-CLOSED?, Task 4). The bounds check exists because
- * MOUSE-X/MOUSE-Y return -1 when the cursor isn't over the canvas at
- * all (e.g. hovering the current-color swatch, or while the palette
- * popup is open and covering it).
- *
- * No REFRESH/PALETTE-PICK/SAVE-PICK calls here (2026-08-19 concurrency
- * pass deleted all three, along with the hooks they wrapped) -- those
- * existed only because kmain()'s own per-frame redraw, palette
- * hit-test, and SAVE hit-test didn't run at all while this
- * BEGIN...UNTIL blocked inside forth_eval_line()'s call chain. Since
- * Task 5, a compiled BEGIN...UNTIL loop yields back to scheduler_tick()
- * (and through it to kmain()'s own per-frame work) on every iteration
- * instead of blocking, so all of that now happens for free through the
- * exact same general per-frame path every other window already uses --
- * no PAINT-specific workaround needed.
- *
- * Two real deviations from the design spec's illustrative script, both
- * found while headlessly verifying this against the actual dialect
- * (forth.c), not just assumed from the spec's prose:
- *
- * 1. The spec's script used ">=" and "AND", but this Forth's
- *    primitives[] table has neither -- only
- *    "+ - * / DUP DROP SWAP OVER = < > . CR @ !" plus the paint words.
- *    MOUSE-X/MOUSE-Y already only ever return -1 (off-canvas) or 0..15
- *    (on-canvas, see paint_mouse_cell()), so "greater than -1" alone
- *    distinguishes valid from invalid -- no upper-bound check needed.
- *    "OVER OVER SWAP -1 > SWAP -1 > *" duplicates x and y, tests each
- *    against -1 with ">", and ANDs the two 0/-1 flags together with "*"
- *    (both true multiplies to a nonzero 1; either false multiplies to
- *    0) -- all while leaving the original x/y underneath for PIXEL's
- *    use in the THEN branch.
- * 2. BEGIN/IF/ELSE/THEN/UNTIL are recognized only inside a colon
- *    definition's compile mode (handle_compile_token() in forth.c) --
- *    handle_immediate_token(), the path every top-level/console-typed
- *    token (and thus every line RUN feeds through forth_eval_line()
- *    outside of compile mode) actually goes through, has no case for
- *    any of them at all, so a bare top-level "BEGIN ... UNTIL" (as the
- *    spec's illustrative script has it) fails with "UNKNOWN" the
- *    instant BEGIN is reached -- caught headlessly via RUN PAINT
- *    printing five UNKNOWNs instead of opening a live loop. The loop
- *    body is instead compiled into a real word (PLOOP) via ":"/";",
- *    then that word is invoked as its own top-level line -- the
- *    ordinary, idiomatic way any Forth runs a loop from the console,
- *    and RUN's own line-by-line feed already preserves compile-mode
- *    state across lines for exactly this shape (see run_program_entry()
- *    above -- the old synchronous forth_run_command() did the same
- *    before it was replaced in the 2026-08-19 concurrency pass). */
-static void seed_bin_paint_script(void) {
-    static const char bin_paint_default[] =
-        "PAINT\n"
-        ": PLOOP\n"
-        "  BEGIN\n"
-        "    MOUSE-DOWN? IF\n"
-        "      MOUSE-X MOUSE-Y\n"
-        "      OVER OVER SWAP -1 > SWAP -1 > *\n"
-        "      IF CURRENT-COLOR PIXEL ELSE DROP DROP THEN\n"
-        "    THEN\n"
-        "    MOUSE-RIGHT-DOWN? WINDOW-CLOSED? +\n"
-        "  UNTIL\n"
-        ";\n"
-        "PLOOP\n";
-    fs_create_file(BIN_PAINT_PATH, bin_paint_default, (unsigned int)(sizeof(bin_paint_default) - 1));
-}
-
 /* Seeds four self-contained /BIN scripts demonstrating the synth's
  * Forth surface (VOICE/WAVE/ONA/ADSR/GATE-ON, the resonant filter,
  * ring modulation, and the arpeggio engine) -- same idempotent
@@ -3570,7 +3496,6 @@ void kmain(void) {
      * further down, so this reassignment is safe. */
     fx_enabled = fx_default_from_config();
 
-    seed_bin_paint_script();
     seed_bin_synth_demos();
 
     /* Seeds one real script into /BIN so RUN has something to actually
