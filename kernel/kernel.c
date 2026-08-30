@@ -58,12 +58,11 @@
  * widget framework -- there are exactly three content kinds, not an
  * open-ended number, so a small switch is simpler than a real
  * polymorphic app system. */
-#define MAX_WINDOWS 6
+#define MAX_WINDOWS 5
 #define WIN_KIND_FORTH 0
 #define WIN_KIND_FILES 1
 #define WIN_KIND_SHELL 2
 #define WIN_KIND_EDITOR 3
-#define WIN_KIND_PAINT 4
 /* Owned by a ring-3 program (see window_ring3_open()/_close() below),
  * not one of the five built-in apps above. Unlike them, its content is
  * whatever the ring-3 program itself drew via the gfx syscalls -- there
@@ -74,7 +73,7 @@
  * a bare `else`, which used to silently mis-draw it as PAINT. See
  * docs/superpowers/specs/2026-08-29-ring3-window-content-persistence-design.md
  * and docs/superpowers/specs/2026-08-29-ring3-window-events-design.md. */
-#define WIN_KIND_RING3 5
+#define WIN_KIND_RING3 4
 
 /* A single pending ring-3 window event -- not a queue, deliberately:
  * only one ring-3 program ever runs at a time, it consumes events
@@ -90,7 +89,7 @@ static int ring3_event_x, ring3_event_y; /* valid only for RING3_EVENT_CLICK */
 static char ring3_event_key; /* valid only for RING3_EVENT_KEY */
 
 /* Persists across frames, exactly like ci.focused/shell_ci.focused/
- * name_input.focused/ed.focused/paint_name_input.focused below -- set
+ * name_input.focused/ed.focused below -- set
  * once on a click edge (see the focus-assignment block inside
  * kmain_frame()) and read every frame after by the keyboard-routing
  * chain. The ring-3 window has no sub-widgets, so its whole body rect
@@ -394,99 +393,11 @@ static void raise_window(int *z_order, int idx) {
     z_order[0] = idx;
 }
 
-/* File-scope, not kmain()-local: forth_hook_mouse_x()/mouse_y()/
- * mouse_down()/mouse_right_down() (added for the PAINT Forth words,
- * see docs/superpowers/specs/2026-08-16-paint-design.md) need to read
- * genuinely live mouse state from deep inside forth_eval_line()'s own
- * call stack, with no path back to kmain()'s locals -- kmain()'s own
- * event loop uses these exactly as it always has, only their storage
- * moved. */
 static int mx, my;
 static int mouse_buttons_live = 0;
 
-/* Drains every mouse packet currently queued, updating the live mx/my/
- * mouse_buttons_live state above -- the same accumulate-and-clamp math
- * kmain()'s own per-packet event-loop block already does, but
- * self-contained and callable from anywhere in this file (specifically:
- * the PAINT mouse-reading hooks, called from deep inside
- * forth_eval_line()'s call stack while kmain()'s own loop isn't
- * running at all). Packets this function drains are gone from
- * mouse.c's ring buffer -- if kmain()'s own loop runs again afterward
- * expecting to see them, it won't, which is correct: nothing else in
- * the OS should react to clicks a Forth script already consumed for
- * painting. */
-static void poll_mouse_state(void) {
-    int dx, dy, buttons;
-    while (mouse_poll_packet(&dx, &dy, &buttons)) {
-        serial_write_str("PMS dx="); serial_write_int(dx);
-        serial_write_str(" dy="); serial_write_int(dy);
-        serial_write_str(" btn="); serial_write_int(buttons);
-        serial_write_str("\n");
-        mx += dx;
-        my += dy;
-        if (mx < 0) {
-            mx = 0;
-        }
-        if (my < 0) {
-            my = 0;
-        }
-        if (mx > gfx_width() - CURSOR_SIZE) {
-            mx = gfx_width() - CURSOR_SIZE;
-        }
-        if (my > gfx_height() - CURSOR_SIZE) {
-            my = gfx_height() - CURSOR_SIZE;
-        }
-        mouse_buttons_live = buttons;
-    }
-}
-
-#define PAINT_GRID_SIZE 16
-#define PAINT_CELL_PX 16
-#define PAINT_PALETTE_COLORS 16
-#define PAINT_SWATCH_W 40
-#define PAINT_SWATCH_H 24
-#define PAINT_POPUP_COLS 4
-#define PAINT_POPUP_SWATCH 32
-#define PAINT_POPUP_GAP 4
-#define PAINT_POPUP_SIZE (PAINT_POPUP_COLS * PAINT_POPUP_SWATCH + (PAINT_POPUP_COLS - 1) * PAINT_POPUP_GAP)
-
-/* File-scope, same "hook-reachability" reasoning as mx/my above --
- * forth_hook_pixel()/forth_hook_paint_open()/forth_hook_current_color()
- * are called from deep inside forth_eval_line()'s call stack, with no
- * path back to kmain()'s locals. kmain() still threads &paint through
- * the normal five-function draw pipeline exactly like every other
- * window's own state (struct editor ed, etc.) -- this doesn't change
- * that, it only additionally makes paint reachable from the hooks,
- * which aren't part of that pipeline at all. */
-struct paint {
-    int grid[PAINT_GRID_SIZE][PAINT_GRID_SIZE]; /* palette index 0..15 per cell, row-major */
-    int current_color;                          /* natively-selected palette swatch, 0..15 */
-    int opened_once;                             /* clears grid to all-zero only the first time PAINT ever opens */
-    int palette_popup_open;                      /* whether the palette-chooser popup is showing */
-    uint32_t palette_hidden_mask;                /* bit i set means color i is hidden from selection (Task 3) */
-    int grid_generation;                         /* bumped on every grid[][] write -- see forth_hook_pixel() */
-};
-static struct paint paint;
-static struct button paint_save_btn;
-static struct button paint_load_btn;
-static struct console_input paint_name_input;
-static int paint_program_slot = -1;
-
-/* Same reachability problem mx/my/paint had above: forth_hook_paint_open()
- * (Task 3) needs to reach windows[WIN_KIND_PAINT].state and call
- * raise_window(z_order, WIN_KIND_PAINT), and forth_hook_window_closed()
- * plus paint_mouse_cell() (used by forth_hook_mouse_x()/
- * forth_hook_mouse_y()) need windows[WIN_KIND_PAINT] too -- all hook
- * functions (or hook helpers) with no path back to kmain()'s locals.
- * kmain() still initializes and threads these through the normal
- * pipeline exactly as before; only their storage moved. */
 static struct window windows[MAX_WINDOWS];
 static int z_order[MAX_WINDOWS];
-
-static const uint32_t paint_palette[PAINT_PALETTE_COLORS] = {
-    0x050607, 0xFFFFFF, 0xFF3B30, 0xFF9500, 0xFFEB3B, 0x00FF66, 0x2979FF, 0xB026FF,
-    0x8D6E4C, 0xFF4FA3, 0x18E0E0, 0x0A6E3D, 0x1A2E8C, 0x808080, 0x2B2B2B, 0xCC3300,
-};
 
 /* Clamps a window's position so its full outer bounds (border included)
  * stay on-screen. Shared by every draggable window since the bounds math
@@ -547,10 +458,6 @@ struct window_content {
     struct button *paste_btn;
     struct editor *ed;
     struct button *save_btn;
-    struct paint *pt;
-    struct console_input *paint_name_input;
-    struct button *paint_save_btn;
-    struct button *paint_load_btn;
 };
 
 /* Moves a window's content widgets by the same delta already applied to
@@ -590,17 +497,6 @@ static void move_window_content(int kind, struct window_content *wc, int applied
         wc->ed->y += applied_dy;
         wc->save_btn->x += applied_dx;
         wc->save_btn->y += applied_dy;
-    } else if (kind == WIN_KIND_PAINT) {
-        /* The canvas/palette are drawn directly from wc->pt's own
-         * fixed-size arrays at an offset from the window's own x/y
-         * (see draw_paint_group()) -- nothing about wc->pt itself needs
-         * to move when the window is dragged, only its own widgets. */
-        wc->paint_name_input->x += applied_dx;
-        wc->paint_name_input->y += applied_dy;
-        wc->paint_save_btn->x += applied_dx;
-        wc->paint_save_btn->y += applied_dy;
-        wc->paint_load_btn->x += applied_dx;
-        wc->paint_load_btn->y += applied_dy;
     }
 }
 
@@ -632,87 +528,12 @@ static void draw_editor_group(const struct window *ed_win, const struct editor *
     button_draw(save_btn);
 }
 
-/* The fifth window: a 16x16 pixel canvas, a click-to-open palette
- * popup, and a SAVE button -- opened only via the PAINT Forth word,
- * no start-menu launcher, matching EDIT's own SHELL-only precedent.
- * Canvas and palette are both drawn directly from paint's own state
- * (no separate widget module, unlike editor.c -- this window's whole
- * content is exactly two nested loops over fixed-size arrays). */
-static void draw_paint_group(const struct window *win, const struct paint *pt, const struct console_input *name_input,
-                             const struct button *save_btn, const struct button *load_btn) {
-    int row, col;
-    int canvas_x = win->x + 8;
-    int canvas_y = win->y + 8;
-    int palette_y = canvas_y + PAINT_GRID_SIZE * PAINT_CELL_PX + 4;
-
-    window_draw(win);
-
-    for (row = 0; row < PAINT_GRID_SIZE; row++) {
-        for (col = 0; col < PAINT_GRID_SIZE; col++) {
-            gfx_fill_rect(canvas_x + col * PAINT_CELL_PX, canvas_y + row * PAINT_CELL_PX, PAINT_CELL_PX,
-                         PAINT_CELL_PX, (uint32_t)paint_palette[pt->grid[row][col]]);
-        }
-    }
-
-    /* Current-color "well" -- always visible, shows what PIXEL paints
-     * with next. Clicking it opens the popup grid (paint_swatch_hit_test()/
-     * paint_popup_grid_hit_test()); the 1px accent border (same
-     * border-rect-behind-a-smaller-fill-rect technique
-     * console_input_draw() already uses) marks it as clickable. */
-    gfx_fill_rect(canvas_x - 1, palette_y - 1, PAINT_SWATCH_W + 2, PAINT_SWATCH_H + 2, 0x00FF66);
-    gfx_fill_rect(canvas_x, palette_y, PAINT_SWATCH_W, PAINT_SWATCH_H, paint_palette[pt->current_color]);
-
-    if (pt->palette_popup_open) {
-        int pi;
-
-        /* Overlays the canvas's own top-left corner rather than
-         * appearing below the swatch -- the window has no vertical
-         * room left below the swatch row (see the design spec), so a
-         * 140x140 popup temporarily covers part of the canvas while
-         * open, same as any floating color-picker dialog would. */
-        gfx_fill_rect(canvas_x - 2, canvas_y - 2, PAINT_POPUP_SIZE + 4, PAINT_POPUP_SIZE + 4, 0x00FF66);
-        gfx_fill_rect(canvas_x, canvas_y, PAINT_POPUP_SIZE, PAINT_POPUP_SIZE, 0x0B1712);
-
-        for (pi = 0; pi < PAINT_PALETTE_COLORS; pi++) {
-            int pcol = pi % PAINT_POPUP_COLS;
-            int prow = pi / PAINT_POPUP_COLS;
-            int sx = canvas_x + pcol * (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
-            int sy = canvas_y + prow * (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
-
-            uint32_t swatch_color = paint_palette[pi];
-            if (pt->palette_hidden_mask & (1u << pi)) {
-                /* Halves each RGB channel -- no blending primitive
-                 * needed, just a bit-shift, enough to read as "dimmed"
-                 * against the popup's dark backing. */
-                swatch_color = (swatch_color >> 1) & 0x7F7F7F;
-            }
-            gfx_fill_rect(sx, sy, PAINT_POPUP_SWATCH, PAINT_POPUP_SWATCH, swatch_color);
-            if (pi == pt->current_color) {
-                gfx_fill_rect(sx, sy, PAINT_POPUP_SWATCH, 2, 0x00FF66);
-                gfx_fill_rect(sx, sy + PAINT_POPUP_SWATCH - 2, PAINT_POPUP_SWATCH, 2, 0x00FF66);
-            }
-        }
-    }
-
-    console_input_draw(name_input);
-    button_draw(save_btn);
-    button_draw(load_btn);
-}
-
 /* forth_hooks.h implementations -- forth.c's only window into
- * graphics/mouse state (see docs/superpowers/specs/2026-08-16-paint-design.md).
- * Inserted here, immediately after draw_paint_group(), for historical
- * reasons: forth_hook_refresh() used to live here and called
- * draw_paint_group() directly, which had to already be visible (this is
- * C, not a language with forward declarations by default) to avoid an
- * implicit-function-declaration warning under -Wall -Wextra.
- * forth_hook_refresh() itself is gone (2026-08-19 concurrency pass --
- * kmain()'s own normal per-frame draw pipeline, update_and_present(),
- * now redraws PAINT the same as every other window, so no hook needs to
- * call draw_paint_group() directly any more), but the remaining hooks
- * are left in this same spot rather than moved. poll_mouse_state()
- * itself is defined much earlier in this file, so these hooks can call
- * it regardless of where they themselves sit. */
+ * beep/scheduler-yield state, both implemented in kernel.c. The
+ * graphics/mouse hooks that used to live here (added for the PAINT
+ * Forth words) were removed when PAINT moved to a standalone ring-3
+ * binary -- see docs/superpowers/specs/2026-08-29-standalone-paint-
+ * design.md. */
 
 /* A short, fixed 400Hz square wave -- just enough to prove the hardware
  * path works, not a synth voice (see docs/superpowers/specs/2026-08-22-
@@ -866,183 +687,10 @@ void forth_hook_synth_arp_rate(int ms) {
     synth_set_arp_rate(synth_current_voice, ms);
 }
 
-void forth_hook_paint_open(void) {
-    serial_write_str("HOOK paint_open\n");
-    if (!paint.opened_once) {
-        int row, col;
-        for (row = 0; row < PAINT_GRID_SIZE; row++) {
-            for (col = 0; col < PAINT_GRID_SIZE; col++) {
-                paint.grid[row][col] = 0;
-            }
-        }
-        paint.opened_once = 1;
-    }
-    windows[WIN_KIND_PAINT].state = WINDOW_OPEN;
-    raise_window(z_order, WIN_KIND_PAINT);
-    paint_program_slot = scheduler_current_slot();
-}
-
-void forth_hook_pixel(int x, int y, int color) {
-    serial_write_str("HOOK pixel x="); serial_write_int(x);
-    serial_write_str(" y="); serial_write_int(y);
-    serial_write_str(" c="); serial_write_int(color);
-    serial_write_str("\n");
-    paint.grid[y][x] = color;
-    /* Bumped unconditionally, same "generation only ever increases, so
-     * any change is detectable as !=" invariant console_output.h's own
-     * generation field already documents -- lets touched[WIN_KIND_PAINT]
-     * (see kmain()) detect a grid change without diffing all 256 cells
-     * every frame, and without relying on some other window's damage
-     * (or the cursor's own footprint) coincidentally overlapping the
-     * canvas to trigger a redraw. */
-    paint.grid_generation++;
-}
-
-/* Converts the live cursor position (poll_mouse_state()'s own mx/my,
- * refreshed on every call so a Forth loop polling this every pass sees
- * genuinely current state) into a canvas-relative cell index -- -1 if
- * the window is closed, or the cursor isn't over the canvas region at
- * all (same 8px-margin offset draw_paint_group()/
- * paint_swatch_hit_test() already use). */
-static int paint_mouse_cell(int *out_col, int *out_row) {
-    int canvas_x, canvas_y, col, row;
-
-    poll_mouse_state();
-    if (windows[WIN_KIND_PAINT].state != WINDOW_OPEN || paint.palette_popup_open) {
-        /* The popup overlays the canvas's own top-left corner (see
-         * draw_paint_group()) -- while it's open the canvas underneath
-         * is not reachable, same as any modal overlay, so MOUSE-X/
-         * MOUSE-Y correctly report "not over the canvas" rather than
-         * letting a click meant for the popup also paint through to
-         * whatever cell happens to be underneath it. */
-        return -1;
-    }
-    canvas_x = windows[WIN_KIND_PAINT].x + 8;
-    canvas_y = windows[WIN_KIND_PAINT].y + 8;
-    col = (mx + CURSOR_SIZE / 2 - canvas_x) / PAINT_CELL_PX;
-    row = (my + CURSOR_SIZE / 2 - canvas_y) / PAINT_CELL_PX;
-    if (col < 0 || col >= PAINT_GRID_SIZE || row < 0 || row >= PAINT_GRID_SIZE) {
-        return -1;
-    }
-    *out_col = col;
-    *out_row = row;
-    return 0;
-}
-
-int forth_hook_mouse_x(void) {
-    int col, row;
-    if (paint_mouse_cell(&col, &row) != 0) {
-        return -1;
-    }
-    return col;
-}
-
-int forth_hook_mouse_y(void) {
-    int col, row;
-    if (paint_mouse_cell(&col, &row) != 0) {
-        return -1;
-    }
-    return row;
-}
-
-int forth_hook_mouse_down(void) {
-    poll_mouse_state();
-    if (mouse_buttons_live != 0) {
-        serial_write_str("HOOK mouse_down mbl="); serial_write_int(mouse_buttons_live);
-        serial_write_str(" mx="); serial_write_int(mx);
-        serial_write_str(" my="); serial_write_int(my);
-        serial_write_str("\n");
-    }
-    return mouse_buttons_live & 0x01;
-}
-
-int forth_hook_mouse_right_down(void) {
-    poll_mouse_state();
-    /* While the palette popup is open, a right-click is the popup's own
-     * hide/restore gesture (see kmain()'s PAINT click-handling), not a
-     * signal meant for the running Forth script -- otherwise hiding a
-     * color would also trigger PLOOP's own MOUSE-RIGHT-DOWN? quit
-     * condition and kill the program. */
-    if (paint.palette_popup_open) {
-        return 0;
-    }
-    return (mouse_buttons_live & 0x02) != 0;
-}
-
-int forth_hook_current_color(void) {
-    return paint.current_color;
-}
-
 void forth_hook_yield(void) {
     if (scheduler_current_slot() >= 0) {
         scheduler_yield();
     }
-}
-
-int forth_hook_window_closed(void) {
-    return windows[WIN_KIND_PAINT].state != WINDOW_OPEN;
-}
-
-/* Hit-tests the always-visible current-color swatch -- clicking it
- * opens the popup grid (paint_popup_grid_hit_test()). */
-static int paint_swatch_hit_test(const struct window *win, int px, int py) {
-    int canvas_x = win->x + 8;
-    int canvas_y = win->y + 8;
-    int palette_y = canvas_y + PAINT_GRID_SIZE * PAINT_CELL_PX + 4;
-    return px >= canvas_x && px < canvas_x + PAINT_SWATCH_W && py >= palette_y && py < palette_y + PAINT_SWATCH_H;
-}
-
-/* Converts a click position into a popup swatch index (0..15), or -1
- * if the click missed the grid entirely. Mirrors
- * files_list_hit_test()'s own "convert a click into a logical index"
- * shape -- same spirit the old paint_palette_hit_test() used for the
- * strip it replaced. */
-static int paint_popup_grid_hit_test(const struct window *win, int px, int py) {
-    int canvas_x = win->x + 8;
-    int canvas_y = win->y + 8;
-    int col, row;
-
-    if (px < canvas_x || px >= canvas_x + PAINT_POPUP_SIZE || py < canvas_y || py >= canvas_y + PAINT_POPUP_SIZE) {
-        return -1;
-    }
-    /* The bounds check above already guarantees col/row land in
-     * [0, PAINT_POPUP_COLS) -- PAINT_POPUP_SIZE is exactly
-     * PAINT_POPUP_COLS swatches plus the gaps between them, no
-     * trailing gap past the last column. A click inside a gap between
-     * swatches is attributed to the swatch just before it (integer
-     * division) -- same loose tolerance files_list_hit_test() already
-     * uses for its own row bands. */
-    col = (px - canvas_x) / (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
-    row = (py - canvas_y) / (PAINT_POPUP_SWATCH + PAINT_POPUP_GAP);
-    return row * PAINT_POPUP_COLS + col;
-}
-
-/* Builds "/HOME/" + the filename field's own text, uppercased to match
- * this filesystem's all-caps path convention -- the same fold RUN's
- * own path resolution already applies (the old synchronous
- * forth_run_command() covered this in its own comment before it was
- * replaced in the 2026-08-19 concurrency pass; the fold itself now
- * lives inline in kmain()'s own RUN handling). Used by kmain()'s own
- * SAVE- and LOAD-button click handlers below. Returns 0 (leaving *out*
- * unset) if the field is empty -- SAVE/LOAD with no name is a no-op,
- * same "no-error-UI, silent no-op" convention as the rest of this
- * kernel's filesystem writes; the caller checks this before doing
- * anything else. */
-static int paint_build_sprite_path(char *out, int out_max) {
-    int pos = 0;
-    int i;
-
-    if (paint_name_input.text[0] == 0) {
-        return 0;
-    }
-    str_append(out, &pos, out_max, "/HOME/");
-    str_append(out, &pos, out_max, paint_name_input.text);
-    for (i = 0; out[i]; i++) {
-        if (out[i] >= 'a' && out[i] <= 'z') {
-            out[i] = (char)(out[i] - 32);
-        }
-    }
-    return 1;
 }
 
 /* fs.h's own constant, kept under this file's existing local name (no
@@ -1353,9 +1001,7 @@ static int fx_default_from_config(void) {
  * gets its own fresh forth_vm (see run_program_entry()) with no shared
  * dictionary between scripts. Every looping demo exits on a right click
  * (MOUSE-RIGHT-DOWN?), the same convention PLOOP above already
- * established, rather than WINDOW-CLOSED? -- that hook is hardcoded to
- * the Paint window specifically (see forth_hook_window_closed()) and
- * would immediately end any of these before they'd even started. */
+ * established. */
 #define BIN_SCALE_PATH "/BIN/SCALE"
 #define BIN_FSWEEP_PATH "/BIN/FSWEEP"
 #define BIN_RINGMOD_PATH "/BIN/RINGMOD"
@@ -1722,8 +1368,6 @@ static void draw_window_by_index(int idx, const struct window *windows, const st
         draw_shell_group(&windows[idx], wc->shell_co, wc->shell_ci);
     } else if (idx == WIN_KIND_EDITOR) {
         draw_editor_group(&windows[idx], wc->ed, wc->save_btn);
-    } else if (idx == WIN_KIND_PAINT) {
-        draw_paint_group(&windows[idx], wc->pt, wc->paint_name_input, wc->paint_save_btn, wc->paint_load_btn);
     } else if (idx == WIN_KIND_RING3) {
         /* Redraws the chrome (border/titlebar/title) -- the one part
          * of this window the kernel actually owns -- then restores its
@@ -2157,18 +1801,6 @@ static void kmain_frame(void) {
         int old_ed_focused = ed.focused;
         int old_save_btn_hovered = save_btn.hovered;
         int old_save_btn_pressed = save_btn.pressed;
-        int old_paint_current_color = paint.current_color;
-        int old_paint_save_btn_hovered = paint_save_btn.hovered;
-        int old_paint_save_btn_pressed = paint_save_btn.pressed;
-        int old_paint_load_btn_hovered = paint_load_btn.hovered;
-        int old_paint_load_btn_pressed = paint_load_btn.pressed;
-        int old_paint_palette_popup_open = paint.palette_popup_open;
-        uint32_t old_paint_palette_hidden_mask = paint.palette_hidden_mask;
-        int old_paint_grid_generation = paint.grid_generation;
-        int old_paint_name_input_len = paint_name_input.len;
-        int old_paint_name_input_cursor = paint_name_input.cursor;
-        int old_paint_name_input_focused = paint_name_input.focused;
-        char old_paint_name_input_text[CONSOLE_INPUT_MAX + 1];
         int i;
 
         for (i = 0; ci.text[i]; i++) {
@@ -2185,11 +1817,6 @@ static void kmain_frame(void) {
             old_name_input_text[i] = name_input.text[i];
         }
         old_name_input_text[i] = 0;
-
-        for (i = 0; paint_name_input.text[i]; i++) {
-            old_paint_name_input_text[i] = paint_name_input.text[i];
-        }
-        old_paint_name_input_text[i] = 0;
 
         for (i = 0; cwd[i]; i++) {
             old_cwd[i] = cwd[i];
@@ -2237,17 +1864,6 @@ static void kmain_frame(void) {
             cx = mx + CURSOR_SIZE / 2;
             cy = my + CURSOR_SIZE / 2;
 
-            /* Keeps mouse_buttons_live (poll_mouse_state()'s own output,
-             * read by the PAINT Forth hooks) in sync even when kmain()'s
-             * own loop -- not poll_mouse_state() -- is the one draining
-             * this packet: without this, a button press consumed here
-             * (e.g. the very mouse_button that's held right before RUN
-             * PAINT starts a BEGIN...UNTIL loop, while kmain() is still
-             * the thing running) would never reach mouse_buttons_live at
-             * all, since poll_mouse_state() only updates it from packets
-             * *it* personally drains -- leaving MOUSE-DOWN?/
-             * MOUSE-RIGHT-DOWN? reading stale state the instant the loop
-             * starts. */
             mouse_buttons_live = buttons;
 
             /* Dragging applies each packet's raw dx/dy to whichever window
@@ -2285,8 +1901,6 @@ static void kmain_frame(void) {
                             .files_selected_mask = files_selected_mask, .name_input = &name_input,
                             .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
                             .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
-                            .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
-                            .paint_load_btn = &paint_load_btn,
                         };
                         move_window_content(dragging_window, &wc, applied_dx, applied_dy);
                     }
@@ -2378,15 +1992,11 @@ static void kmain_frame(void) {
                      * real desktop. */
                     if (window_close_hit_test(&windows[target], cx, cy)) {
                         windows[target].state = WINDOW_CLOSED;
-                        if (target == WIN_KIND_PAINT && paint_program_slot >= 0) {
-                            scheduler_request_close(paint_program_slot);
-                        }
                         if (target == WIN_KIND_RING3) {
                             /* Without this, a ring-3 program blocked in
                              * SYS_WAIT_EVENT would spin forever after
                              * its window closed -- there's no scheduler
-                             * slot for ring-3 programs the way PAINT's
-                             * Forth fiber has one above, so this is the
+                             * slot for ring-3 programs, so this is the
                              * only signal it will ever get. */
                             ring3_event_pending = RING3_EVENT_CLOSED;
                         }
@@ -2396,14 +2006,6 @@ static void kmain_frame(void) {
                         raise_window(z_order, target);
                         if (window_titlebar_hit_test(&windows[target], cx, cy)) {
                             dragging_window = target;
-                            /* Dragging any window while PAINT's popup is
-                             * open would leave it rendered at a stale
-                             * position relative to a window that just
-                             * moved -- simplest fix is closing it
-                             * outright rather than threading a second
-                             * movable position through
-                             * move_window_content(). */
-                            paint.palette_popup_open = 0;
                         }
                     }
                 }
@@ -2434,7 +2036,6 @@ static void kmain_frame(void) {
                 int files_is_topmost = topmost == WIN_KIND_FILES;
                 int shell_is_topmost = topmost == WIN_KIND_SHELL;
                 int editor_is_topmost = topmost == WIN_KIND_EDITOR;
-                int paint_is_topmost = topmost == WIN_KIND_PAINT;
                 int ring3_is_topmost = topmost == WIN_KIND_RING3;
                 int click_edge = left_held && !prev_left_held;
 
@@ -2467,7 +2068,6 @@ static void kmain_frame(void) {
                     name_input.focused = files_is_topmost && console_input_hit_test(&name_input, cx, cy);
                     shell_ci.focused = shell_is_topmost && console_input_hit_test(&shell_ci, cx, cy);
                     ed.focused = editor_is_topmost && editor_hit_test(&ed, cx, cy);
-                    paint_name_input.focused = paint_is_topmost && console_input_hit_test(&paint_name_input, cx, cy);
                     ring3_focused = ring3_is_topmost &&
                         cx >= windows[WIN_KIND_RING3].x && cx < windows[WIN_KIND_RING3].x + windows[WIN_KIND_RING3].w &&
                         cy >= windows[WIN_KIND_RING3].y && cy < windows[WIN_KIND_RING3].y + windows[WIN_KIND_RING3].h;
@@ -2648,105 +2248,6 @@ static void kmain_frame(void) {
                     fs_create_file(editor_path, ed.buf, ed.len);
                 }
                 save_btn.pressed = save_btn.hovered && left_held;
-
-                /* Click routing for the palette-chooser popup: closed
-                 * + click on the swatch opens it; open + click on a
-                 * grid swatch selects it and closes the popup; open +
-                 * click on any *other* window (or the backdrop) closes
-                 * it without changing current_color, same "click
-                 * outside dismisses" convention the start menu's own
-                 * popup already uses. (Task 3 adds right-click
-                 * hide/restore and the "hidden swatches are a no-op"
-                 * rule to the grid-click branch below.) */
-                if (click_edge) {
-                    if (paint_is_topmost) {
-                        if (!paint.palette_popup_open) {
-                            if (paint_swatch_hit_test(&windows[WIN_KIND_PAINT], cx, cy)) {
-                                paint.palette_popup_open = 1;
-                            }
-                        } else {
-                            int swatch = paint_popup_grid_hit_test(&windows[WIN_KIND_PAINT], cx, cy);
-                            /* A hidden swatch can't be selected -- same
-                             * "no-error-UI, silent no-op" convention
-                             * SAVE/LOAD's own failure paths already use
-                             * -- but the popup stays open either way,
-                             * so a miss or a hidden pick doesn't force
-                             * the user to reopen it. */
-                            if (swatch >= 0 && !(paint.palette_hidden_mask & (1u << swatch))) {
-                                paint.current_color = swatch;
-                                paint.palette_popup_open = 0;
-                            } else if (swatch < 0) {
-                                paint.palette_popup_open = 0;
-                            }
-                        }
-                    } else if (paint.palette_popup_open) {
-                        paint.palette_popup_open = 0;
-                    }
-                }
-
-                if (paint_is_topmost && paint.palette_popup_open && right_held && !prev_right_held) {
-                    int swatch = paint_popup_grid_hit_test(&windows[WIN_KIND_PAINT], cx, cy);
-                    if (swatch >= 0) {
-                        paint.palette_hidden_mask ^= 1u << swatch;
-                    }
-                }
-
-                /* Writes the grid to /HOME/<name> (the filename field's
-                 * own text, empty defaulting handled by
-                 * paint_build_sprite_path()) as 256 raw bytes, one per
-                 * cell, row-major -- same fs_delete()+fs_create_file()
-                 * shape EDITOR's own SAVE already uses, and the same
-                 * silent-no-op-on-failure convention. */
-                paint_save_btn.hovered = paint_is_topmost && button_hit_test(&paint_save_btn, cx, cy);
-                if (paint_save_btn.hovered && click_edge) {
-                    char path[FS_PATH_MAX];
-                    if (paint_build_sprite_path(path, (int)sizeof(path))) {
-                        unsigned char sprite_bytes[PAINT_GRID_SIZE * PAINT_GRID_SIZE];
-                        int prow, pcol;
-                        for (prow = 0; prow < PAINT_GRID_SIZE; prow++) {
-                            for (pcol = 0; pcol < PAINT_GRID_SIZE; pcol++) {
-                                sprite_bytes[prow * PAINT_GRID_SIZE + pcol] = (unsigned char)paint.grid[prow][pcol];
-                            }
-                        }
-                        fs_delete(path);
-                        fs_create_file(path, sprite_bytes, sizeof(sprite_bytes));
-                    }
-                }
-                paint_save_btn.pressed = paint_save_btn.hovered && left_held;
-
-                /* The other half of SAVE's round-trip: reads /HOME/<name>
-                 * back into the grid. Only accepts it if the file is
-                 * exactly 256 bytes -- fs_read_file() only rejects "too
-                 * big for buf_size", not "too small", so a truncated or
-                 * wrong-format file would otherwise partially load with
-                 * the rest of sprite_bytes left as stack garbage. Each
-                 * byte is also clamped to a valid palette index
-                 * (< PAINT_PALETTE_COLORS, else 0): draw_paint_group()
-                 * indexes paint_palette[] with pt->grid[row][col]
-                 * completely unchecked, so a stray out-of-range byte
-                 * from a bad or hand-edited file would read past that
-                 * array. Anything else (missing file, wrong size) is a
-                 * silent no-op, same convention as SAVE with an empty
-                 * name. */
-                paint_load_btn.hovered = paint_is_topmost && button_hit_test(&paint_load_btn, cx, cy);
-                if (paint_load_btn.hovered && click_edge) {
-                    char path[FS_PATH_MAX];
-                    if (paint_build_sprite_path(path, (int)sizeof(path))) {
-                        unsigned char sprite_bytes[PAINT_GRID_SIZE * PAINT_GRID_SIZE];
-                        unsigned int out_size;
-                        if (fs_read_file(path, sprite_bytes, sizeof(sprite_bytes), &out_size) == 0 &&
-                            out_size == sizeof(sprite_bytes)) {
-                            int prow, pcol;
-                            for (prow = 0; prow < PAINT_GRID_SIZE; prow++) {
-                                for (pcol = 0; pcol < PAINT_GRID_SIZE; pcol++) {
-                                    unsigned char v = sprite_bytes[prow * PAINT_GRID_SIZE + pcol];
-                                    paint.grid[prow][pcol] = (v < PAINT_PALETTE_COLORS) ? v : 0;
-                                }
-                            }
-                        }
-                    }
-                }
-                paint_load_btn.pressed = paint_load_btn.hovered && left_held;
             }
 
             prev_left_held = left_held;
@@ -2943,18 +2444,6 @@ static void kmain_frame(void) {
                 editor_delete_forward(&ed);
             } else if (ed.focused) {
                 editor_feed_char(&ed, c);
-            } else if (paint_name_input.focused && c == KEY_LEFT) {
-                console_input_move_cursor(&paint_name_input, -1);
-            } else if (paint_name_input.focused && c == KEY_RIGHT) {
-                console_input_move_cursor(&paint_name_input, 1);
-            } else if (paint_name_input.focused) {
-                /* No Enter-triggered action here, unlike FILES' own
-                 * name_input -- SAVE only ever fires from clicking the
-                 * SAVE button itself, never from typing. Enter just
-                 * inserts nothing (console_input_feed_char()'s return
-                 * value is ignored) since a filename has no meaningful
-                 * use for a literal newline. */
-                console_input_feed_char(&paint_name_input, c);
             } else if (ring3_focused) {
                 ring3_event_pending = RING3_EVENT_KEY;
                 ring3_event_key = c;
@@ -3026,31 +2515,6 @@ static void kmain_frame(void) {
                                       (ed.cursor != old_ed_cursor) || (ed.focused != old_ed_focused) ||
                                       (save_btn.hovered != old_save_btn_hovered) ||
                                       (save_btn.pressed != old_save_btn_pressed);
-            /* paint.grid[][]'s own content changes (via PIXEL) are
-             * caught via paint.grid_generation (bumped unconditionally
-             * by forth_hook_pixel() -- see its own comment) rather than
-             * diffing all 256 cells here every frame. This used to rely
-             * on REFRESH's own synchronous mid-loop redraw, but REFRESH
-             * was deleted in the 2026-08-19 concurrency pass; investigating
-             * that stale assumption (2026-08-22) found grid updates were
-             * still visibly redrawing live in the common case only by
-             * accident -- either another window's damage happened to
-             * overlap PAINT's canvas, or (for real mouse-driven painting)
-             * the cursor's own per-frame footprint sits on the affected
-             * cell -- not because content changes were actually tracked.
-             * grid_generation removes that reliance on coincidence. */
-            touched[WIN_KIND_PAINT] = touched[WIN_KIND_PAINT] || (paint.current_color != old_paint_current_color) ||
-                                      (paint.grid_generation != old_paint_grid_generation) ||
-                                      (paint_name_input.len != old_paint_name_input_len) ||
-                                      (paint_name_input.cursor != old_paint_name_input_cursor) ||
-                                      (paint_name_input.focused != old_paint_name_input_focused) ||
-                                      !str_eq(paint_name_input.text, old_paint_name_input_text) ||
-                                      (paint_save_btn.hovered != old_paint_save_btn_hovered) ||
-                                      (paint_save_btn.pressed != old_paint_save_btn_pressed) ||
-                                      (paint_load_btn.hovered != old_paint_load_btn_hovered) ||
-                                      (paint_load_btn.pressed != old_paint_load_btn_pressed) ||
-                                      (paint.palette_popup_open != old_paint_palette_popup_open) ||
-                                      (paint.palette_hidden_mask != old_paint_palette_hidden_mask);
             {
                 struct window_content wc = {
                     .co = &co, .ci = &ci, .shell_co = &shell_co, .shell_ci = &shell_ci, .cwd = cwd,
@@ -3058,8 +2522,6 @@ static void kmain_frame(void) {
                     .files_selected_mask = files_selected_mask, .name_input = &name_input,
                     .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
                     .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
-                    .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
-                    .paint_load_btn = &paint_load_btn,
                 };
                 update_and_present(w, h, windows, fx_enabled, &wc, z_order, old_z, old_mx, old_my, mx, my,
                                    cursor_color, old_x, old_y, touched, fx_enabled != old_fx_enabled, &bar,
@@ -3266,33 +2728,6 @@ void kmain(void) {
     windows[WIN_KIND_EDITOR].minimize_hovered = 0;
     windows[WIN_KIND_EDITOR].close_hovered = 0;
 
-    /* 272x356 -- room for the 256x256 canvas (16px/cell x 16 cells),
-     * the current-color swatch (the popup overlays the canvas itself
-     * rather than needing its own row), a filename field, and a SAVE
-     * button,
-     * all with 8px margins (the filename field adds 26px over the
-     * original 330 -- its own 20px height plus a 6px gap above SAVE,
-     * same spacing FILES' name_input/NEW DIR pair already uses). y=80
-     * keeps this comfortably inside clamp_window_to_screen()'s own
-     * max_y for a window this tall (98, on a 640x480/24px-taskbar
-     * screen) -- the same invariant a prior stage's default window
-     * position violated and had to fix; checked deliberately this
-     * time, including after this height change. This invariant still
-     * holds for any h >= 480 after the position became screen-size-scaled,
-     * not just the 640x480 baseline this was originally checked against. */
-    windows[WIN_KIND_PAINT].x = 340 * w / BASELINE_W;
-    windows[WIN_KIND_PAINT].y = 80 * h / BASELINE_H;
-    windows[WIN_KIND_PAINT].w = 272;
-    windows[WIN_KIND_PAINT].h = 356;
-    windows[WIN_KIND_PAINT].title = "RAVE-OS PAINT";
-    windows[WIN_KIND_PAINT].accent_color = 0xFF3B30; /* red, same as PAINT's own palette index 2 */
-    /* Closed at boot, opened only via the PAINT Forth word (Task 3) --
-     * no start-menu launcher, matching EDIT's own SHELL-only
-     * precedent. */
-    windows[WIN_KIND_PAINT].state = WINDOW_CLOSED;
-    windows[WIN_KIND_PAINT].minimize_hovered = 0;
-    windows[WIN_KIND_PAINT].close_hovered = 0;
-
     /* Closed at boot like every window above -- WINDOW_OPEN is #define'd
      * 0, so leaving this unset would default the slot to open and show
      * a garbage window (zeroed x/y/w/h/title) on every ordinary boot.
@@ -3313,8 +2748,7 @@ void kmain(void) {
     z_order[1] = WIN_KIND_FILES;
     z_order[2] = WIN_KIND_SHELL;
     z_order[3] = WIN_KIND_EDITOR;
-    z_order[4] = WIN_KIND_PAINT;
-    z_order[5] = WIN_KIND_RING3;
+    z_order[4] = WIN_KIND_RING3;
 
     /* Narrowed to leave room for the start menu's button at the same y,
      * so the two together read as one continuous bottom bar. */
@@ -3404,42 +2838,6 @@ void kmain(void) {
     }
     editor_path[0] = 0;
     editor_title[0] = 0;
-
-    /* Filename field, same widget FILES' own name_input already uses,
-     * stacked directly above SAVE the same way FILES stacks name_input
-     * above NEW DIR. Pre-filled with "SPRITE" so leaving it untouched
-     * reproduces the exact fixed /HOME/SPRITE path this used to always
-     * save to -- existing muscle memory (or a headless test) still
-     * gets the same result without typing anything. */
-    paint_name_input.x = windows[WIN_KIND_PAINT].x + 8;
-    paint_name_input.y = windows[WIN_KIND_PAINT].y + 8 + PAINT_GRID_SIZE * PAINT_CELL_PX + 4 + 24 + 8;
-    paint_name_input.w = PAINT_GRID_SIZE * PAINT_CELL_PX;
-    paint_name_input.h = 20;
-    console_input_set_text(&paint_name_input, "SPRITE");
-    paint_name_input.focused = 0;
-
-    /* SAVE/LOAD side by side, same "(total - 16 - 8) / 2, second.x =
-     * first.x + first.w + 8" split FILES' own NEW DIR/DELETE pair
-     * already uses -- no window resize needed, since this row already
-     * had exactly one button's worth of width to spare. */
-    paint_save_btn.x = windows[WIN_KIND_PAINT].x + 8;
-    paint_save_btn.y = paint_name_input.y + paint_name_input.h + 6;
-    paint_save_btn.w = (PAINT_GRID_SIZE * PAINT_CELL_PX - 8) / 2;
-    paint_save_btn.h = 22;
-    paint_save_btn.label = "SAVE";
-    paint_save_btn.hovered = 0;
-    paint_save_btn.pressed = 0;
-
-    paint_load_btn.x = paint_save_btn.x + paint_save_btn.w + 8;
-    paint_load_btn.y = paint_save_btn.y;
-    paint_load_btn.w = paint_save_btn.w;
-    paint_load_btn.h = 22;
-    paint_load_btn.label = "LOAD";
-    paint_load_btn.hovered = 0;
-    paint_load_btn.pressed = 0;
-
-    paint.current_color = 1; /* white -- a visible default against the near-black eraser color at index 0 */
-    paint.opened_once = 0;
 
     mx = w / 2;
     my = h - 100; /* clear of the taskbar/start menu strip below it */
@@ -3921,8 +3319,6 @@ void kmain(void) {
             .files_selected_mask = files_selected_mask, .name_input = &name_input,
             .new_dir_btn = &new_dir_btn, .delete_btn = &delete_btn, .cut_btn = &cut_btn,
             .copy_btn = &copy_btn, .paste_btn = &paste_btn, .ed = &ed, .save_btn = &save_btn,
-            .pt = &paint, .paint_name_input = &paint_name_input, .paint_save_btn = &paint_save_btn,
-            .paint_load_btn = &paint_load_btn,
         };
         draw_scene(w, h, windows, fx_enabled, &wc, z_order, &bar, taskbar_hovered, &menu, menu_hovered_item, mx, my,
                   cursor_color, &splash);

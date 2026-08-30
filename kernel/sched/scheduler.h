@@ -43,7 +43,7 @@ void scheduler_yield(void);
 void scheduler_tick(void);
 
 /* -1 outside any program; otherwise the slot index currently
- * mid-switch. Lets a hook (e.g. forth_hook_paint_open()) learn which
+ * mid-switch. Lets a hook (e.g. forth_hook_yield()) learn which
  * program it's running inside of without any string-matching on how
  * that program was launched. */
 int scheduler_current_slot(void);
