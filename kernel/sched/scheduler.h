@@ -54,7 +54,16 @@ int scheduler_current_slot(void);
  * here specifically because nothing in this kernel holds an open
  * resource across calls). A slot that isn't currently running is
  * unaffected. Idempotent: calling this again on a slot whose timeout
- * is already counting down does not restart the count. */
+ * is already counting down does not restart the count.
+ *
+ * Currently has no production caller: its only caller was the
+ * in-kernel PAINT window's close-button code, deleted when PAINT moved
+ * to a standalone ring-3 binary (see docs/superpowers/specs/2026-08-29-
+ * standalone-paint-design.md). The ring-3 window close path uses
+ * `ring3_event_pending` instead, by design -- ring-3 programs have no
+ * scheduler slot to close. Still a coherent, tested part of the
+ * scheduler's API (see kernel/tests/test_scheduler.c), left in place
+ * for the next scheduler-backed program kind rather than deleted. */
 void scheduler_request_close(int slot);
 
 /* 1 if any program slot is reserved or running, 0 if the whole table

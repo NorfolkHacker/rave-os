@@ -1,5 +1,5 @@
 # Builds hello.bin, the first standalone ring-3 program -- a flat binary
-# fixed at 0x00200000 by hello.ld, loadable via kernel/kernel.c's
+# fixed at 0x00340000 by hello.ld, loadable via kernel/kernel.c's
 # program_load_and_run(). Same cross-toolchain and base flags as
 # kernel/Makefile; requires $HOME/opt/cross/bin on PATH.
 

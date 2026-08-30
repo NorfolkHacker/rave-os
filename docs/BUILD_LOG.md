@@ -4715,19 +4715,22 @@ carried kernel-side -- moved out. See
 was a native `WIN_KIND_PAINT` window plus an interpreted `/BIN/PAINT`
 Forth script is now `programs/paint/`, an ordinary flat-binary ring-3
 program built and seeded the same way `programs/hello/` already proved
-out, launched by a new Start Menu item that calls the same
-`program_load_and_run()` the Start Menu's other entries use.
+out, launched by a new Start Menu item that calls
+`program_load_and_run()` -- the first real caller of that function;
+every other Start Menu entry just opens a window directly and lets
+`kmain()`'s normal loop continue.
 
 **Everything the old implementation added is gone.** The
 `WIN_KIND_PAINT` window kind, `struct paint`, `paint_palette[]`,
-`draw_paint_group()`, `paint_palette_hit_test()`, PAINT's click
-handling and damage tracking, and `seed_bin_paint_script()` are all
-deleted from `kernel.c` -- confirmed by grep, nothing named `paint`
-survives outside the new standalone program and its own seed/launch
-plumbing. The eight Forth hooks this feature once gave the language
+`draw_paint_group()`, `paint_swatch_hit_test()`,
+`paint_popup_grid_hit_test()`, PAINT's click handling and damage
+tracking, and `seed_bin_paint_script()` are all deleted from
+`kernel.c` -- confirmed by grep, nothing named `paint` survives
+outside the new standalone program and its own seed/launch plumbing.
+The eight Forth hooks this feature once gave the language
 (`forth_hook_paint_open`, `forth_hook_pixel`, `forth_hook_mouse_x`/`_y`,
 `forth_hook_mouse_down`/`_mouse_right_down`, `forth_hook_current_color`,
-`forth_hook_refresh`) and their `PIXEL`/`MOUSE-X`/`MOUSE-Y`/
+`forth_hook_window_closed`) and their `PIXEL`/`MOUSE-X`/`MOUSE-Y`/
 `MOUSE-DOWN?`/`MOUSE-RIGHT-DOWN?`/`CURRENT-COLOR`/`WINDOW-CLOSED?`/
 `PAINT` primitive words are gone from `forth.c` too -- Forth's
 graphics/mouse vocabulary reverts to nothing, same as before
@@ -4798,8 +4801,10 @@ Files: `docs/BUILD_LOG.md` (this entry). The feature itself --
 `programs/paint/` (new standalone binary and linker script),
 `kernel/kernel.c` (embedding/seeding `/BIN/PAINT.BIN`, Start Menu
 wiring, the `WIN_KIND_PAINT`/Forth-hook removal, the
-`PROGRAM_LOAD_ADDR` relocation), `kernel/forth.c`/`forth_hooks.h`
-(PAINT primitive/hook removal), `kernel/gui/startmenu.c`/`startmenu.h`
-(`STARTMENU_ITEM_PAINT`) -- was built and committed across the prior
-tasks on this branch; this entry documents the full effort's closeout
-and today's post-removal regression pass only.
+`PROGRAM_LOAD_ADDR` relocation), `kernel/forth/forth.c`/
+`forth_hooks.h` (PAINT primitive/hook removal),
+`kernel/gui/startmenu.c`/`startmenu.h` (`STARTMENU_ITEM_PAINT`),
+`programs/hello/hello.ld` (origin updated alongside `paint.ld` by the
+same `PROGRAM_LOAD_ADDR` relocation) -- was built and committed across
+the prior tasks on this branch; this entry documents the full effort's
+closeout and today's post-removal regression pass only.

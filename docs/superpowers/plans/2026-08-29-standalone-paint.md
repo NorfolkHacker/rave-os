@@ -1,5 +1,15 @@
 # Standalone Paint Binary Implementation Plan
 
+> **Amendment (post-Task 5):** every `0x00200000` load address named
+> below was correct when this plan was written, but got relocated to
+> `0x00340000` mid-plan -- Task 5's own verification found a real
+> collision between the fixed ring-3 load address and the graphics
+> backbuffer, both at `0x200000` (see `docs/BUILD_LOG.md`'s closeout
+> entry / git history for the fix). The actual shipped address, in
+> `programs/paint/paint.ld` and everywhere else, is `0x00340000`. Left
+> as-written below rather than rewritten throughout -- don't "fix" the
+> `.ld` files back to `0x00200000` to match this document.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Move PAINT out of the kernel entirely into `programs/paint/paint.bin`, a standalone ring-3 flat binary launched by clicking a new Start Menu "PAINT" entry, and delete every kernel-resident PAINT implementation (window chrome, Forth hooks, Forth script) it replaces.

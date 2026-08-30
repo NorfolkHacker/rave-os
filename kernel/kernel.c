@@ -1677,9 +1677,10 @@ void window_ring3_close(void) {
  * a clean gap past the backbuffer's real end, while staying inside the
  * one 4MB page directory entry (PDE 0) paging_set_user() has ever made
  * user-accessible -- comfortably clear of the kernel's own .bss too
- * (ends at 0x440b0 in a real build, confirmed via nm) as it always
- * was. See RING3_SHADOW_ADDR's own comment above for where this
- * collision used to be documented as out of scope. */
+ * (well below 0x340000; re-check via `nm` if this ever matters again,
+ * the exact end address drifts as the kernel grows) as it always was.
+ * See RING3_SHADOW_ADDR's own comment above for where this collision
+ * used to be documented as out of scope. */
 #define PROGRAM_LOAD_ADDR 0x00340000
 /* Everything free below PDE 0's 4MB end -- generous on purpose, not a
  * real limit on how big a loaded program could be; fs_read_file()'s
@@ -2773,8 +2774,14 @@ void kmain(void) {
      * 0, so leaving this unset would default the slot to open and show
      * a garbage window (zeroed x/y/w/h/title) on every ordinary boot.
      * Geometry/title are left at their zeroed defaults until a ring-3
-     * program calls SYS_WINDOW_OPEN; there's no launcher for this one,
-     * matching EDITOR's own "no start-menu entry" precedent. */
+     * program calls SYS_WINDOW_OPEN; the WIN_KIND_RING3 window kind
+     * itself still has no *direct* start-menu launcher of its own --
+     * nothing in the Start Menu says "open the ring-3 window" the way
+     * FORTH/FILES/SHELL's entries open their own window kind directly.
+     * PAINT's Start Menu item (added since) launches the *program* via
+     * program_load_and_run(), which is a different thing: it's the
+     * running ring-3 program that calls SYS_WINDOW_OPEN on this slot,
+     * not the menu opening it as a menu action. */
     windows[WIN_KIND_RING3].state = WINDOW_CLOSED;
     windows[WIN_KIND_RING3].minimize_hovered = 0;
     windows[WIN_KIND_RING3].close_hovered = 0;

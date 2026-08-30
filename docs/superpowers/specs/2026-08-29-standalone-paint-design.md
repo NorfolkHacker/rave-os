@@ -1,5 +1,16 @@
 # A standalone, clickable paint binary (retiring the in-kernel PAINT window)
 
+> **Amendment (post-Task 5):** every `0x00200000` load address below
+> was true when this document was written, but got relocated to
+> `0x00340000` mid-plan (Task 5's own verification found a real
+> collision between the fixed ring-3 load address and the graphics
+> backbuffer, both at `0x200000` -- see `docs/BUILD_LOG.md`'s closeout
+> entry and the git history around that fix). The actual shipped
+> address, in `programs/paint/paint.ld` and everywhere else, is
+> `0x00340000`. Left as-written below rather than rewritten throughout
+> -- don't "fix" the `.ld` files back to `0x00200000` to match this
+> document; the document is what's stale.
+
 ## Purpose
 
 Today "PAINT" is not really an application -- it's kernel-resident
@@ -163,8 +174,14 @@ locally since paint.c has no access to `kmain()`'s own constants).
 **State:** `int grid[16][16]` (palette index per cell, all zero at
 start -- no `opened_once` flag needed, since this is a fresh process
 every launch), `int current_color`, a `char name[FS_PATH_MAX]` buffer
-with length/cursor for the filename field (always focused -- the only
-text field in this program, so no click-to-focus logic is needed).
+with length/cursor for the filename field. The only text field in this
+program, so no click-to-focus logic is needed *inside paint.c* -- but
+keyboard events don't reach it automatically: the kernel-side
+`ring3_focused` flag only goes true when a click lands inside the
+window's body (see `kernel.c`'s click-edge handling), so `RING3_EVENT_KEY`
+events (and therefore typing into this field) start arriving only
+after the user has clicked somewhere in the PAINT window at least
+once, same as any other window's text field.
 
 **Main loop:**
 ```
