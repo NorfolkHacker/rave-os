@@ -36,7 +36,7 @@ struct sys_window_open_args { int x; int y; int w; int h; const char *title; };
 #define RING3_EVENT_CLICK 1
 #define RING3_EVENT_CLOSED 2
 #define RING3_EVENT_KEY 3
-struct sys_wait_event_args { int type; int x; int y; char key; };
+struct sys_wait_event_args { int type; int x; int y; char key; int held; };
 
 /* Forward declarations for functions that _start() calls directly */
 static int gfx_width(void);
@@ -48,7 +48,7 @@ static void draw_strip(void);
 static void draw_name_field(void);
 static void gfx_fill_rect(int x, int y, int w, int h, unsigned int rgb);
 static void gfx_present_rect(int x, int y, int w, int h);
-static void wait_event(int *type, int *x, int *y, char *key);
+static void wait_event(int *type, int *x, int *y, char *key, int *held);
 static int hit_canvas(int cx, int cy, int *col, int *row);
 static int hit_strip(int cx, int cy, int *idx);
 static int hit_rect(int cx, int cy, int rx, int ry, int rw, int rh);
@@ -98,7 +98,7 @@ static int name_len = 6;
 static int win_x, win_y;
 
 void _start(void) {
-    int type, x, y;
+    int type, x, y, held;
     char key;
 
     win_x = 340 * gfx_width() / 640;  /* same 640x480 baseline every other window's own placement math uses */
@@ -108,23 +108,30 @@ void _start(void) {
     draw_all();
 
     for (;;) {
-        wait_event(&type, &x, &y, &key);
+        wait_event(&type, &x, &y, &key, &held);
         if (type == RING3_EVENT_CLOSED) {
             break;
         } else if (type == RING3_EVENT_CLICK) {
             int col, row, idx;
+            /* Canvas painting acts on every event (held or not) so
+             * holding the button down and dragging paints a continuous
+             * stroke, not just one cell per click -- CLICK is
+             * level-triggered now (see syscall.h). The palette strip
+             * and SAVE/LOAD buttons stay press-only (held == 0) so
+             * dragging across them doesn't repeatedly re-select a
+             * color or re-fire a file write every frame. */
             if (hit_canvas(x, y, &col, &row)) {
                 grid[row][col] = current_color;
                 gfx_fill_rect(win_x + OFF_X + col * CELL, win_y + CANVAS_OFF_Y + row * CELL, CELL, CELL,
                               palette[current_color]);
                 gfx_present_rect(win_x + OFF_X + col * CELL, win_y + CANVAS_OFF_Y + row * CELL, CELL, CELL);
-            } else if (hit_strip(x, y, &idx)) {
+            } else if (!held && hit_strip(x, y, &idx)) {
                 current_color = idx;
                 draw_strip();
                 gfx_present_rect(win_x + OFF_X, win_y + STRIP_OFF_Y, CANVAS_SIZE, STRIP_H);
-            } else if (hit_rect(x, y, win_x + OFF_X, win_y + BTN_OFF_Y, BTN_W, BTN_H)) {
+            } else if (!held && hit_rect(x, y, win_x + OFF_X, win_y + BTN_OFF_Y, BTN_W, BTN_H)) {
                 do_save();
-            } else if (hit_rect(x, y, win_x + OFF_X + BTN_W + 8, win_y + BTN_OFF_Y, BTN_W, BTN_H)) {
+            } else if (!held && hit_rect(x, y, win_x + OFF_X + BTN_W + 8, win_y + BTN_OFF_Y, BTN_W, BTN_H)) {
                 do_load();
                 draw_canvas();
                 gfx_present_rect(win_x + OFF_X, win_y + CANVAS_OFF_Y, CANVAS_SIZE, CANVAS_SIZE);
@@ -154,7 +161,7 @@ void _start(void) {
      * this one closes. See docs/superpowers/specs/2026-08-29-
      * standalone-paint-design.md's Design section. */
     for (;;) {
-        wait_event(&type, &x, &y, &key);
+        wait_event(&type, &x, &y, &key, &held);
     }
 }
 
@@ -189,13 +196,14 @@ static void window_open(int x, int y, int w, int h, const char *title) {
  * starts uninitialized, matching struct sys_wait_event_args's own
  * documented contract in syscall.h ("filled in by the syscall, not
  * read from by it"). */
-static void wait_event(int *type, int *x, int *y, char *key) {
+static void wait_event(int *type, int *x, int *y, char *key, int *held) {
     struct sys_wait_event_args a;
     syscall1(SYS_WAIT_EVENT, (int)&a);
     *type = a.type;
     *x = a.x;
     *y = a.y;
     *key = a.key;
+    *held = a.held;
 }
 
 static void fs_delete(const char *path) {

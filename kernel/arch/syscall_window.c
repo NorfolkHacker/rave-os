@@ -7,7 +7,7 @@
  * context_switch()/enter_ring3() convention. */
 extern void window_ring3_open(int x, int y, int w, int h, const char *title);
 extern void window_ring3_close(void);
-extern void ring3_wait_event(int *type, int *x, int *y, char *key);
+extern void ring3_wait_event(int *type, int *x, int *y, char *key, int *held);
 
 int syscall_dispatch_window(int num, int arg) {
     if (num == SYS_WINDOW_OPEN) {
@@ -21,7 +21,7 @@ int syscall_dispatch_window(int num, int arg) {
     }
     if (num == SYS_WAIT_EVENT) {
         struct sys_wait_event_args *a = (struct sys_wait_event_args *)arg;
-        ring3_wait_event(&a->type, &a->x, &a->y, &a->key);
+        ring3_wait_event(&a->type, &a->x, &a->y, &a->key, &a->held);
         return 0;
     }
     return syscall_dispatch_core(num, arg);

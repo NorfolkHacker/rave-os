@@ -284,7 +284,7 @@ struct sys_window_open_args {
 #define RING3_EVENT_CLOSED 2
 #define RING3_EVENT_KEY 3
 
-/* Mirrors ring3_wait_event()'s four output parameters (kernel/kernel.c).
+/* Mirrors ring3_wait_event()'s five output parameters (kernel/kernel.c).
  * type is one of the RING3_EVENT_* values above; x/y are valid only
  * when type == RING3_EVENT_CLICK, and are absolute screen coordinates
  * -- matching every other syscall a ring-3 program already uses
@@ -295,12 +295,25 @@ struct sys_window_open_args {
  * LEFT/RIGHT/HOME/END/DELETE pseudo-codes. No raw scancodes or
  * modifier keys; ring-3 programs get the same reduced vocabulary every
  * other focused text field in this kernel already receives. See
- * docs/superpowers/specs/2026-08-29-ring3-window-keyboard-events-design.md. */
+ * docs/superpowers/specs/2026-08-29-ring3-window-keyboard-events-design.md.
+ *
+ * held is valid only when type == RING3_EVENT_CLICK: 0 on the frame the
+ * left button first went down over the window (the old, only, edge),
+ * 1 on every subsequent frame the button is still held down over it.
+ * RING3_EVENT_CLICK itself is level-triggered, not edge-triggered --
+ * it now fires on every frame the button is down over the window, not
+ * just the initial press -- so a program doing continuous work while
+ * dragging (e.g. painting) sees a fresh CLICK each frame; held lets it
+ * tell that apart from the initial press for actions that should only
+ * fire once per click (e.g. a button, not a canvas). See
+ * docs/superpowers/specs/2026-08-29-standalone-paint-design.md's
+ * closeout note on why this changed after PAINT shipped. */
 struct sys_wait_event_args {
     int type;
     int x;
     int y;
     char key;
+    int held;
 };
 
 /* Pure -- exactly what sub-project (B) shipped as syscall_dispatch(),
