@@ -4703,3 +4703,103 @@ permanent; the temporary proof payload, added and fully removed);
 `docs/superpowers/specs/2026-08-29-ring3-window-keyboard-events-design.md`
 (design spec, written and committed before implementation);
 `docs/BUILD_LOG.md`, `docs/IDEAS.md` (this entry and closeout).
+
+## 2026-08-30 -- Standalone PAINT: out of the kernel and into a ring-3 binary, closeout
+
+The payoff of the whole userspace sub-project C run above: with a
+loadable program format, a gfx/fs/window syscall surface,
+`ring3_wait_event()`, and content persistence all landed one slice at a
+time, PAINT itself -- the largest single feature this project had
+carried kernel-side -- moved out. See
+`docs/superpowers/specs/2026-08-29-standalone-paint-design.md`. What
+was a native `WIN_KIND_PAINT` window plus an interpreted `/BIN/PAINT`
+Forth script is now `programs/paint/`, an ordinary flat-binary ring-3
+program built and seeded the same way `programs/hello/` already proved
+out, launched by a new Start Menu item that calls the same
+`program_load_and_run()` the Start Menu's other entries use.
+
+**Everything the old implementation added is gone.** The
+`WIN_KIND_PAINT` window kind, `struct paint`, `paint_palette[]`,
+`draw_paint_group()`, `paint_palette_hit_test()`, PAINT's click
+handling and damage tracking, and `seed_bin_paint_script()` are all
+deleted from `kernel.c` -- confirmed by grep, nothing named `paint`
+survives outside the new standalone program and its own seed/launch
+plumbing. The eight Forth hooks this feature once gave the language
+(`forth_hook_paint_open`, `forth_hook_pixel`, `forth_hook_mouse_x`/`_y`,
+`forth_hook_mouse_down`/`_mouse_right_down`, `forth_hook_current_color`,
+`forth_hook_refresh`) and their `PIXEL`/`MOUSE-X`/`MOUSE-Y`/
+`MOUSE-DOWN?`/`MOUSE-RIGHT-DOWN?`/`CURRENT-COLOR`/`WINDOW-CLOSED?`/
+`PAINT` primitive words are gone from `forth.c` too -- Forth's
+graphics/mouse vocabulary reverts to nothing, same as before
+2026-08-17, since nothing else ever used those hooks. The `/BIN/PAINT`
+Forth script itself no longer exists; `/BIN/PAINT.BIN`, the new
+standalone binary, is what the Start Menu launches instead.
+
+**One feature was deliberately not carried over: the palette
+popup/hide-restore** from
+`docs/superpowers/specs/2026-08-22-paint-palette-popup-design.md`,
+which depended on a right-click event the ring-3 syscall ABI has no
+equivalent for (`SYS_WAIT_EVENT`'s click delivery is left-button-only,
+by design, same as every other window kind). The standalone binary
+uses a plain always-visible color strip instead -- a real regression in
+screen real estate against the in-kernel version, accepted rather than
+building a right-click event just to restore it.
+
+**PAINT can be launched once per boot.** Not a new limitation --
+`programs/hello/`'s own proof already ran into and documented the same
+"one ring-3 program at a time" ceiling the kernel's loader currently
+has. PAINT inherits it unchanged; fixing it (if ever) is a
+loader/scheduler project of its own, out of this one's scope.
+
+**A genuine pre-existing bug found and fixed along the way, not
+paint-specific.** Earlier on this branch, headless verification turned
+up a real address collision: `PROGRAM_LOAD_ADDR` and `BACKBUFFER_ADDR`
+both resolved to the same physical page, so any loaded ring-3 program
+would have silently corrupted the graphics backbuffer (or vice versa)
+the moment it ran. Relocated `PROGRAM_LOAD_ADDR` to `0x00340000`,
+clear of both `BACKBUFFER_ADDR` and the `ring3_shadow` buffer's own
+fixed address from the content-persistence slice above. This affects
+every loaded ring-3 program, not just PAINT, and is already committed
+on this branch.
+
+**Closeout regression pass, headless QEMU, full clean rebuild
+(`make clean && make && make fs.img`, zero errors) -- run specifically
+to confirm Tasks 6-7's removal of the entire in-kernel implementation
+didn't break the standalone binary's own dependencies
+(`program_load_and_run()`, the gfx/fs/window syscalls,
+`ring3_wait_event()`):**
+
+- **Start Menu -> PAINT** opened the `RAVE-OS PAINT` window over the
+  desktop, palette strip and SAVE/LOAD buttons all present.
+- **Painting** -- selecting a non-default color swatch and clicking
+  several canvas cells left visible painted cells at the clicked
+  positions.
+- **SAVE**, then painting one further cell, then **LOAD** -- the
+  extra cell vanished and only the originally-saved shape remained,
+  proof this is real file I/O round-tripping through the fs syscalls,
+  not an in-memory no-op.
+- **Closing the window** (title-bar X) returned cleanly to the bare
+  desktop -- no crash, no leftover window, taskbar still just `MENU`.
+- **Start Menu -> FILES** afterward opened normally and listed
+  `/HOME`'s contents including `SPRITE 256B` -- the saved sprite, at
+  the same 256-byte size the old kernel-side format used, and proof
+  the desktop stays fully responsive to further window opens after a
+  ring-3 program has run and closed.
+- **A plain boot with no clicks at all** showed nothing but the
+  ordinary desktop -- taskbar, cursor, no open windows -- confirming
+  `/BIN/PAINT.BIN`'s seeding and the new Start Menu item are true
+  no-ops until clicked.
+
+Verified: cross-compiler build clean from a full `make clean`, zero
+errors, zero warnings beyond the pre-existing RWX-segment linker
+warning.
+
+Files: `docs/BUILD_LOG.md` (this entry). The feature itself --
+`programs/paint/` (new standalone binary and linker script),
+`kernel/kernel.c` (embedding/seeding `/BIN/PAINT.BIN`, Start Menu
+wiring, the `WIN_KIND_PAINT`/Forth-hook removal, the
+`PROGRAM_LOAD_ADDR` relocation), `kernel/forth.c`/`forth_hooks.h`
+(PAINT primitive/hook removal), `kernel/gui/startmenu.c`/`startmenu.h`
+(`STARTMENU_ITEM_PAINT`) -- was built and committed across the prior
+tasks on this branch; this entry documents the full effort's closeout
+and today's post-removal regression pass only.
