@@ -75,6 +75,13 @@ static void do_load(void);
 #define BTN_W ((CANVAS_SIZE - 8) / 2)                   /* 124 */
 #define WIN_W (OFF_X + CANVAS_SIZE + 8)                 /* 272 */
 #define WIN_H (BTN_OFF_Y + BTN_H + 8)                   /* 352 */
+/* The visible field is NAME_W (256px) wide; text starts 4px in and
+ * each glyph advances 6px (text_puts()'s own "5x7 glyph, 6px advance"
+ * layout). 40 chars * 6px = 240px, +4px start = 244px, comfortably
+ * inside 256px -- clamps typed input to what the field can actually
+ * show instead of letting it overflow the field/window onto the
+ * desktop. */
+#define NAME_MAX_CHARS 40
 
 /* Same 16-color palette as the old kernel-side paint_palette[]
  * (kernel/kernel.c), copied verbatim so a sprite saved by the old
@@ -127,7 +134,7 @@ void _start(void) {
                 if (name_len > 0) {
                     name_len--;
                 }
-            } else if (key >= 32 && key < 127 && name_len < (int)sizeof(name) - 1) {
+            } else if (key >= 32 && key < 127 && name_len < NAME_MAX_CHARS) {
                 name[name_len++] = key;
             }
             name[name_len] = 0;
@@ -162,11 +169,6 @@ static int syscall1(int num, int arg) {
 
 static int gfx_width(void) { return syscall1(SYS_GFX_WIDTH, 0); }
 static int gfx_height(void) { return syscall1(SYS_GFX_HEIGHT, 0); }
-
-static void gfx_put_pixel(int x, int y, unsigned int rgb) {
-    struct sys_gfx_put_pixel_args a = { x, y, rgb };
-    syscall1(SYS_GFX_PUT_PIXEL, (int)&a);
-}
 
 static void gfx_fill_rect(int x, int y, int w, int h, unsigned int rgb) {
     struct sys_gfx_fill_rect_args a = { x, y, w, h, rgb };
