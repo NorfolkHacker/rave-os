@@ -1341,7 +1341,7 @@ static int fx_default_from_config(void) {
 /* Seeds four self-contained /BIN scripts demonstrating the synth's
  * Forth surface (VOICE/WAVE/ONA/ADSR/GATE-ON, the resonant filter,
  * ring modulation, and the arpeggio engine) -- same idempotent
- * fs_create_file() write-once shape as seed_bin_paint_script() above,
+ * fs_create_file() write-once shape as the seeding functions above,
  * so a user who EDITs and rewrites one keeps their own version across
  * reboots. None of these use Forth-level comments (this dialect has
  * none -- see forth.c's handle_compile_token()/handle_immediate_token(),
