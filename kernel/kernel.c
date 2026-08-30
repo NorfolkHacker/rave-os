@@ -64,7 +64,7 @@
 #define WIN_KIND_SHELL 2
 #define WIN_KIND_EDITOR 3
 /* Owned by a ring-3 program (see window_ring3_open()/_close() below),
- * not one of the five built-in apps above. Unlike them, its content is
+ * not one of the four built-in apps above. Unlike them, its content is
  * whatever the ring-3 program itself drew via the gfx syscalls -- there
  * is no draw_*_group() for it; draw_window_by_index() (further down)
  * redraws its chrome (border/titlebar/title, the part the kernel
@@ -393,6 +393,7 @@ static void raise_window(int *z_order, int idx) {
     z_order[0] = idx;
 }
 
+/* File-scope so they persist across kmain_frame() calls. */
 static int mx, my;
 static int mouse_buttons_live = 0;
 
@@ -529,7 +530,7 @@ static void draw_editor_group(const struct window *ed_win, const struct editor *
 }
 
 /* forth_hooks.h implementations -- forth.c's only window into
- * beep/scheduler-yield state, both implemented in kernel.c. The
+ * beep/synth/scheduler-yield state, all implemented in kernel.c. The
  * graphics/mouse hooks that used to live here (added for the PAINT
  * Forth words) were removed when PAINT moved to a standalone ring-3
  * binary -- see docs/superpowers/specs/2026-08-29-standalone-paint-
@@ -2733,7 +2734,7 @@ void kmain(void) {
      * a garbage window (zeroed x/y/w/h/title) on every ordinary boot.
      * Geometry/title are left at their zeroed defaults until a ring-3
      * program calls SYS_WINDOW_OPEN; there's no launcher for this one,
-     * matching PAINT/EDITOR's own "no start-menu entry" precedent. */
+     * matching EDITOR's own "no start-menu entry" precedent. */
     windows[WIN_KIND_RING3].state = WINDOW_CLOSED;
     windows[WIN_KIND_RING3].minimize_hovered = 0;
     windows[WIN_KIND_RING3].close_hovered = 0;
