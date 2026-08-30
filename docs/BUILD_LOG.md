@@ -4797,6 +4797,23 @@ Verified: cross-compiler build clean from a full `make clean`, zero
 errors, zero warnings beyond the pre-existing RWX-segment linker
 warning.
 
+**Addendum -- two behavioral fixes from the branch's final whole-branch
+review, after this entry was first written.** `program_load_and_run()`
+did not zero a loaded program's `.bss` before jumping to it; PAINT's
+own `grid[16][16]` (unwritten memory, not present in the flat binary
+file at all) could be read before any cell was painted, an
+out-of-bounds `palette[]` index only hidden by QEMU's zeroed cold-boot
+RAM. Fixed generically for every loaded program by zeroing the full
+`PROGRAM_LOAD_ADDR`..`+PROGRAM_LOAD_MAX_SIZE` window before the file
+read. Separately, dragging the PAINT window by its title bar was found
+to break both its on-screen rendering (`ring3_shadow` never gets
+translated to the window's new position) and its own click hit-testing
+(`paint.c` caches `win_x`/`win_y` once at startup and never updates
+them) -- dragging is now disabled outright for `WIN_KIND_RING3`
+windows rather than shipping broken-but-draggable; the spec's earlier,
+incorrect claim that the generic ring-3 slot "already handles all of
+that identically to every other window kind" has been corrected.
+
 Files: `docs/BUILD_LOG.md` (this entry). The feature itself --
 `programs/paint/` (new standalone binary and linker script),
 `kernel/kernel.c` (embedding/seeding `/BIN/PAINT.BIN`, Start Menu
