@@ -4,3 +4,6 @@
 [submodule "v2/components/lovyangfx"]
 	path = v2/components/lovyangfx
 	url = https://github.com/lovyan03/LovyanGFX.git
+[submodule "v2/components/freertos-kernel"]
+	path = v2/components/freertos-kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
