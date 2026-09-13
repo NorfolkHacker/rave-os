@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.15)
-project(acidos_v2_sim C)
+project(acidos_v2_sim C CXX)
 
 set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/../components/freertos-kernel)
+set(LOVYANGFX_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../components/lovyangfx)
 
 add_library(freertos_config INTERFACE)
 target_include_directories(freertos_config SYSTEM
@@ -14,5 +15,31 @@ set(FREERTOS_PORT "GCC_POSIX" CACHE STRING "" FORCE)
 
 add_subdirectory(${FREERTOS_KERNEL_PATH} ${CMAKE_CURRENT_BINARY_DIR}/FreeRTOS-Kernel)
 
-add_executable(acidos_sim sim_main.c)
-target_link_libraries(acidos_sim PRIVATE freertos_kernel freertos_config pthread)
+add_definitions(-DLGFX_SDL)
+
+file(GLOB LGFX_SOURCES CONFIGURE_DEPENDS
+    ${LOVYANGFX_DIR}/src/lgfx/Fonts/efont/*.c
+    ${LOVYANGFX_DIR}/src/lgfx/Fonts/IPA/*.c
+    ${LOVYANGFX_DIR}/src/lgfx/Fonts/lvgl/*.c
+    ${LOVYANGFX_DIR}/src/lgfx/utility/*.c
+    ${LOVYANGFX_DIR}/src/lgfx/v1/*.cpp
+    ${LOVYANGFX_DIR}/src/lgfx/v1/lv_font/*.c
+    ${LOVYANGFX_DIR}/src/lgfx/v1/misc/*.cpp
+    ${LOVYANGFX_DIR}/src/lgfx/v1/panel/Panel_Device.cpp
+    ${LOVYANGFX_DIR}/src/lgfx/v1/panel/Panel_FrameBufferBase.cpp
+    ${LOVYANGFX_DIR}/src/lgfx/v1/platforms/sdl/*.cpp
+)
+
+add_executable(acidos_sim
+    sim_main.c
+    gfx_sdl.cpp
+    main.cpp
+    ${LGFX_SOURCES}
+)
+
+target_include_directories(acidos_sim PRIVATE ${LOVYANGFX_DIR}/src)
+target_compile_features(acidos_sim PUBLIC cxx_std_17)
+
+find_package(SDL2 REQUIRED)
+target_include_directories(acidos_sim PRIVATE ${SDL2_INCLUDE_DIRS})
+target_link_libraries(acidos_sim PRIVATE freertos_kernel freertos_config pthread ${SDL2_LIBRARIES})
