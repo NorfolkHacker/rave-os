@@ -17,10 +17,19 @@ the design this directory implements.
   owns mruby VM FreeRTOS tasks), `hal/` (the display/input interface each
   target implements once), `gfx/` (thin drawing API over the HAL),
   `bindings/` (mruby C bindings exposing `gfx/` to Ruby).
-- `components/` — vendored git submodules (`mruby`, `lovyangfx`).
+- `components/` — vendored git submodules (`mruby`, `lovyangfx`,
+  `freertos-kernel`).
 - `apps/` — mruby scripts that run on the VM host.
 
 ## Building
+
+Step zero, for both targets: `mruby` itself carries a nested submodule
+(`mrbgems/mruby-compiler/lib/prism`), so a non-recursive submodule init
+leaves `prism/` empty and breaks both builds (mruby's own bytecode compiler
+needs it). From the repo root:
+```
+git submodule update --init --recursive
+```
 
 `sim`:
 ```
@@ -29,7 +38,8 @@ cmake --build v2/sim/build
 ./v2/sim/build/acidos_sim
 ```
 
-`hw` (requires ESP-IDF installed and sourced):
+`hw` (requires ESP-IDF >= 5.3, installed and sourced — that's the first
+release with `esp32p4` target support):
 ```
 cd v2/hw
 idf.py set-target esp32p4
