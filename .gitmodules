@@ -1,0 +1,6 @@
+[submodule "v2/components/mruby"]
+	path = v2/components/mruby
+	url = https://github.com/mruby/mruby.git
+[submodule "v2/components/lovyangfx"]
+	path = v2/components/lovyangfx
+	url = https://github.com/lovyan03/LovyanGFX.git
