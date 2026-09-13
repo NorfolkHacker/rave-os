@@ -32,6 +32,13 @@ acid_poll_event( mrb_state * mrb, mrb_value self )
         return mrb_symbol_value( mrb_intern_cstr( mrb, "close" ) );
     }
 
+    if( ev.type == KERNEL_EVENT_MOVED )
+    {
+        ctx->window_x = ev.x;
+        ctx->window_y = ev.y;
+        return mrb_nil_value();
+    }
+
     mrb_value values[ 3 ];
     values[ 0 ] = mrb_fixnum_value( ev.x );
     values[ 1 ] = mrb_fixnum_value( ev.y );

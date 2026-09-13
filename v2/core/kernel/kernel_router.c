@@ -61,6 +61,7 @@ kernel_router_poll( void )
         {
             win->x = x - g_drag_offset_x;
             win->y = y - g_drag_offset_y;
+            send_event( win, KERNEL_EVENT_MOVED, win->x, win->y, 0 );
         }
         return;
     }

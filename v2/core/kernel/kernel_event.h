@@ -4,7 +4,8 @@
 enum kernel_event_type
 {
     KERNEL_EVENT_TOUCH = 0,
-    KERNEL_EVENT_CLOSE = 1
+    KERNEL_EVENT_CLOSE = 1,
+    KERNEL_EVENT_MOVED = 2
 };
 
 struct kernel_event
