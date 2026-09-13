@@ -6,6 +6,7 @@
 #include "../core/kernel/kernel_window.h"
 #include "../core/kernel/kernel_spawn.h"
 #include "../core/kernel/kernel_router.h"
+#include "../core/gfx/gfx.h"
 
 void vAssertCalled( const char * pcFile, unsigned long ulLine )
 {
@@ -17,6 +18,7 @@ void
 sim_freertos_main( void )
 {
     kernel_window_init();
+    gfx_init();
 
     kernel_spawn_app( "v2/apps/demo_touch.rb", 10, 30, 140, 100, 1 );
     kernel_spawn_app( "v2/apps/demo_swatch.rb", 160, 70, 140, 100, 1 );

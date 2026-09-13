@@ -52,8 +52,6 @@ vm_host_task( void * pvParameters )
     ctx.window_w = params->window_w;
     ctx.window_h = params->window_h;
 
-    gfx_init();
-
     mrb_state * mrb = mrb_open();
     mrb->ud = &ctx;
     acid_bindings_register( mrb );
