@@ -29,6 +29,15 @@ acid_clear_user_area( mrb_state * mrb, mrb_value self )
     return mrb_nil_value();
 }
 
+static mrb_value
+acid_draw_desktop_strip( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    struct kernel_app_context * ctx = ( struct kernel_app_context * ) mrb->ud;
+    gfx_fill_rect( ctx->window_x, ctx->window_y, ctx->window_w, ctx->window_h, THEME_PANEL );
+    return mrb_nil_value();
+}
+
 void
 acid_chrome_bindings_register( mrb_state * mrb )
 {
@@ -36,4 +45,6 @@ acid_chrome_bindings_register( mrb_state * mrb )
                                  acid_draw_window_frame, MRB_ARGS_NONE() );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_clear_user_area",
                                  acid_clear_user_area, MRB_ARGS_NONE() );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_draw_desktop_strip",
+                                 acid_draw_desktop_strip, MRB_ARGS_NONE() );
 }

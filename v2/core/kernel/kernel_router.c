@@ -22,6 +22,13 @@ static void * g_drag_task = NULL;
 static int g_drag_offset_x = 0;
 static int g_drag_offset_y = 0;
 static bool g_was_pressed = false;
+static void * g_desktop_task = NULL;
+
+void
+kernel_router_set_desktop_task( void * task )
+{
+    g_desktop_task = task;
+}
 
 static void
 send_event( struct kernel_window * win, int type, int x, int y, int pressed )
@@ -48,6 +55,21 @@ kernel_router_poll( void )
     bool fresh_press = pressed && !g_was_pressed;
     bool fresh_release = !pressed && g_was_pressed;
     g_was_pressed = pressed;
+
+    if( g_desktop_task != NULL && g_drag_mode == DRAG_NONE && y < KERNEL_DESKTOP_STRIP_H )
+    {
+        struct kernel_window * desktop = kernel_window_by_task( g_desktop_task );
+        if( desktop != NULL && ( fresh_press || pressed || fresh_release ) )
+        {
+            /* Window-relative, same convention every other window's touch
+             * event already follows (Task 4) -- numerically a no-op today
+             * since the desktop sits at (0,0), but this is the correct,
+             * consistent form for whoever gives desktop.rb a real on_touch
+             * later, not a coincidence to leave in place. */
+            send_event( desktop, KERNEL_EVENT_TOUCH, x - desktop->x, y - desktop->y, pressed ? 1 : 0 );
+        }
+        return;
+    }
 
     if( g_drag_mode == DRAG_MOVE )
     {
