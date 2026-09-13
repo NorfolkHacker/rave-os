@@ -30,16 +30,36 @@ file(GLOB LGFX_SOURCES CONFIGURE_DEPENDS
     ${LOVYANGFX_DIR}/src/lgfx/v1/platforms/sdl/*.cpp
 )
 
+set(MRUBY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../components/mruby)
+set(LIBMRUBY_FILE ${MRUBY_DIR}/build/host/lib/libmruby.a)
+
+add_custom_command(
+    OUTPUT ${LIBMRUBY_FILE}
+    COMMAND rake
+    WORKING_DIRECTORY ${MRUBY_DIR}
+    VERBATIM
+)
+add_custom_target(mruby_build DEPENDS ${LIBMRUBY_FILE})
+
 add_executable(acidos_sim
     sim_main.c
     gfx_sdl.cpp
     main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/vm_host/vm_host.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/gfx_binding.c
     ${LGFX_SOURCES}
 )
+add_dependencies(acidos_sim mruby_build)
 
-target_include_directories(acidos_sim PRIVATE ${LOVYANGFX_DIR}/src)
+target_include_directories(acidos_sim PRIVATE
+    ${LOVYANGFX_DIR}/src
+    ${MRUBY_DIR}/build/host/include
+    ${MRUBY_DIR}/include
+)
 target_compile_features(acidos_sim PUBLIC cxx_std_17)
 
 find_package(SDL2 REQUIRED)
 target_include_directories(acidos_sim PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_libraries(acidos_sim PRIVATE freertos_kernel freertos_config pthread ${SDL2_LIBRARIES})
+target_link_libraries(acidos_sim PRIVATE
+    freertos_kernel freertos_config pthread ${SDL2_LIBRARIES} ${LIBMRUBY_FILE} m
+)
