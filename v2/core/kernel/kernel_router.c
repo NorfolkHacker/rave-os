@@ -81,6 +81,21 @@ kernel_router_poll( void )
 
         if( rel_y < KERNEL_TITLE_BAR_H )
         {
+            if( win->closable )
+            {
+                int cx = win->w - KERNEL_CLOSE_BTN_MARGIN;
+                int cy = KERNEL_TITLE_BAR_H / 2;
+                int dx = rel_x - cx;
+                int dy = rel_y - cy;
+                int hit_r = KERNEL_CLOSE_BTN_R + 3; /* a little forgiveness for touch */
+                if( ( dx * dx + dy * dy ) <= ( hit_r * hit_r ) )
+                {
+                    send_event( win, KERNEL_EVENT_CLOSE, 0, 0, 0 );
+                    kernel_window_unregister( win->task );
+                    return;
+                }
+            }
+
             g_drag_mode = DRAG_MOVE;
             g_drag_task = win->task;
             g_drag_offset_x = rel_x;
