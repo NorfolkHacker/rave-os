@@ -1,13 +1,12 @@
 #include "gfx_binding.h"
-
-extern void sim_gfx_fill_rect( int x, int y, int w, int h, unsigned int color );
+#include "../gfx/gfx.h"
 
 static mrb_value
 acid_fill_rect( mrb_state * mrb, mrb_value self )
 {
     mrb_int x, y, w, h, color;
     mrb_get_args( mrb, "iiiii", &x, &y, &w, &h, &color );
-    sim_gfx_fill_rect( ( int ) x, ( int ) y, ( int ) w, ( int ) h, ( unsigned int ) color );
+    gfx_fill_rect( ( int ) x, ( int ) y, ( int ) w, ( int ) h, ( unsigned int ) color );
     return mrb_nil_value();
 }
 

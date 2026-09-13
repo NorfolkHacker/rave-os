@@ -10,16 +10,15 @@
 
 #include "vm_host.h"
 #include "../bindings/gfx_binding.h"
-
-extern void sim_gfx_init( void );
-extern int sim_should_quit( void );
+#include "../gfx/gfx.h"
+#include "../hal/hal_input.h"
 
 void
 vm_host_task( void * pvParameters )
 {
     ( void ) pvParameters;
 
-    sim_gfx_init();
+    gfx_init();
 
     mrb_state * mrb = mrb_open();
     acid_bindings_register( mrb );
@@ -50,7 +49,7 @@ vm_host_task( void * pvParameters )
      * never returns on their own otherwise. */
     for( ;; )
     {
-        if( sim_should_quit() )
+        if( hal_input_should_quit() )
         {
             exit( 0 );
         }

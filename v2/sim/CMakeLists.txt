@@ -43,10 +43,11 @@ add_custom_target(mruby_build DEPENDS ${LIBMRUBY_FILE})
 
 add_executable(acidos_sim
     sim_main.c
-    gfx_sdl.cpp
+    hal_display_sim.cpp
     main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/vm_host/vm_host.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/gfx_binding.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/gfx/gfx.c
     ${LGFX_SOURCES}
 )
 add_dependencies(acidos_sim mruby_build)
