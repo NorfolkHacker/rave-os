@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -52,6 +53,14 @@ vm_host_task( void * pvParameters )
         if( hal_input_should_quit() )
         {
             exit( 0 );
+        }
+        int tx, ty;
+        bool tpressed;
+        hal_input_poll_touch( &tx, &ty, &tpressed );
+        if( tpressed )
+        {
+            printf( "acid OS v2: touch at (%d, %d)\n", tx, ty );
+            fflush( stdout );
         }
         vTaskDelay( pdMS_TO_TICKS( 100 ) );
     }
