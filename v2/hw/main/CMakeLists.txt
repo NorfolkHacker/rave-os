@@ -11,5 +11,6 @@ idf_component_register(
         ../../core/hal
         ../../core/gfx
         ../../core/bindings
+        freertos_compat
     REQUIRES mruby_component
 )
