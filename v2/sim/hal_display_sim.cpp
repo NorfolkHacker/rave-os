@@ -15,6 +15,11 @@ extern "C" void hal_display_fill_rect( int x, int y, int w, int h, unsigned int 
     lcd.fillRect( x, y, w, h, color );
 }
 
+extern "C" void hal_display_fill_circle( int x, int y, int r, unsigned int color )
+{
+    lcd.fillCircle( x, y, r, color );
+}
+
 extern "C" void hal_input_poll_touch( int * x, int * y, bool * pressed )
 {
     lgfx::v1::touch_point_t tp;

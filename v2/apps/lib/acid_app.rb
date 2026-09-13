@@ -8,8 +8,14 @@ class AcidApp
   def on_destroy
   end
 
+  def redraw
+    acid_clear_user_area
+    acid_draw_window_frame
+  end
+
   def start
     on_create
+    redraw
     running = true
     while running
       ev = acid_poll_event(200)

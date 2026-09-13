@@ -3,13 +3,12 @@ class DemoSwatchApp < AcidApp
 
   def on_create
     @index = 0
-    acid_fill_rect(0, 0, 140, 100, 0x050607)
   end
 
   def on_touch(x, y, pressed)
     return unless pressed
     @index = (@index + 1) % SWATCHES.size
-    acid_fill_rect(0, 0, 140, 100, SWATCHES[@index])
+    acid_fill_rect(0, 16, 140, 100 - 16, SWATCHES[@index])
   end
 end
 

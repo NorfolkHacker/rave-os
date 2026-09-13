@@ -11,6 +11,7 @@
 #include "vm_host.h"
 #include "../bindings/gfx_binding.h"
 #include "../bindings/event_binding.h"
+#include "../bindings/chrome_binding.h"
 #include "../gfx/gfx.h"
 #include "../kernel/kernel_app_context.h"
 
@@ -57,6 +58,7 @@ vm_host_task( void * pvParameters )
     mrb->ud = &ctx;
     acid_bindings_register( mrb );
     acid_event_bindings_register( mrb );
+    acid_chrome_bindings_register( mrb );
 
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );

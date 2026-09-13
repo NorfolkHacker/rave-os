@@ -12,3 +12,9 @@ gfx_fill_rect( int x, int y, int w, int h, unsigned int color )
 {
     hal_display_fill_rect( x, y, w, h, color );
 }
+
+void
+gfx_fill_circle( int x, int y, int r, unsigned int color )
+{
+    hal_display_fill_circle( x, y, r, color );
+}
