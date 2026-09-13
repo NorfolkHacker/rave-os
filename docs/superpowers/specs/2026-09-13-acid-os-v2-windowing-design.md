@@ -153,22 +153,25 @@ plain C structs/arrays rather than a message-passing protocol of their own
   mruby VM against the given script, creates that task's input queue, and
   registers it in the window list. Returns the task handle (this project's
   pid equivalent — no separate integer pid namespace is needed while
-  `TaskHandle_t` itself is a stable, comparable identity). Each spawned
-  task's own C host loop is a real generalization of bring-up's
-  `vm_host_task`, not a reuse of it unchanged: bring-up's version loaded a
-  script that did all its drawing once and then only parked, watching for
-  quit. This phase's version loads the script once (which defines an
-  `AcidApp` subclass and instantiates/starts it — an initial
-  `draw_window_frame` + `clear_user_area` call included), then loops:
-  drain the task's touch queue, translate a delivered event into a call
-  into the live mruby VM instance (`mrb_funcall` against the app instance's
-  `on_touch`), and watch for the close message (see Data flow below) to
-  end the loop and close the VM. The exact mruby C API for calling a method
-  on an already-running instance from the host loop (as opposed to
-  bring-up's one-shot `mrb_load_detect_file_cxt`) needs verifying against
-  the vendored `mruby.h`/`mruby/value.h` when this phase is planned, the
-  same way bring-up verified its own mruby API calls before writing them
-  into a plan.
+  `TaskHandle_t` itself is a stable, comparable identity). **The app task's
+  own C host loop is bring-up's `vm_host_task` almost unchanged** — it is
+  still exactly one blocking call to `mrb_load_detect_file_cxt`, followed
+  by the same `mrb->exc` check, `mrb_ccontext_free`/`mrb_close`, and now
+  `vTaskDelete(NULL)` instead of bring-up's park-forever loop. What
+  changes is what happens *inside* that one blocking call, entirely in
+  Ruby: `AcidApp#start` (see below) runs its own `while` loop calling a
+  new blocking C binding once per iteration, so the whole app's lifetime —
+  event loop included — is still just the one `mrb_load_detect_file_cxt`
+  call the host task already knows how to make. No `mrb_funcall`-from-C,
+  no manual `mrb_gc_register` bookkeeping to keep a long-lived instance
+  alive across separate calls: the instance lives on the normal mruby call
+  stack for the app's entire run, which is already GC-safe by construction.
+  The one piece of C context this needs that bring-up's single VM didn't:
+  each app's mruby VM stores its own `QueueHandle_t` in `mrb->ud` (`mrb_
+  state`'s auxiliary-data field, confirmed present in the vendored `mruby.
+  h:480`) right after `mrb_open()`, so the new blocking-poll binding (see
+  IPC below) knows which queue to read without a separate lookup
+  mechanism.
 
 **IPC — FreeRTOS queues, not a custom transport.** Family-mruby-os's
 `fmrb_transport` exists because their Retro target's app tasks and the
@@ -176,12 +179,19 @@ kernel/render pipeline run in different memory domains across a physical
 link to a second WROVER chip. Nothing here has that constraint — kernel task
 and every app task share one address space in one FreeRTOS instance on both
 `sim` and `hw`. Each spawned app task gets one `QueueHandle_t` (created via
-FreeRTOS's own `xQueueCreate`, sized for a handful of pending touch events)
-that the kernel posts window-relative touch events to
-(`xQueueSend`/non-blocking `xQueueSendToBack` with a zero timeout for the
-same "latch the newest, drop stale ones under load" reason family-mruby-os
-gives) and the app task's own event loop drains
-(`xQueueReceive`) between draw calls.
+FreeRTOS's own `xQueueCreate`, sized for a handful of pending events) that
+the kernel posts window-relative touch events to (non-blocking
+`xQueueSendToBack` with a zero timeout, dropping under load for the same
+"latch the newest" reason family-mruby-os gives — a beat-old touch position
+is harmless, a blocked kernel router is not) and a new blocking mruby
+binding drains from the Ruby side: `AcidApp#start`'s loop calls something
+like `Kernel.acid_poll_event(timeout_ms)`, whose C implementation reads
+`mrb->ud` for the queue handle and calls `xQueueReceive(queue, &ev,
+pdMS_TO_TICKS(timeout_ms))` — a genuine blocking wait, safe because it
+blocks only this one app's own FreeRTOS task, not the kernel's router or
+any other app. Returns `nil` on timeout (nothing happened), a small Hash
+(`x`, `y`, `pressed`) on a touch event, or a `:close` symbol on the close
+message from Data flow step 5 below.
 
 **`core/hal/hal_input.h` (extended, not replaced).** Bring-up's
 `hal_input_should_quit()` stays (it is `sim`-only window-close plumbing, not
@@ -199,11 +209,21 @@ parts this phase needs: `draw_window_frame` (title bar height, close button
 circle in the top-right, both in the v1-derived palette),
 `clear_user_area`, `theme_bg`/`theme_fg`/`theme_accent`/`theme_border`
 reading from one small Ruby constants module (this phase's equivalent of
-`system_conf.toml` — a file, not a runtime-configurable setting yet), and an
-`on_touch(x, y, pressed)` callback apps override. Every app script
-(`v2/apps/desktop.rb` and at least one more demonstrating multi-window,
-extending or replacing bring-up's `hello.rb`) requires this file and
-subclasses `AcidApp`.
+`system_conf.toml` — a file, not a runtime-configurable setting yet), an
+`on_touch(x, y, pressed)` callback apps override, and — unlike `FmrbApp`,
+whose `main_loop` cooperatively shares one VM/scheduler across apps via the
+`mruby-task` gem this project deliberately doesn't use (bring-up's own
+one-VM-per-FreeRTOS-task isolation model already gives each app real,
+preemptive isolation) — a `start` method containing the whole event loop:
+call `on_create` once, then loop calling the blocking `Kernel.acid_poll_
+event(timeout_ms)` binding (see IPC above), dispatching a Hash result to
+`on_touch` or breaking the loop on `:close`, then call `on_destroy`. Every
+app script (`v2/apps/desktop.rb` and at least one more demonstrating
+multi-window, extending or replacing bring-up's `hello.rb`) requires this
+file, subclasses `AcidApp`, and ends with `SomeApp.new.start` — the same
+shape as bring-up's `hello.rb` (a script that runs to completion inside one
+`mrb_load_detect_file_cxt` call), just one that doesn't return until the
+window closes.
 
 **`core/bindings/` (extended).** New mruby bindings alongside bring-up's
 `acid_fill_rect`: something callable from `draw_window_frame` to draw the
@@ -231,26 +251,23 @@ close button sit without the kernel pushing that down separately.
    family-mruby-os's "drag moves the window immediately" behavior.
 5. On a fresh press inside the close-button corner: unregister the window
    from the list immediately (so it stops receiving further input and
-   disappears from hit-testing), then post a close event to that app's
-   queue instead of deleting its task from the kernel side. This matters
-   for a real reason, not just fidelity to the reference: the app task's C
-   host loop (this phase's per-app generalization of bring-up's
-   `vm_host_task`, which already owns `mrb_open`/`mrb_close` around the
-   mruby VM it hosts) is the only code in a position to close that VM
-   safely — a kernel-side `vTaskDelete` on a task with a live VM would skip
-   `mrb_close()` and leak its heap. The close event is a message the C host
-   loop itself recognizes (same loop that already drains the touch queue
-   and drives `on_touch`/redraw calls into the VM via `mrb_funcall`); on
-   seeing it, the loop stops calling into Ruby, calls `mrb_close()` from C
-   (outside any in-flight `mrb_funcall`, so this is safe), and ends the
-   task with `vTaskDelete(NULL)` — the standard, safe FreeRTOS
-   self-deletion pattern. `AcidApp` itself needs no close-handling code;
-   the C host loop never hands the VM a callback for an event it isn't
-   going to survive.
+   disappears from hit-testing), then post a `:close` event to that app's
+   queue instead of tearing its task down from the kernel side. This
+   matters for a real reason, not just fidelity to the reference: the app
+   task's own mruby VM is what must run `mrb_close()` before its task
+   ends — a kernel-side `vTaskDelete` on a task with a live VM would skip
+   that and leak its heap. `AcidApp#start`'s loop (see Architecture above)
+   sees `:close` come back from `Kernel.acid_poll_event`, breaks its own
+   loop, calls `on_destroy`, and returns — which is what makes the
+   script's own `mrb_load_detect_file_cxt` call finally return inside the
+   app's C host task, which *then* runs `mrb_close()` and
+   `vTaskDelete(NULL)`, the standard, safe FreeRTOS self-deletion pattern.
+   The kernel never touches the app's task or VM directly, only its
+   queue.
 6. Any other press/move/release inside a window's body: translate to
-   window-relative coordinates and post to that window's queue; the app's
-   own loop calls `AcidApp#on_touch` with those coordinates on its next
-   iteration.
+   window-relative coordinates and post to that window's queue as a Hash
+   event; `AcidApp#start`'s loop receives it from the next `Kernel.acid_
+   poll_event` call and dispatches to `on_touch`.
 
 ## Error handling
 
