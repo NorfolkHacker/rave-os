@@ -60,14 +60,21 @@ single touch-only game. Roadmap (updated):
 ### New base class: `AcidGame < AcidApp`
 
 New file `v2/apps/lib/acid_game.rb`. Reuses `AcidApp`'s `on_create`/
-`on_destroy`/`on_touch` hooks and its `:close` handling verbatim (require
-`acid_app.rb` first, same as any future file that needs it). Overrides
-`start` with a fixed-tick loop instead of `AcidApp#start`'s 200ms
-blocking-poll-then-idle loop:
+`on_destroy`/`on_touch` hooks and its `:close` handling verbatim. **No
+`require`**: the vendored mruby's default gembox has no require/
+require_relative gem (confirmed in `vm_host.c`'s own comment) — every app's
+VM gets its shared library files loaded as separate, sequential
+`load_file_into_vm` calls by the host, before the app's own script, not by
+the Ruby code itself. `vm_host.c` currently does this once, for
+`ACID_APP_LIB_PATH`; this phase adds a second, equally unconditional call
+for a new `ACID_GAME_LIB_PATH` (`v2/apps/lib/acid_game.rb`), loaded right
+after it — every app's VM gets both `AcidApp` and `AcidGame` defined,
+whether or not that particular app uses `AcidGame` (matches the existing
+convention exactly: simple and unconditional, not per-app selective
+loading). Overrides `start` with a fixed-tick loop instead of `AcidApp#start`'s
+200ms blocking-poll-then-idle loop:
 
 ```ruby
-require "v2/apps/lib/acid_app"
-
 class AcidGame < AcidApp
   TICK_MS = 50
 
@@ -163,12 +170,12 @@ on the play area's edge (pick edge 0-3 via `rand(4)`, then a random
 coordinate along it via `rand(w)`/`rand(h)` — `mruby-random` is confirmed
 present in this project's actual mruby build, pulled in by `stdlib-ext.gembox`
 via `default.gembox`, so `Kernel#rand` is available with no new gem work).
-Velocity is the unit vector from spawn point to play-area center, scaled by
-`enemy_speed` (integer pixels/tick — computed as a plain integer ratio, not
-float division, to stay consistent with the fixed-tick model's no-floats
-approach — e.g. `dx = (cx - x) * enemy_speed / distance`, distance via
-integer approximation is acceptable since exact diagonal speed doesn't need
-to be pixel-perfect for a first pass).
+Velocity is the vector from spawn point to play-area center, normalized to
+length `enemy_speed` (integer pixels/tick) via one `Math.sqrt` call at spawn
+time — see the exception noted in Global Constraints below. If both
+resulting integer velocity components round to 0 (possible on some angles
+after rounding), fall back to a unit step in the sign of each axis, so no
+spawned enemy is ever completely static.
 
 **Difficulty curve, both driven by `@score`:**
 - `spawn_interval_ticks = [24 - @score / 2, 6].max` (starts at 24 ticks =
@@ -266,9 +273,17 @@ Same real-verification discipline as every prior phase:
   CMakeLists.txt`) and the same boot-sequence spawn call
   (`v2/hw/main/app_main.c`), matching `sim_main.c` — same pattern every prior
   phase has followed.
-- Fixed-tick game logic uses integer arithmetic only (no floats in movement/
-  spawn/difficulty math), matching the family-mruby-os reference pattern and
-  this project's general no-floating-point-where-avoidable convention.
+- Fixed-tick game logic uses integer arithmetic for all per-tick movement,
+  hit-testing, and difficulty math (hit-testing and the "reached center"
+  check both use squared-distance comparison, avoiding any `sqrt`), matching
+  the family-mruby-os reference pattern and this project's general
+  no-floating-point-where-avoidable convention. One narrow exception: a
+  newly spawned enemy's direction vector is normalized once, at spawn time
+  only (not per tick), via `Math.sqrt` (mruby's `math` gembox is confirmed
+  present, pulled in by `default.gembox`) — simpler and more obviously
+  correct than hand-rolling integer square-root for a one-time-per-spawn
+  calculation. Every subsequent tick's actual movement (`x += dx`) stays
+  plain integer.
 
 ## Ambiguities closed explicitly
 
