@@ -5,12 +5,18 @@ idf_component_register(
         hal_input_hw.c
         ../../core/vm_host/vm_host.c
         ../../core/bindings/gfx_binding.c
+        ../../core/bindings/event_binding.c
+        ../../core/bindings/chrome_binding.c
         ../../core/gfx/gfx.c
+        ../../core/kernel/kernel_window.c
+        ../../core/kernel/kernel_spawn.c
+        ../../core/kernel/kernel_router.c
     INCLUDE_DIRS
         ../../core/vm_host
         ../../core/hal
         ../../core/gfx
         ../../core/bindings
+        ../../core/kernel
         freertos_compat
     REQUIRES mruby_component
 )

@@ -1,12 +1,16 @@
 #include "gfx_binding.h"
 #include "../gfx/gfx.h"
+#include "../kernel/kernel_app_context.h"
 
 static mrb_value
 acid_fill_rect( mrb_state * mrb, mrb_value self )
 {
+    ( void ) self;
     mrb_int x, y, w, h, color;
     mrb_get_args( mrb, "iiiii", &x, &y, &w, &h, &color );
-    gfx_fill_rect( ( int ) x, ( int ) y, ( int ) w, ( int ) h, ( unsigned int ) color );
+    struct kernel_app_context * ctx = ( struct kernel_app_context * ) mrb->ud;
+    gfx_fill_rect( ctx->window_x + ( int ) x, ctx->window_y + ( int ) y,
+                   ( int ) w, ( int ) h, ( unsigned int ) color );
     return mrb_nil_value();
 }
 
