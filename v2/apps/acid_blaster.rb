@@ -16,6 +16,13 @@ class AcidBlaster < AcidGame
   ENEMY_COLOR = 0x00FF66  # THEME_HARD
   TEXT_COLOR = 0xD4E6DB   # THEME_TEXT
 
+  HIT_VOICE = 0
+  HIT_ONA = 55
+  HIT_TICKS = 3
+  OVER_VOICE = 1
+  OVER_ONA = 25
+  OVER_TICKS = 8
+
   def on_create
     reset_game
   end
@@ -25,6 +32,25 @@ class AcidBlaster < AcidGame
     @enemies = []
     @spawn_timer = 0
     @game_over = false
+    @sfx = []
+  end
+
+  def trigger_sfx(voice, ona, volume, ticks)
+    acid_play_note(voice, ona, volume)
+    @sfx << { voice: voice, ticks: ticks }
+  end
+
+  def tick_sfx
+    i = @sfx.length - 1
+    while i >= 0
+      s = @sfx[i]
+      s[:ticks] -= 1
+      if s[:ticks] <= 0
+        acid_stop_note(s[:voice])
+        @sfx.delete_at(i)
+      end
+      i -= 1
+    end
   end
 
   def spawn_interval
@@ -102,6 +128,7 @@ class AcidBlaster < AcidGame
     return false unless hit_index
     @enemies.delete_at(hit_index)
     @score += 1
+    trigger_sfx(HIT_VOICE, HIT_ONA, 90, HIT_TICKS)
     true
   end
 
@@ -121,8 +148,12 @@ class AcidBlaster < AcidGame
         spawn_enemy
         @spawn_timer = spawn_interval
       end
-      @game_over = true if update_enemies
+      if update_enemies
+        @game_over = true
+        trigger_sfx(OVER_VOICE, OVER_ONA, 90, OVER_TICKS)
+      end
     end
+    tick_sfx
     draw
   end
 
