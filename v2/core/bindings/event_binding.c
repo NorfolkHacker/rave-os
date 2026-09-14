@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "event_binding.h"
 #include "../kernel/kernel_app_context.h"
@@ -17,7 +18,11 @@ acid_poll_event( mrb_state * mrb, mrb_value self )
 
     if( hal_input_should_quit() )
     {
-        exit( 0 );
+        /* _exit(0), not exit(0): exit() runs C++ static-destructor teardown,
+         * which for the sim would invoke lgfx::v1::Panel_sdl::~Panel_sdl()'s
+         * pre-existing (vendored, out-of-scope) use-after-free. _exit skips
+         * that teardown entirely while still exiting cleanly with status 0. */
+        _exit( 0 );
     }
 
     struct kernel_app_context * ctx = ( struct kernel_app_context * ) mrb->ud;
@@ -36,7 +41,7 @@ acid_poll_event( mrb_state * mrb, mrb_value self )
     {
         ctx->window_x = ev.x;
         ctx->window_y = ev.y;
-        return mrb_nil_value();
+        return mrb_symbol_value( mrb_intern_cstr( mrb, "moved" ) );
     }
 
     mrb_value values[ 3 ];

@@ -21,6 +21,8 @@ class AcidApp
       ev = acid_poll_event(200)
       if ev == :close
         running = false
+      elsif ev == :moved
+        redraw
       elsif ev
         on_touch(ev[0], ev[1], ev[2])
       end

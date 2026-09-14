@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -23,6 +24,8 @@ static int g_drag_offset_x = 0;
 static int g_drag_offset_y = 0;
 static bool g_was_pressed = false;
 static void * g_desktop_task = NULL;
+static int g_last_x = 0;
+static int g_last_y = 0;
 
 void
 kernel_router_set_desktop_task( void * task )
@@ -31,7 +34,8 @@ kernel_router_set_desktop_task( void * task )
 }
 
 static void
-send_event( struct kernel_window * win, int type, int x, int y, int pressed )
+send_event_timeout( struct kernel_window * win, int type, int x, int y, int pressed,
+                     TickType_t timeout )
 {
     if( win == NULL || win->queue == NULL )
     {
@@ -42,7 +46,18 @@ send_event( struct kernel_window * win, int type, int x, int y, int pressed )
     ev.x = x;
     ev.y = y;
     ev.pressed = pressed;
-    xQueueSendToBack( ( QueueHandle_t ) win->queue, &ev, 0 );
+    xQueueSendToBack( ( QueueHandle_t ) win->queue, &ev, timeout );
+}
+
+static void
+send_event( struct kernel_window * win, int type, int x, int y, int pressed )
+{
+    /* Best-effort, non-blocking: fine for high-frequency per-tick events
+     * (touch drags, in-progress moves) where a dropped sample just means
+     * the next tick's send supersedes it. The one place that needs a
+     * stronger guarantee (the final MOVED at drag release) calls
+     * send_event_timeout directly instead. */
+    send_event_timeout( win, type, x, y, pressed, 0 );
 }
 
 static void
@@ -52,11 +67,21 @@ kernel_router_poll( void )
     bool pressed;
     hal_input_poll_touch( &x, &y, &pressed );
 
+    /* x/y are only meaningful when pressed is true (hal_input.h's own
+     * contract) -- g_last_x/g_last_y remember the last real touch point so
+     * code below never reads x/y while !pressed (Fix 4: that read would be
+     * of an indeterminate value). */
+    if( pressed )
+    {
+        g_last_x = x;
+        g_last_y = y;
+    }
+
     bool fresh_press = pressed && !g_was_pressed;
     bool fresh_release = !pressed && g_was_pressed;
     g_was_pressed = pressed;
 
-    if( g_desktop_task != NULL && g_drag_mode == DRAG_NONE && y < KERNEL_DESKTOP_STRIP_H )
+    if( g_desktop_task != NULL && g_drag_mode == DRAG_NONE && g_last_y < KERNEL_DESKTOP_STRIP_H )
     {
         struct kernel_window * desktop = kernel_window_by_task( g_desktop_task );
         if( desktop != NULL && ( fresh_press || pressed || fresh_release ) )
@@ -66,7 +91,8 @@ kernel_router_poll( void )
              * since the desktop sits at (0,0), but this is the correct,
              * consistent form for whoever gives desktop.rb a real on_touch
              * later, not a coincidence to leave in place. */
-            send_event( desktop, KERNEL_EVENT_TOUCH, x - desktop->x, y - desktop->y, pressed ? 1 : 0 );
+            send_event( desktop, KERNEL_EVENT_TOUCH, g_last_x - desktop->x, g_last_y - desktop->y,
+                        pressed ? 1 : 0 );
         }
         return;
     }
@@ -76,6 +102,19 @@ kernel_router_poll( void )
         struct kernel_window * win = kernel_window_by_task( g_drag_task );
         if( win == NULL || !pressed )
         {
+            /* Drag ending (release, or the window vanished mid-drag). Send
+             * the FINAL position with a short, real blocking timeout
+             * instead of the per-tick best-effort 0 -- this is the most
+             * authoritative position update and must not be silently
+             * dropped even if the queue was momentarily saturated by
+             * earlier per-tick MOVED sends during a fast/long drag (Fix 2).
+             * Nothing else ever re-syncs the app's idea of its own
+             * position after this. */
+            if( win != NULL )
+            {
+                send_event_timeout( win, KERNEL_EVENT_MOVED, win->x, win->y, 0,
+                                     pdMS_TO_TICKS( 50 ) );
+            }
             g_drag_mode = DRAG_NONE;
             g_drag_task = NULL;
         }
@@ -83,6 +122,15 @@ kernel_router_poll( void )
         {
             win->x = x - g_drag_offset_x;
             win->y = y - g_drag_offset_y;
+            if( win->y < KERNEL_DESKTOP_STRIP_H )
+            {
+                /* Never let a window's title bar end up inside the
+                 * desktop strip's protected row range -- once released
+                 * there, every fresh press on it would be claimed by the
+                 * strip's special case first, permanently stranding the
+                 * window (Fix 8). */
+                win->y = KERNEL_DESKTOP_STRIP_H;
+            }
             send_event( win, KERNEL_EVENT_MOVED, win->x, win->y, 0 );
         }
         return;
@@ -141,10 +189,10 @@ kernel_router_poll( void )
 
     if( fresh_release )
     {
-        struct kernel_window * win = kernel_window_find_at( x, y );
+        struct kernel_window * win = kernel_window_find_at( g_last_x, g_last_y );
         if( win != NULL )
         {
-            send_event( win, KERNEL_EVENT_TOUCH, x - win->x, y - win->y, 0 );
+            send_event( win, KERNEL_EVENT_TOUCH, g_last_x - win->x, g_last_y - win->y, 0 );
         }
     }
 }
@@ -157,7 +205,11 @@ kernel_router_task( void * pvParameters )
     {
         if( hal_input_should_quit() )
         {
-            exit( 0 );
+            /* _exit(0), not exit(0) -- see event_binding.c's acid_poll_event
+             * for why (sidesteps the vendored LGFX Panel_sdl destructor
+             * use-after-free that exit()'s static-destructor teardown would
+             * otherwise trigger). */
+            _exit( 0 );
         }
         kernel_router_poll();
         vTaskDelay( pdMS_TO_TICKS( 16 ) );

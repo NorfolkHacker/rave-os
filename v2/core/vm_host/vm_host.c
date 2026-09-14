@@ -14,6 +14,7 @@
 #include "../bindings/chrome_binding.h"
 #include "../gfx/gfx.h"
 #include "../kernel/kernel_app_context.h"
+#include "../kernel/kernel_window.h"
 
 /* Loaded into every app's VM before its own script, so AcidApp is always
  * defined -- the vendored mruby's default gembox (mrbgems/default.gembox)
@@ -77,6 +78,26 @@ vm_host_task( void * pvParameters )
      * forever-parked task; other apps and the router are unaffected
      * either way, which is the spec's actual fault-containment
      * requirement, not the parking loop itself. */
-    free( params );
+
+    /* Unconditional cleanup covering EVERY exit path (normal script end,
+     * unhandled exception, or load_file_into_vm failing to open a file) --
+     * not just the close-button path, which was previously the only caller
+     * of kernel_window_unregister anywhere in the codebase. Safe to call
+     * unconditionally: kernel_window_unregister is a no-op if this task's
+     * window was already unregistered (e.g. by the close-button path,
+     * kernel_router.c, before this task got here). The queue, by contrast,
+     * is deleted from exactly this one place for every app -- the
+     * close-button path only unregisters the window, it never deletes the
+     * queue -- so this is the sole deletion point and safe to call once,
+     * unconditionally, here. */
+    kernel_window_unregister( ( void * ) xTaskGetCurrentTaskHandle() );
+    vQueueDelete( params->queue );
+
+    /* vPortFree, not free -- params was allocated with pvPortMalloc in
+     * kernel_spawn.c; mismatching the allocator/deallocator pair happens to
+     * work under the sim's heap_3.c (a thin wrapper over libc malloc/free)
+     * but is wrong by contract and real heap corruption under FreeRTOS's
+     * heap_4/heap_5 allocators. */
+    vPortFree( params );
     vTaskDelete( NULL );
 }
