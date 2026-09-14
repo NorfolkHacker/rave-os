@@ -680,7 +680,7 @@ Expected: builds cleanly.
 ```bash
 cd /home/norfolkh/os
 rm -f /tmp/acid_audio_test.raw
-SDL_AUDIODRIVER=disk SDL2_DISKAUDIOFILE=/tmp/acid_audio_test.raw \
+SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=/tmp/acid_audio_test.raw \
     xvfb-run -a ./v2/sim/build/acidos_sim &
 SIM_PID=$!
 sleep 1
@@ -722,7 +722,7 @@ Expected: `PASS: real audio data captured`, with a non-silent byte count in the 
 ```bash
 cd /home/norfolkh/os
 rm -f /tmp/acid_audio_test2.raw
-SDL_AUDIODRIVER=disk SDL2_DISKAUDIOFILE=/tmp/acid_audio_test2.raw \
+SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=/tmp/acid_audio_test2.raw \
     xvfb-run -a ./v2/sim/build/acidos_sim &
 SIM_PID=$!
 sleep 1

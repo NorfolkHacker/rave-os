@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #include <SDL2/SDL.h>
 
 #include "../core/hal/hal_audio.h"
@@ -14,7 +16,11 @@ sdl_audio_callback( void * userdata, Uint8 * stream, int len )
 void
 hal_audio_init( void )
 {
-    SDL_InitSubSystem( SDL_INIT_AUDIO );
+    if( SDL_InitSubSystem( SDL_INIT_AUDIO ) != 0 )
+    {
+        fprintf( stderr, "hal_audio_init: SDL_InitSubSystem(AUDIO) failed: %s\n", SDL_GetError() );
+        return;
+    }
 
     SDL_AudioSpec desired;
     SDL_AudioSpec obtained;
@@ -26,5 +32,10 @@ hal_audio_init( void )
     desired.callback = sdl_audio_callback;
 
     SDL_AudioDeviceID dev = SDL_OpenAudioDevice( NULL, 0, &desired, &obtained, 0 );
+    if( dev == 0 )
+    {
+        fprintf( stderr, "hal_audio_init: SDL_OpenAudioDevice failed: %s\n", SDL_GetError() );
+        return;
+    }
     SDL_PauseAudioDevice( dev, 0 );
 }
