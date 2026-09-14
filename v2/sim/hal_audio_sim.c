@@ -1,6 +1,6 @@
 #include <SDL2/SDL.h>
 
-#include "hal_audio.h"
+#include "../core/hal/hal_audio.h"
 #include "../core/kernel/kernel_audio.h"
 #include "../core/audio/synth.h"
 
