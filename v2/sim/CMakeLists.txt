@@ -44,15 +44,19 @@ add_custom_target(mruby_build DEPENDS ${LIBMRUBY_FILE})
 add_executable(acidos_sim
     sim_main.c
     hal_display_sim.cpp
+    hal_audio_sim.c
     main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/vm_host/vm_host.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/gfx_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/event_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/chrome_binding.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/audio_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/gfx/gfx.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/audio/synth.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_window.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_spawn.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_router.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_audio.c
     ${LGFX_SOURCES}
 )
 add_dependencies(acidos_sim mruby_build)

@@ -12,9 +12,11 @@
 #include "../bindings/gfx_binding.h"
 #include "../bindings/event_binding.h"
 #include "../bindings/chrome_binding.h"
+#include "../bindings/audio_binding.h"
 #include "../gfx/gfx.h"
 #include "../kernel/kernel_app_context.h"
 #include "../kernel/kernel_window.h"
+#include "../kernel/kernel_audio.h"
 
 /* Loaded into every app's VM before its own script, so AcidApp is always
  * defined -- the vendored mruby's default gembox (mrbgems/default.gembox)
@@ -58,6 +60,7 @@ vm_host_task( void * pvParameters )
     acid_bindings_register( mrb );
     acid_event_bindings_register( mrb );
     acid_chrome_bindings_register( mrb );
+    acid_audio_bindings_register( mrb );
 
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );
@@ -91,6 +94,7 @@ vm_host_task( void * pvParameters )
      * queue -- so this is the sole deletion point and safe to call once,
      * unconditionally, here. */
     kernel_window_unregister( ( void * ) xTaskGetCurrentTaskHandle() );
+    kernel_audio_release_owner( ( void * ) xTaskGetCurrentTaskHandle() );
     vQueueDelete( params->queue );
 
     /* vPortFree, not free -- params was allocated with pvPortMalloc in

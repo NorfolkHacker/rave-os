@@ -1,0 +1,43 @@
+#ifndef ACID_KERNEL_AUDIO_H
+#define ACID_KERNEL_AUDIO_H
+
+#include <stdbool.h>
+
+/* Creates the one shared audio-command ring buffer and resets voice
+ * ownership. Call exactly once, at boot, before any app spawns -- same
+ * ordering discipline gfx_init()/kernel_window_init() already
+ * established. */
+void kernel_audio_init( void );
+
+/* Enqueues a command from any app task. Best-effort -- a dropped note_on
+ * or note_off under extreme load is an acceptable, rare degradation for
+ * this phase. Safe to call from any FreeRTOS task; must never be called
+ * from the audio callback thread. */
+void kernel_audio_enqueue_note_on( void * owner_task, int voice, int ona, int volume );
+void kernel_audio_enqueue_note_off( void * owner_task, int voice );
+
+/* Enqueues an AUDIO_CMD_RELEASE_OWNER command -- called synchronously from
+ * vm_host_task's own unconditional per-app cleanup (Task 5), covering
+ * every app-exit path, not just the close button. Unlike note_on/note_off,
+ * this command is delivery-guaranteed (bounded blocking retry): losing it
+ * would permanently orphan a sounding voice with nobody able to stop it.
+ * Does NOT touch synth_voices[] or voice-ownership state directly (only
+ * the audio callback thread does that, per this plan's Global
+ * Constraints) -- it only enqueues, same as the note_on/note_off
+ * functions above. Safe to call from any FreeRTOS task; must never be
+ * called from the audio callback thread. */
+void kernel_audio_release_owner( void * owner_task );
+
+/* Drains every pending command from the ring buffer (applying each to
+ * synth_voices[] and the voice-ownership table), then calls
+ * synth_render_half(buf, len). MUST be called only from the audio
+ * callback's own thread, and that thread must never call any FreeRTOS
+ * API -- on sim this thread is a raw pthread created by SDL2, not a
+ * FreeRTOS task, so FreeRTOS's own synchronization primitives (queues,
+ * critical sections) are not valid to use from it. This is the sole place
+ * synth_voices[] and voice ownership are ever mutated, by design (see
+ * this plan's Global Constraints on avoiding windowing's own shared-LGFX-
+ * object race). */
+void kernel_audio_drain_and_render( unsigned char * buf, unsigned int len );
+
+#endif

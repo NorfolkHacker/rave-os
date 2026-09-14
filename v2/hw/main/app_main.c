@@ -4,13 +4,17 @@
 #include "../../core/kernel/kernel_window.h"
 #include "../../core/kernel/kernel_spawn.h"
 #include "../../core/kernel/kernel_router.h"
+#include "../../core/kernel/kernel_audio.h"
 #include "../../core/gfx/gfx.h"
+#include "../../core/hal/hal_audio.h"
 
 void
 app_main( void )
 {
     kernel_window_init();
     gfx_init();
+    kernel_audio_init();
+    hal_audio_init();
 
     void * desktop_task = kernel_spawn_app( "v2/apps/desktop.rb", 0, 0, 320, 20, 0 );
     kernel_router_set_desktop_task( desktop_task );
