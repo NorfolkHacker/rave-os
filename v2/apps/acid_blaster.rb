@@ -113,8 +113,8 @@ class AcidBlaster < AcidGame
       ddy = e[:y] - CENTER_Y
       if (ddx * ddx + ddy * ddy) <= (ENEMY_R * ENEMY_R)
         hit_center = true
-      elsif e[:x] < -ENEMY_R || e[:x] > WINDOW_W + ENEMY_R ||
-            e[:y] < TITLE_BAR_H - ENEMY_R || e[:y] > TITLE_BAR_H + PLAY_H + ENEMY_R
+      elsif e[:x] - ENEMY_R < 0 || e[:x] + ENEMY_R > WINDOW_W - 1 ||
+            e[:y] - ENEMY_R < TITLE_BAR_H || e[:y] + ENEMY_R > TITLE_BAR_H + PLAY_H - 1
         @enemies.delete_at(i)
       end
       i -= 1
