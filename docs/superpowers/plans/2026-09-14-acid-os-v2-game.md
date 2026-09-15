@@ -46,14 +46,17 @@ primitive), the project's own `synth.c`-backed audio API from phase 3.
   at spawn time only, via `Math.sqrt` (`mruby`'s `math` gembox is confirmed
   present in this project's actual build, pulled in by `default.gembox`).
 - This project's mruby build has **no `require`/`require_relative`** gem
-  (confirmed in `vm_host.c`'s own comment) and **no `mruby-print`** gem
-  (confirmed: no such directory exists anywhere under
-  `v2/components/mruby/mrbgems/`) — `puts`/`print`/`p` are NOT available to
-  app scripts. Shared library files are loaded into every app's VM via
-  sequential `load_file_into_vm` calls in `vm_host.c`, not by Ruby code.
-  Any verification that needs to observe an app's internal state from the
-  outside must do it visually (screenshot + pixel inspection), not via
-  printed output.
+  (confirmed in `vm_host.c`'s own comment) — shared library files are
+  loaded into every app's VM via sequential `load_file_into_vm` calls in
+  `vm_host.c`, not by Ruby code. **Correction from this plan's original
+  text**: `puts`/`print`/`p` ARE available — they're provided by
+  `mruby-io` (not `mruby-print`, which genuinely doesn't exist in this
+  vendored source, but `mruby-io` does and is pulled in by
+  `stdlib-io.gembox` via `default.gembox`), confirmed by printing real
+  output from inside a live app VM during this branch's final review.
+  Earlier tasks in this plan verified everything visually (screenshot +
+  pixel inspection) because that error sent them looking for it in the
+  wrong place — future work can use `puts` for debug output directly.
 - Real verification only, matching every prior phase's discipline: builds
   that succeed and processes that don't crash are never sufficient evidence
   on their own. This plan's tasks use real screenshots (Xvfb + `xdotool` +
@@ -66,6 +69,13 @@ primitive), the project's own `synth.c`-backed audio API from phase 3.
   finds the one SDL window (confirmed by its real window title, not
   guessed), then `import -window "$WIN" shot.png` captures it, then
   `convert shot.png -crop 1x1+X+Y txt:-` reads any one pixel's color.
+  **Correction from this plan's original text**: `kernel_spawn_app`'s
+  script paths (e.g. `"v2/apps/lib/acid_app.rb"`) resolve relative to the
+  process's own current working directory, not the binary's location —
+  the binary (`v2/sim/build/acidos_sim`) must be launched from the repo
+  root (e.g. `v2/sim/build/acidos_sim &`, not `cd v2/sim/build &&
+  ./acidos_sim &`), or every app fails to load silently and the window
+  stays blank. Confirmed during this branch's final review.
 - Every task must leave `git status` clean of anything but its own intended
   changes — no temporary test apps, no leftover `sim_main.c`/`app_main.c`
   edits, no stray screenshot files, committed by accident.

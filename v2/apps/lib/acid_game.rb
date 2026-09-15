@@ -7,8 +7,11 @@ class AcidGame < AcidApp
   def start
     on_create
     running = true
+    next_tick_at = Time.now.to_f + ( self.class::TICK_MS / 1000.0 )
     while running
-      ev = acid_poll_event(self.class::TICK_MS)
+      remaining_ms = ( ( next_tick_at - Time.now.to_f ) * 1000 ).to_i
+      remaining_ms = 0 if remaining_ms < 0
+      ev = acid_poll_event(remaining_ms)
       if ev == :close
         running = false
       elsif ev == :moved
@@ -19,7 +22,16 @@ class AcidGame < AcidApp
       elsif ev
         on_touch(ev[0], ev[1], ev[2])
       end
-      on_tick if running
+      if running && Time.now.to_f >= next_tick_at
+        on_tick
+        next_tick_at += ( self.class::TICK_MS / 1000.0 )
+        # Resync instead of bursting through missed ticks if something
+        # (a long block, a slow drain) put us more than a full tick
+        # behind -- a catch-up burst would look like the game briefly
+        # speeding up, exactly the class of bug this fix exists to
+        # remove.
+        next_tick_at = Time.now.to_f + ( self.class::TICK_MS / 1000.0 ) if next_tick_at < Time.now.to_f
+      end
     end
     on_destroy
   end

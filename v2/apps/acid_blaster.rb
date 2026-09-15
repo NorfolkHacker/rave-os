@@ -66,17 +66,17 @@ class AcidBlaster < AcidGame
   def spawn_enemy
     edge = rand(4)
     if edge == 0
-      x = rand(WINDOW_W)
-      y = TITLE_BAR_H
+      x = ENEMY_R + rand(WINDOW_W - 2 * ENEMY_R)
+      y = TITLE_BAR_H + ENEMY_R
     elsif edge == 1
-      x = WINDOW_W
-      y = TITLE_BAR_H + rand(PLAY_H)
+      x = WINDOW_W - 1 - ENEMY_R
+      y = TITLE_BAR_H + ENEMY_R + rand(PLAY_H - 2 * ENEMY_R)
     elsif edge == 2
-      x = rand(WINDOW_W)
-      y = TITLE_BAR_H + PLAY_H
+      x = ENEMY_R + rand(WINDOW_W - 2 * ENEMY_R)
+      y = TITLE_BAR_H + PLAY_H - 1 - ENEMY_R
     else
-      x = 0
-      y = TITLE_BAR_H + rand(PLAY_H)
+      x = ENEMY_R
+      y = TITLE_BAR_H + ENEMY_R + rand(PLAY_H - 2 * ENEMY_R)
     end
 
     dx = CENTER_X - x
@@ -97,15 +97,27 @@ class AcidBlaster < AcidGame
     @enemies << { x: x, y: y, dx: vx, dy: vy }
   end
 
-  # Returns true if any enemy reached the center this tick.
+  # Returns true if any enemy reached the center this tick. Also removes
+  # any enemy that has drifted off the play field without reaching the
+  # center (an integer-rounded spawn direction can miss the center by
+  # more than ENEMY_R -- see the final review's finding -- so nothing
+  # would otherwise ever remove it, and it would fly off forever).
   def update_enemies
     hit_center = false
-    @enemies.each do |e|
+    i = @enemies.length - 1
+    while i >= 0
+      e = @enemies[i]
       e[:x] += e[:dx]
       e[:y] += e[:dy]
       ddx = e[:x] - CENTER_X
       ddy = e[:y] - CENTER_Y
-      hit_center = true if (ddx * ddx + ddy * ddy) <= (ENEMY_R * ENEMY_R)
+      if (ddx * ddx + ddy * ddy) <= (ENEMY_R * ENEMY_R)
+        hit_center = true
+      elsif e[:x] < -ENEMY_R || e[:x] > WINDOW_W + ENEMY_R ||
+            e[:y] < TITLE_BAR_H - ENEMY_R || e[:y] > TITLE_BAR_H + PLAY_H + ENEMY_R
+        @enemies.delete_at(i)
+      end
+      i -= 1
     end
     hit_center
   end
