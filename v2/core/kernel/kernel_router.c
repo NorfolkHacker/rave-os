@@ -41,6 +41,12 @@ kernel_router_activate_window( void * task )
     g_focus_task = task;
 }
 
+void *
+kernel_router_get_focus( void )
+{
+    return g_focus_task;
+}
+
 static void
 send_event_timeout( struct kernel_window * win, int type, int x, int y, int pressed,
                      TickType_t timeout )

@@ -15,4 +15,9 @@ void kernel_router_set_desktop_task( void * task );
  * gains keyboard focus, not two competing ones. */
 void kernel_router_activate_window( void * task );
 
+/* Which window's task currently has keyboard focus, or NULL if none does
+ * (nothing has been clicked/activated yet). Used by window_binding.c so
+ * Ruby can report a window's focused state (the taskbar highlights it). */
+void * kernel_router_get_focus( void );
+
 #endif

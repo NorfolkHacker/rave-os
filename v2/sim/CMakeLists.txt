@@ -52,6 +52,7 @@ add_executable(acidos_sim
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/event_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/chrome_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/audio_binding.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/window_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/gfx/gfx.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/audio/synth.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_window.c
