@@ -26,11 +26,19 @@ static bool g_was_pressed = false;
 static void * g_desktop_task = NULL;
 static int g_last_x = 0;
 static int g_last_y = 0;
+static void * g_focus_task = NULL;
 
 void
 kernel_router_set_desktop_task( void * task )
 {
     g_desktop_task = task;
+}
+
+void
+kernel_router_activate_window( void * task )
+{
+    kernel_window_bring_to_front( task );
+    g_focus_task = task;
 }
 
 static void
@@ -63,6 +71,18 @@ send_event( struct kernel_window * win, int type, int x, int y, int pressed )
 static void
 kernel_router_poll( void )
 {
+    int key_code;
+    bool key_pressed;
+    hal_input_poll_key( &key_code, &key_pressed );
+    if( key_pressed && g_focus_task != NULL )
+    {
+        struct kernel_window * focus_win = kernel_window_by_task( g_focus_task );
+        if( focus_win != NULL )
+        {
+            send_event( focus_win, KERNEL_EVENT_KEY, key_code, 0, 1 );
+        }
+    }
+
     int x, y;
     bool pressed;
     hal_input_poll_touch( &x, &y, &pressed );
@@ -144,7 +164,7 @@ kernel_router_poll( void )
             return;
         }
 
-        kernel_window_bring_to_front( win->task );
+        kernel_router_activate_window( win->task );
 
         int rel_x = x - win->x;
         int rel_y = y - win->y;
@@ -162,6 +182,17 @@ kernel_router_poll( void )
                 {
                     send_event( win, KERNEL_EVENT_CLOSE, 0, 0, 0 );
                     kernel_window_unregister( win->task );
+                    if( g_focus_task == win->task )
+                    {
+                        /* Don't leave a dead task handle as the keyboard
+                         * focus target. A later fresh press elsewhere, or
+                         * a taskbar tap (Task 3), will pick a real one;
+                         * until then key events are simply dropped -- the
+                         * same "no window, no-op" behavior every other
+                         * nowhere-to-deliver input path in this file
+                         * already has. */
+                        g_focus_task = NULL;
+                    }
                     return;
                 }
             }

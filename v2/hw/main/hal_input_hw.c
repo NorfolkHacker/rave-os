@@ -13,3 +13,10 @@ hal_input_poll_touch( int * x, int * y, bool * pressed )
     ( void ) y;
     *pressed = false;
 }
+
+void
+hal_input_poll_key( int * keycode, bool * pressed )
+{
+    ( void ) keycode;
+    *pressed = false;
+}

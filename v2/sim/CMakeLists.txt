@@ -44,6 +44,7 @@ add_custom_target(mruby_build DEPENDS ${LIBMRUBY_FILE})
 add_executable(acidos_sim
     sim_main.c
     hal_display_sim.cpp
+    hal_input_sim.cpp
     hal_audio_sim.c
     main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/vm_host/vm_host.c
