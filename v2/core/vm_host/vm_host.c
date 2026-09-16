@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -8,6 +9,7 @@
 #include "mruby.h"
 #include "mruby/compile.h"
 #include "mruby/error.h"
+#include "mruby/proc.h"
 
 #include "vm_host.h"
 #include "../bindings/gfx_binding.h"
@@ -29,7 +31,106 @@
 #define ACID_GAME_LIB_PATH "v2/apps/lib/acid_game.rb"
 #define ACID_KEYS_LIB_PATH "v2/apps/lib/acid_keys.rb"
 
+/* mruby's Prism parser/codegen are not thread-safe -- concurrent parsing
+ * across different app VMs' own pthreads (this project's POSIX port backs
+ * each FreeRTOS task with a real pthread) corrupts shared parser state,
+ * reproduced as both a SIGSEGV in pm_constant_pool_insert and a SIGABRT
+ * assertion in pm_newline_list_line. This mutex serializes only the
+ * parse+codegen phase (parse_and_compile below) across VMs -- cheap, since
+ * parse time for these small files is negligible. It must NOT be held
+ * across execution (run_compiled below): an app's own script's top-level
+ * statement is typically AppClass.new.start, which runs that app's entire
+ * event loop and never returns, so holding this lock across execution
+ * would serialize apps' entire lifetimes instead of just their brief
+ * parse phase. */
 static SemaphoreHandle_t g_parse_lock = NULL;
+
+/* Parses and compiles `s` (length `len`) into a runnable proc. Must only be
+ * called while holding g_parse_lock -- mruby's Prism parser/codegen are not
+ * safe to run concurrently across this project's per-app VM pthreads (see
+ * the comment on g_parse_lock's own declaration). Returns NULL (with
+ * mrb->exc set) on a parse or codegen failure. This function only compiles
+ * -- it never executes anything, so it always returns quickly regardless
+ * of what the source code does at runtime. */
+static struct RProc *
+parse_and_compile( mrb_state * mrb, const char * s, size_t len, mrb_ccontext * c )
+{
+    struct mrb_parser_state * p = mrb_parse_nstring( mrb, s, len, c );
+    if( p == NULL )
+    {
+        if( mrb->exc == NULL )
+        {
+            mrb->exc = mrb_obj_ptr( mrb_exc_new_lit( mrb, E_SCRIPT_ERROR, "cannot load source" ) );
+        }
+        return NULL;
+    }
+    if( p->tree == NULL || p->nerr )
+    {
+        if( c != NULL )
+        {
+            c->parser_nerr = p->nerr;
+        }
+        if( mrb->exc == NULL )
+        {
+            const char * message = "syntax error";
+            if( p->error_buffer[ 0 ].message )
+            {
+                message = p->error_buffer[ 0 ].message;
+            }
+            mrb->exc = mrb_obj_ptr( mrb_exc_new( mrb, E_SYNTAX_ERROR, message, strlen( message ) ) );
+        }
+        mrb_parser_free( p );
+        return NULL;
+    }
+
+    struct RProc * proc = mrb_generate_code( mrb, p );
+    mrb_parser_free( p );
+    if( proc == NULL && mrb->exc == NULL )
+    {
+        mrb->exc = mrb_obj_ptr( mrb_exc_new_lit( mrb, E_SCRIPT_ERROR, "codegen error" ) );
+    }
+    return proc;
+}
+
+/* Runs a proc already compiled by parse_and_compile. Safe to call WITHOUT
+ * holding g_parse_lock -- pure bytecode execution touches only this
+ * mrb_state's own VM state, never mruby's shared Prism parser/codegen
+ * state, so it's fine for this to block forever (as an app's own
+ * AppClass.new.start does) while other VMs' parse_and_compile calls
+ * proceed serialized through the lock in the meantime. */
+static mrb_value
+run_compiled( mrb_state * mrb, struct RProc * proc, mrb_ccontext * c )
+{
+    struct RClass * target = mrb->object_class;
+    mrb_int keep = 0;
+
+    if( c != NULL )
+    {
+        if( c->no_exec )
+        {
+            return mrb_obj_value( proc );
+        }
+        if( c->target_class )
+        {
+            target = c->target_class;
+        }
+        if( c->keep_lv )
+        {
+            keep = c->slen + 1;
+        }
+        else
+        {
+            c->keep_lv = TRUE;
+        }
+    }
+    MRB_PROC_SET_TARGET_CLASS( proc, target );
+    proc->flags |= MRB_PROC_CREF;
+    if( mrb->c->ci )
+    {
+        mrb_vm_ci_target_class_set( mrb->c->ci, target );
+    }
+    return mrb_top_run( mrb, proc, mrb_top_self( mrb ), keep );
+}
 
 static void
 load_file_into_vm( mrb_state * mrb, mrb_ccontext * cxt, const char * path )
@@ -40,13 +141,29 @@ load_file_into_vm( mrb_state * mrb, mrb_ccontext * cxt, const char * path )
         fprintf( stderr, "acid OS v2: could not open %s\n", path );
         return;
     }
-    mrb_load_detect_file_cxt( mrb, fp, cxt );
+
+    fseek( fp, 0, SEEK_END );
+    long size = ftell( fp );
+    fseek( fp, 0, SEEK_SET );
+    char * buf = ( char * ) mrb_malloc( mrb, ( size_t ) size );
+    size_t nread = fread( buf, 1, ( size_t ) size, fp );
+    fclose( fp );
+
+    xSemaphoreTake( g_parse_lock, portMAX_DELAY );
+    struct RProc * proc = parse_and_compile( mrb, buf, nread, cxt );
+    xSemaphoreGive( g_parse_lock );
+    mrb_free( mrb, buf );
+
+    if( proc != NULL )
+    {
+        run_compiled( mrb, proc, cxt );
+    }
+
     if( mrb->exc )
     {
         mrb_print_error( mrb );
         mrb->exc = NULL;
     }
-    fclose( fp );
 }
 
 void
@@ -76,20 +193,10 @@ vm_host_task( void * pvParameters )
     acid_window_bindings_register( mrb );
 
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
-    /* mruby's Prism parser is not thread-safe -- concurrent parsing across
-     * different app VMs' own pthreads (this project's POSIX port backs
-     * each FreeRTOS task with a real pthread) corrupts shared parser
-     * state, reproduced as both a SIGSEGV in pm_constant_pool_insert and a
-     * SIGABRT assertion in pm_newline_list_line. Serializing every VM's
-     * parse/load phase behind one global mutex is the fix -- cheap (parse
-     * time for these small files is negligible) and doesn't require
-     * understanding Prism's internals. */
-    xSemaphoreTake( g_parse_lock, portMAX_DELAY );
     load_file_into_vm( mrb, cxt, ACID_KEYS_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_GAME_LIB_PATH );
     load_file_into_vm( mrb, cxt, params->script_path );
-    xSemaphoreGive( g_parse_lock );
     mrb_ccontext_free( mrb, cxt );
     mrb_close( mrb );
 
