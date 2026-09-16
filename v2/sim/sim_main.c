@@ -26,7 +26,7 @@ sim_freertos_main( void )
     kernel_audio_init();
     hal_audio_init();
 
-    void * desktop_task = kernel_spawn_app( "v2/apps/desktop.rb", 0, 0, 320, 20, 0 );
+    void * desktop_task = kernel_spawn_app( "v2/apps/desktop.rb", 0, 0, 320, 24, 0 );
     kernel_router_set_desktop_task( desktop_task );
 
     kernel_spawn_app( "v2/apps/demo_touch.rb", 10, 30, 140, 100, 1 );
