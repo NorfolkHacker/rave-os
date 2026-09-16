@@ -3,6 +3,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 
 #include "mruby.h"
 #include "mruby/compile.h"
@@ -27,6 +28,8 @@
 #define ACID_GAME_LIB_PATH "v2/apps/lib/acid_game.rb"
 #define ACID_KEYS_LIB_PATH "v2/apps/lib/acid_keys.rb"
 
+static SemaphoreHandle_t g_parse_lock = NULL;
+
 static void
 load_file_into_vm( mrb_state * mrb, mrb_ccontext * cxt, const char * path )
 {
@@ -43,6 +46,12 @@ load_file_into_vm( mrb_state * mrb, mrb_ccontext * cxt, const char * path )
         mrb->exc = NULL;
     }
     fclose( fp );
+}
+
+void
+vm_host_init( void )
+{
+    g_parse_lock = xSemaphoreCreateMutex();
 }
 
 void
@@ -65,10 +74,20 @@ vm_host_task( void * pvParameters )
     acid_audio_bindings_register( mrb );
 
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
+    /* mruby's Prism parser is not thread-safe -- concurrent parsing across
+     * different app VMs' own pthreads (this project's POSIX port backs
+     * each FreeRTOS task with a real pthread) corrupts shared parser
+     * state, reproduced as both a SIGSEGV in pm_constant_pool_insert and a
+     * SIGABRT assertion in pm_newline_list_line. Serializing every VM's
+     * parse/load phase behind one global mutex is the fix -- cheap (parse
+     * time for these small files is negligible) and doesn't require
+     * understanding Prism's internals. */
+    xSemaphoreTake( g_parse_lock, portMAX_DELAY );
     load_file_into_vm( mrb, cxt, ACID_KEYS_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_GAME_LIB_PATH );
     load_file_into_vm( mrb, cxt, params->script_path );
+    xSemaphoreGive( g_parse_lock );
     mrb_ccontext_free( mrb, cxt );
     mrb_close( mrb );
 

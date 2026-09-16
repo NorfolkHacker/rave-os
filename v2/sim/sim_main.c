@@ -9,6 +9,7 @@
 #include "../core/gfx/gfx.h"
 #include "../core/kernel/kernel_audio.h"
 #include "../core/hal/hal_audio.h"
+#include "../core/vm_host/vm_host.h"
 
 void vAssertCalled( const char * pcFile, unsigned long ulLine )
 {
@@ -20,6 +21,7 @@ void
 sim_freertos_main( void )
 {
     kernel_window_init();
+    vm_host_init();
     gfx_init();
     kernel_audio_init();
     hal_audio_init();
