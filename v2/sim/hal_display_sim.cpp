@@ -24,6 +24,12 @@ extern "C" void hal_display_fill_circle( int x, int y, int r, unsigned int color
     lcd.fillCircle( x, y, r, color );
 }
 
+extern "C" void hal_display_draw_text( int x, int y, const char * str, unsigned int fg, unsigned int bg )
+{
+    lcd.setTextColor( fg, bg );
+    lcd.drawString( str, x, y );
+}
+
 extern "C" void hal_input_poll_touch( int * x, int * y, bool * pressed )
 {
     lgfx::v1::touch_point_t tp;

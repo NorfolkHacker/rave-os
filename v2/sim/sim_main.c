@@ -29,6 +29,7 @@ sim_freertos_main( void )
 
     kernel_spawn_app( "v2/apps/demo_touch.rb", 10, 30, 140, 100, 1 );
     kernel_spawn_app( "v2/apps/demo_swatch.rb", 160, 70, 140, 100, 1 );
+    kernel_spawn_app( "v2/apps/acid_blaster.rb", 30, 40, 250, 180, 1 );
 
     xTaskCreate( kernel_router_task, "router", 4096, NULL, tskIDLE_PRIORITY + 2, NULL );
     vTaskStartScheduler();

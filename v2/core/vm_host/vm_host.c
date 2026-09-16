@@ -24,6 +24,7 @@
  * app code as two separate sequential mrb_load_detect_file_cxt calls into
  * the same VM instance instead. */
 #define ACID_APP_LIB_PATH "v2/apps/lib/acid_app.rb"
+#define ACID_GAME_LIB_PATH "v2/apps/lib/acid_game.rb"
 
 static void
 load_file_into_vm( mrb_state * mrb, mrb_ccontext * cxt, const char * path )
@@ -64,6 +65,7 @@ vm_host_task( void * pvParameters )
 
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );
+    load_file_into_vm( mrb, cxt, ACID_GAME_LIB_PATH );
     load_file_into_vm( mrb, cxt, params->script_path );
     mrb_ccontext_free( mrb, cxt );
     mrb_close( mrb );

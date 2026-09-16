@@ -38,3 +38,11 @@ gfx_fill_circle( int x, int y, int r, unsigned int color )
     hal_display_fill_circle( x, y, r, color );
     xSemaphoreGive( g_gfx_lock );
 }
+
+void
+gfx_draw_text( int x, int y, const char * str, unsigned int fg, unsigned int bg )
+{
+    xSemaphoreTake( g_gfx_lock, portMAX_DELAY );
+    hal_display_draw_text( x, y, str, fg, bg );
+    xSemaphoreGive( g_gfx_lock );
+}
