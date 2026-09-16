@@ -25,6 +25,7 @@
  * the same VM instance instead. */
 #define ACID_APP_LIB_PATH "v2/apps/lib/acid_app.rb"
 #define ACID_GAME_LIB_PATH "v2/apps/lib/acid_game.rb"
+#define ACID_KEYS_LIB_PATH "v2/apps/lib/acid_keys.rb"
 
 static void
 load_file_into_vm( mrb_state * mrb, mrb_ccontext * cxt, const char * path )
@@ -64,6 +65,7 @@ vm_host_task( void * pvParameters )
     acid_audio_bindings_register( mrb );
 
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
+    load_file_into_vm( mrb, cxt, ACID_KEYS_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_GAME_LIB_PATH );
     load_file_into_vm( mrb, cxt, params->script_path );
