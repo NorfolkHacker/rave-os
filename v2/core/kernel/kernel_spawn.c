@@ -13,6 +13,21 @@
 void *
 kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int closable )
 {
+    /* Checked BEFORE creating the task, not after: xTaskCreate can start
+     * the task running immediately (this is a pthread underneath, on the
+     * sim), so if registration were attempted only after task creation
+     * and found the table full, cleaning up would mean deleting a task
+     * that may already be mid-draw -- possibly holding gfx's own lock,
+     * which vTaskDelete would then leave stuck forever. Simpler and
+     * fully safe: never create the task at all if there's nowhere for it
+     * to go. Only reachable once app launching becomes dynamic (the
+     * menu) -- the fixed boot set in app_main.c never exceeds the
+     * table. */
+    if( kernel_window_count() >= KERNEL_WINDOW_MAX )
+    {
+        return NULL;
+    }
+
     QueueHandle_t queue = xQueueCreate( 8, sizeof( struct kernel_event ) );
     if( queue == NULL )
     {
@@ -50,6 +65,9 @@ kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int clos
         return NULL;
     }
 
+    /* Guaranteed to succeed: the capacity check at the top of this
+     * function already reserved a slot's worth of headroom, and nothing
+     * else registers windows concurrently. */
     kernel_window_register( ( void * ) task, ( void * ) queue, ( void * ) redraw_done_sem,
                              script_path, x, y, w, h, closable );
     return ( void * ) task;

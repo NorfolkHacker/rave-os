@@ -1,8 +1,89 @@
 #include "window_binding.h"
 #include "../kernel/kernel_window.h"
 #include "../kernel/kernel_router.h"
+#include "../kernel/kernel_spawn.h"
+#include "../kernel/kernel_layout.h"
 
 #include "mruby/array.h"
+
+/* Apps the launcher menu can start. A fixed, C-owned table rather than
+ * taking a path string from Ruby: kernel_spawn_app stores the pointer it's
+ * given (app_name in kernel_window, script_path in vm_host_params) for the
+ * ENTIRE lifetime of the spawned task, well past this binding call
+ * returning -- a Ruby-string's char* would be safe only until mruby's GC
+ * next runs. C string literals live forever, so indexing into this table
+ * is the only safe way to let Ruby choose what to launch. */
+struct launchable_app
+{
+    const char * path;
+    int w;
+    int h;
+};
+
+/* Capped at desktop.rb's own MAX_TASKBAR_SLOTS (currently 4, one taskbar
+ * row's worth before entries would start drawing under the reserved
+ * Menu/Back slot) -- acid_blaster.rb deliberately isn't in this table for
+ * that reason (a 5th entry has nowhere on screen to go without adding
+ * pagination, which is out of scope for now). It's still a fully working
+ * app, just not launchable from this menu yet. */
+static const struct launchable_app g_launchable[] = {
+    { "v2/apps/demo_touch.rb", 140, 100 },
+    { "v2/apps/demo_swatch.rb", 140, 100 },
+    { "v2/apps/file_manager.rb", 220, 160 },
+    { "v2/apps/editor.rb", 240, 170 },
+};
+#define LAUNCHABLE_COUNT ( sizeof( g_launchable ) / sizeof( g_launchable[ 0 ] ) )
+
+static mrb_value
+acid_launcher_count( mrb_state * mrb, mrb_value self )
+{
+    ( void ) mrb;
+    ( void ) self;
+    return mrb_fixnum_value( ( mrb_int ) LAUNCHABLE_COUNT );
+}
+
+static mrb_value
+acid_launcher_path( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int index;
+    mrb_get_args( mrb, "i", &index );
+    if( index < 0 || ( size_t ) index >= LAUNCHABLE_COUNT )
+    {
+        return mrb_nil_value();
+    }
+    /* mrb_str_new_cstr copies into a fresh Ruby String -- safe regardless
+     * of the source literal's own lifetime, which outlives the process
+     * anyway. */
+    return mrb_str_new_cstr( mrb, g_launchable[ index ].path );
+}
+
+static mrb_value
+acid_launcher_spawn( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int index;
+    mrb_get_args( mrb, "i", &index );
+    if( index < 0 || ( size_t ) index >= LAUNCHABLE_COUNT )
+    {
+        return mrb_bool_value( 0 );
+    }
+
+    /* Simple cascade so successively launched windows don't all land
+     * exactly on top of each other -- based on how many windows already
+     * exist, wrapped so it stays roughly on screen regardless of count. */
+    int n = kernel_window_count();
+    int x = 20 + ( ( n * 18 ) % 140 );
+    int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 90 );
+
+    void * task = kernel_spawn_app( g_launchable[ index ].path, x, y,
+                                     g_launchable[ index ].w, g_launchable[ index ].h, 1 );
+    if( task != NULL )
+    {
+        kernel_router_activate_window( task );
+    }
+    return mrb_bool_value( task != NULL );
+}
 
 static mrb_value
 acid_window_max( mrb_state * mrb, mrb_value self )
@@ -69,4 +150,10 @@ acid_window_bindings_register( mrb_state * mrb )
                                  acid_window_info, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_activate_window",
                                  acid_activate_window, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_count",
+                                 acid_launcher_count, MRB_ARGS_NONE() );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_path",
+                                 acid_launcher_path, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_spawn",
+                                 acid_launcher_spawn, MRB_ARGS_REQ( 1 ) );
 }
