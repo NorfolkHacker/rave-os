@@ -24,6 +24,8 @@ app_main( void )
     kernel_spawn_app( "v2/apps/demo_touch.rb", 10, 30, 140, 100, 1 );
     kernel_spawn_app( "v2/apps/demo_swatch.rb", 160, 70, 140, 100, 1 );
     kernel_spawn_app( "v2/apps/acid_blaster.rb", 30, 40, 250, 180, 1 );
+    kernel_spawn_app( "v2/apps/file_manager.rb", 40, 50, 220, 160, 1 );
+    kernel_spawn_app( "v2/apps/editor.rb", 60, 60, 240, 170, 1 );
 
     xTaskCreate( kernel_router_task, "router", 4096, NULL, 5, NULL );
 }
