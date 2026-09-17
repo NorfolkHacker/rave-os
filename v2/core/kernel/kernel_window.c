@@ -123,3 +123,22 @@ kernel_window_at_index( int index )
     }
     return &g_windows[ index ];
 }
+
+struct kernel_window *
+kernel_window_next_by_z( int after_z )
+{
+    struct kernel_window * best = NULL;
+    int i;
+    for( i = 0; i < KERNEL_WINDOW_MAX; i++ )
+    {
+        if( !g_windows[ i ].in_use || g_windows[ i ].z_order <= after_z )
+        {
+            continue;
+        }
+        if( best == NULL || g_windows[ i ].z_order < best->z_order )
+        {
+            best = &g_windows[ i ];
+        }
+    }
+    return best;
+}

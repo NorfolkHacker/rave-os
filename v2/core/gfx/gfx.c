@@ -46,3 +46,11 @@ gfx_draw_text( int x, int y, const char * str, unsigned int fg, unsigned int bg 
     hal_display_draw_text( x, y, str, fg, bg );
     xSemaphoreGive( g_gfx_lock );
 }
+
+void
+gfx_clear_screen( unsigned int color )
+{
+    xSemaphoreTake( g_gfx_lock, portMAX_DELAY );
+    hal_display_clear_screen( color );
+    xSemaphoreGive( g_gfx_lock );
+}

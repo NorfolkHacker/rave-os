@@ -19,6 +19,20 @@ extern "C" void hal_display_fill_rect( int x, int y, int w, int h, unsigned int 
     lcd.fillRect( x, y, w, h, color );
 }
 
+extern "C" void hal_display_clear_screen( unsigned int color )
+{
+    /* Deliberately NOT lcd.fillScreen(color) -- LGFXBase.hpp defines
+     * fillScreen(color) as setColor(color) + the colorless fillRect(x,y,w,h)
+     * overload, a different internal path than the (x,y,w,h,color) overload
+     * every other draw call in this project already uses successfully.
+     * Confirmed by direct testing on this SDL backend: fillScreen's own
+     * path silently fails to present to the actual window (real fill_rect/
+     * fill_circle/draw_text calls right after it show up fine; fillScreen's
+     * own output never does) -- fillRect with the full screen's own
+     * dimensions is the reliable, already-proven-working call. */
+    lcd.fillRect( 0, 0, lcd.width(), lcd.height(), color );
+}
+
 extern "C" void hal_display_fill_circle( int x, int y, int r, unsigned int color )
 {
     lcd.fillCircle( x, y, r, color );

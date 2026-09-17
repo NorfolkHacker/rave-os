@@ -10,7 +10,9 @@
 #include "kernel_window.h"
 #include "kernel_event.h"
 #include "kernel_layout.h"
+#include "kernel_theme.h"
 #include "../hal/hal_input.h"
+#include "../gfx/gfx.h"
 
 enum drag_mode
 {
@@ -27,8 +29,44 @@ static void * g_desktop_task = NULL;
 static int g_last_x = 0;
 static int g_last_y = 0;
 static void * g_focus_task = NULL;
+static int g_drag_repaint_tick = 0;
 
 static void send_event( struct kernel_window * win, int type, int x, int y, int pressed );
+
+/* Clears the whole physical screen and redraws every window back-to-front,
+ * in z-order. This project's HAL has no real compositor: every app draws
+ * straight onto one shared framebuffer with no backing store or clipping,
+ * so a window that closes, drags, or gets raised otherwise leaves stale
+ * pixels behind (the phase 5 final review's "windows don't visually
+ * close" / "dragging leaves trails" findings) -- fixing that properly
+ * (per-window backing buffers, or a repaint-request/ack protocol) is
+ * phase-sized and was explicitly parked as a roadmap item. This is the
+ * cheap alternative: since every window already knows how to fully
+ * repaint itself, just ask ALL of them to do it, in the right order, onto
+ * a freshly-cleared screen, whenever anything changes.
+ *
+ * Reuses the existing KERNEL_EVENT_MOVED, which AcidApp#start already
+ * handles by calling redraw() (a full self-repaint including chrome), and
+ * which AcidGame deliberately ignores since it repaints every tick anyway
+ * -- so every current app is covered with no Ruby-side change.
+ *
+ * Best-effort per window (0-timeout send, matching every other
+ * high-frequency event in this file): this runs on every drag tick plus
+ * every activate/close, so a single dropped frame is harmless -- the very
+ * next trigger repaints again moments later. */
+static void
+kernel_router_repaint_all( void )
+{
+    gfx_clear_screen( THEME_BG );
+
+    int z = -1;
+    struct kernel_window * win;
+    while( ( win = kernel_window_next_by_z( z ) ) != NULL )
+    {
+        z = win->z_order;
+        send_event( win, KERNEL_EVENT_MOVED, win->x, win->y, 0 );
+    }
+}
 
 void
 kernel_router_set_desktop_task( void * task )
@@ -42,19 +80,11 @@ kernel_router_activate_window( void * task )
     kernel_window_bring_to_front( task );
     g_focus_task = task;
 
-    /* Force a repaint so raising a window to front is actually visible --
-     * without this, z-order/focus state changes correctly but the shared
-     * framebuffer still shows whatever last drew on top, since apps only
-     * redraw on their own tick/event cadence (final review finding:
-     * "raise-to-front is a no-op on screen"). AcidApp#start already calls
-     * redraw() on :moved; AcidGame deliberately ignores :moved since it
-     * repaints every tick anyway -- so this covers every current app with
-     * no Ruby-side change. */
-    struct kernel_window * win = kernel_window_by_task( task );
-    if( win != NULL )
-    {
-        send_event( win, KERNEL_EVENT_MOVED, win->x, win->y, 0 );
-    }
+    /* Force a full repaint so raising a window to front is actually
+     * visible -- without this, z-order/focus state changes correctly but
+     * the shared framebuffer still shows whatever last drew on top (final
+     * review finding: "raise-to-front is a no-op on screen"). */
+    kernel_router_repaint_all();
 }
 
 void *
@@ -168,6 +198,16 @@ kernel_router_poll( void )
             }
             g_drag_mode = DRAG_NONE;
             g_drag_task = NULL;
+            g_drag_repaint_tick = 0;
+            /* The final authoritative position sync above only reaches
+             * the dragged window itself. Repaint everything on top of a
+             * clean screen so the drag's own trail (every intermediate
+             * position this window passed through, still on the shared
+             * framebuffer -- no compositor) is gone once the drag ends.
+             * Always unconditional here (unlike the in-progress case
+             * below), so the drag's final settled state is never skipped
+             * by the throttle. */
+            kernel_router_repaint_all();
         }
         else
         {
@@ -182,7 +222,21 @@ kernel_router_poll( void )
                  * window (Fix 8). */
                 win->y = KERNEL_DESKTOP_STRIP_H;
             }
-            send_event( win, KERNEL_EVENT_MOVED, win->x, win->y, 0 );
+            /* Throttled full repaint, not every single 16ms drag tick.
+             * Confirmed by direct testing: with 5-6 windows each needing
+             * several draw calls to fully redraw itself, a repaint every
+             * 16ms clears the screen again before apps finish their
+             * PREVIOUS redraw, and the screen never visibly settles --
+             * this was a real, reproduced bug, not a hypothetical. Every
+             * 4th tick (~64ms, still smooth to a human eye) gives apps
+             * real wall-clock time to finish a full redraw between
+             * clears. */
+            g_drag_repaint_tick++;
+            if( g_drag_repaint_tick >= 4 )
+            {
+                g_drag_repaint_tick = 0;
+                kernel_router_repaint_all();
+            }
         }
         return;
     }
@@ -194,8 +248,6 @@ kernel_router_poll( void )
         {
             return;
         }
-
-        kernel_router_activate_window( win->task );
 
         int rel_x = x - win->x;
         int rel_y = y - win->y;
@@ -211,6 +263,18 @@ kernel_router_poll( void )
                 int hit_r = KERNEL_CLOSE_BTN_R + 3; /* a little forgiveness for touch */
                 if( ( dx * dx + dy * dy ) <= ( hit_r * hit_r ) )
                 {
+                    /* Deliberately NOT calling kernel_router_activate_window
+                     * here (it used to run unconditionally before this
+                     * check) -- raising a window that's about to be
+                     * destroyed is pointless, and worse, it's actively
+                     * harmful: activate_window's own repaint_all() sends
+                     * this window a MOVED event, which it may still be
+                     * mid-processing (redrawing itself) when THIS repaint
+                     * below runs moments later -- its late redraw then
+                     * races back onto the screen on top of the clean
+                     * repaint, resurrecting stale content right after this
+                     * function just erased it. Confirmed by direct tracing:
+                     * this was a real, reproduced bug, not a hypothetical. */
                     send_event( win, KERNEL_EVENT_CLOSE, 0, 0, 0 );
                     kernel_window_unregister( win->task );
                     if( g_focus_task == win->task )
@@ -224,10 +288,17 @@ kernel_router_poll( void )
                          * already has. */
                         g_focus_task = NULL;
                     }
+                    /* The closed window's last-drawn pixels are still on
+                     * the shared framebuffer -- nothing else will ever
+                     * erase them on its own (no compositor). Repaint
+                     * everything still open on top of a clean screen so
+                     * the close is actually visible. */
+                    kernel_router_repaint_all();
                     return;
                 }
             }
 
+            kernel_router_activate_window( win->task );
             g_drag_mode = DRAG_MOVE;
             g_drag_task = win->task;
             g_drag_offset_x = rel_x;
@@ -235,6 +306,7 @@ kernel_router_poll( void )
             return;
         }
 
+        kernel_router_activate_window( win->task );
         send_event( win, KERNEL_EVENT_TOUCH, rel_x, rel_y, 1 );
         return;
     }

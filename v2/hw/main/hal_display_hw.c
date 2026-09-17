@@ -26,3 +26,9 @@ hal_display_draw_text( int x, int y, const char * str, unsigned int fg, unsigned
 {
     ESP_LOGI( TAG, "hal_display_draw_text(%d, %d, \"%s\", 0x%06x, 0x%06x): stub, not drawn", x, y, str, fg, bg );
 }
+
+void
+hal_display_clear_screen( unsigned int color )
+{
+    ESP_LOGI( TAG, "hal_display_clear_screen(0x%06x): stub, not drawn", color );
+}
