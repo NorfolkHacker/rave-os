@@ -135,6 +135,24 @@ kernel_router_set_desktop_task( void * task )
 void
 kernel_router_activate_window( void * task )
 {
+    /* If this window is already the frontmost one, bringing it to front
+     * again is a complete no-op -- z-order doesn't actually change (it's
+     * already at the top), so nothing on screen could possibly be wrong.
+     * Skipping the repaint here matters: activating is the ONE thing that
+     * happens on every single click a window gets, including clicks on a
+     * window that's already focused and on top (the common case while
+     * just using an app) -- without this check, every such click cleared
+     * and redrew the window's whole rect for literally no visual change,
+     * which is exactly what a "flickers every time you click a window"
+     * report looks like. */
+    struct kernel_window * win = kernel_window_by_task( task );
+    struct kernel_window * top = kernel_window_topmost();
+    if( win != NULL && top == win )
+    {
+        g_focus_task = task;
+        return;
+    }
+
     kernel_window_bring_to_front( task );
     g_focus_task = task;
 
@@ -145,7 +163,6 @@ kernel_router_activate_window( void * task )
      * no-op on screen"). Nothing outside this window's own bounds could
      * possibly change from a pure z-order raise, so that's the only
      * region that ever needs to be touched. */
-    struct kernel_window * win = kernel_window_by_task( task );
     if( win != NULL )
     {
         kernel_router_repaint_rect( win->x, win->y, win->w, win->h );

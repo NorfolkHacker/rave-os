@@ -40,7 +40,11 @@ struct kernel_window * kernel_window_at_index( int index );
  * than `after_z`, or NULL if none -- lets a caller walk every window
  * back-to-front (oldest-raised first) without exposing the internal
  * array. Pass -1 to start from the very back. Used by the router's
- * full-screen repaint (kernel_router_repaint_all). */
+ * dirty-rect repaint (kernel_router_repaint_rect). */
 struct kernel_window * kernel_window_next_by_z( int after_z );
+
+/* Returns the in-use window with the largest z_order (whatever is
+ * currently drawn frontmost), or NULL if no window is registered at all. */
+struct kernel_window * kernel_window_topmost( void );
 
 #endif

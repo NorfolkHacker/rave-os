@@ -28,15 +28,35 @@ class DesktopApp < AcidApp
   def on_idle
     # Nothing has to touch the desktop strip itself for the taskbar to go
     # stale -- clicking directly from one app window to another is the
-    # common case. Redrawing on every idle timeout (roughly 5Hz, the
+    # common case. Checking on every idle timeout (roughly 5Hz, the
     # existing 200ms acid_poll_event timeout) keeps the focus highlight
-    # and window list live without a dedicated notification channel.
-    redraw
+    # and window list live without a dedicated notification channel --
+    # but only actually REDRAW when something's different from last time
+    # (@last_state below), otherwise this unconditionally clears and
+    # repaints the whole strip 5 times a second with identical content,
+    # which is a real, continuous flicker for something that's visually a
+    # no-op almost all of the time.
+    redraw_if_changed
   end
 
   def redraw
     acid_draw_desktop_strip
     active_windows.each_with_index do |entry, slot|
+      draw_button(slot, entry[1])
+    end
+  end
+
+  # Same as redraw, but a no-op when the window list and focus state are
+  # identical to last time -- see on_idle's comment for why this matters
+  # (a plain redraw here would flicker the whole strip 5 times a second
+  # for no visible change almost all of the time).
+  def redraw_if_changed
+    windows = active_windows
+    sig = state_signature(windows)
+    return if sig == @last_state
+    @last_state = sig
+    acid_draw_desktop_strip
+    windows.each_with_index do |entry, slot|
       draw_button(slot, entry[1])
     end
   end
@@ -47,10 +67,20 @@ class DesktopApp < AcidApp
     entry = active_windows[slot]
     return unless entry
     acid_activate_window(entry[0])
-    redraw
+    redraw_if_changed
   end
 
   private
+
+  # A plain value (Array of Arrays, structurally comparable with ==) that
+  # changes if and only if what the strip would actually LOOK like
+  # changes: which apps are open, in which slots, and which one is
+  # focused. Position/size aren't included -- the taskbar never draws
+  # those -- so a window being dragged around the screen doesn't cause
+  # the strip to think it needs a redraw every tick.
+  def state_signature(windows)
+    windows.map { |entry| [entry[1][0], entry[1][5]] }
+  end
 
   # [[kernel_index, info], ...] for every in-use window except this one.
   # Recomputed on every call rather than cached -- at most 8 entries, and
