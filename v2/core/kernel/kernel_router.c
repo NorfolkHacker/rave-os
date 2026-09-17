@@ -273,7 +273,20 @@ kernel_router_poll( void )
              * earlier per-tick MOVED sends during a fast/long drag (Fix 2).
              * Nothing else ever re-syncs the app's idea of its own
              * position after this. */
-            if( win != NULL )
+            /* A plain click on a title bar (press, then release with no
+             * motion in between -- the common case of just switching
+             * focus to a window by clicking it) starts and ends a drag
+             * with the window never actually having moved at all
+             * (win->x/y still equal g_drag_orig_x/y, since only the
+             * in-progress branch below ever changes them). Nothing to
+             * sync and nothing to repaint in that case -- skipping this
+             * avoids a pointless clear-and-redraw of the window's own
+             * rect on every single title-bar click, which is exactly
+             * what a "the window's top bar flickers every time I click
+             * it" report looks like. kernel_router_activate_window
+             * already handled making the window visible on top, above,
+             * when the drag started. */
+            if( win != NULL && ( win->x != g_drag_orig_x || win->y != g_drag_orig_y ) )
             {
                 send_event_timeout( win, KERNEL_EVENT_MOVED, win->x, win->y, 0,
                                      pdMS_TO_TICKS( 50 ) );
