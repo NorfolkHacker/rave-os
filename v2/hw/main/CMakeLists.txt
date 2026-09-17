@@ -9,6 +9,7 @@ idf_component_register(
         ../../core/bindings/event_binding.c
         ../../core/bindings/chrome_binding.c
         ../../core/bindings/audio_binding.c
+        ../../core/bindings/window_binding.c
         ../../core/gfx/gfx.c
         ../../core/audio/synth.c
         ../../core/kernel/kernel_window.c

@@ -19,6 +19,8 @@ class AcidGame < AcidApp
         # tick (on_tick's contract, see the design spec), so a stale
         # chrome position after a drag self-corrects on the very next
         # tick without a special case here.
+      elsif ev.is_a?(Array) && ev[0] == :key
+        on_key(ev[1], ev[2])
       elsif ev
         on_touch(ev[0], ev[1], ev[2])
       end

@@ -17,4 +17,11 @@ struct vm_host_params
  * task frees it itself once the app's script has finished running. */
 void vm_host_task( void * pvParameters );
 
+/* Creates the mutex that serializes mruby's Prism parser across
+ * concurrently-starting app VMs (see vm_host.c's own comment on
+ * load_file_into_vm for why). Call exactly once, at boot, before any app
+ * spawns -- same ordering discipline gfx_init()/kernel_window_init()/
+ * kernel_audio_init() already established. */
+void vm_host_init( void );
+
 #endif

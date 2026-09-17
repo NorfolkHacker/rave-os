@@ -44,6 +44,15 @@ acid_poll_event( mrb_state * mrb, mrb_value self )
         return mrb_symbol_value( mrb_intern_cstr( mrb, "moved" ) );
     }
 
+    if( ev.type == KERNEL_EVENT_KEY )
+    {
+        mrb_value values[ 3 ];
+        values[ 0 ] = mrb_symbol_value( mrb_intern_cstr( mrb, "key" ) );
+        values[ 1 ] = mrb_fixnum_value( ev.x );
+        values[ 2 ] = mrb_bool_value( ev.pressed != 0 );
+        return mrb_ary_new_from_values( mrb, 3, values );
+    }
+
     mrb_value values[ 3 ];
     values[ 0 ] = mrb_fixnum_value( ev.x );
     values[ 1 ] = mrb_fixnum_value( ev.y );

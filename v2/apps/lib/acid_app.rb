@@ -5,6 +5,12 @@ class AcidApp
   def on_touch(x, y, pressed)
   end
 
+  def on_key(code, pressed)
+  end
+
+  def on_idle
+  end
+
   def on_destroy
   end
 
@@ -23,8 +29,12 @@ class AcidApp
         running = false
       elsif ev == :moved
         redraw
+      elsif ev.is_a?(Array) && ev[0] == :key
+        on_key(ev[1], ev[2])
       elsif ev
         on_touch(ev[0], ev[1], ev[2])
+      else
+        on_idle
       end
     end
     on_destroy

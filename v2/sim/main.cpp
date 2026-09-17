@@ -19,5 +19,10 @@ static int freertos_thread_entry( bool * running )
 
 int main( int, char ** )
 {
+    /* Panel_sdl's own debug rotate/zoom hotkeys (bare r/l/1-6) collide with
+     * this OS's real keyboard input -- typing plain text would also
+     * rotate/rescale the display. Require Ctrl so the hotkeys stay
+     * available without stealing keys apps need for real text entry. */
+    lgfx::Panel_sdl::setShortcutKeymod( KMOD_LCTRL );
     return lgfx::Panel_sdl::main( freertos_thread_entry );
 }
