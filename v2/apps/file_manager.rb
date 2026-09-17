@@ -104,7 +104,21 @@ class FileManagerApp < AcidApp
   end
 
   def on_touch(x, y, pressed)
-    return unless pressed
+    # The router sends a TOUCH event on every ~16ms tick for as long as
+    # the mouse stays held, not just once on the initial press (demo_touch
+    # relies on exactly that, to draw a continuous trail while dragging).
+    # Without this guard, holding down on a row re-ran activate_selected
+    # -- reopening the file and redrawing -- on every single one of those
+    # ticks, which looked like the file rapidly opening and closing
+    # (reported live as "intense flicker" while holding a row). A plain
+    # click should select/open once, not repeatedly for as long as it's
+    # held.
+    unless pressed
+      @touch_held = false
+      return
+    end
+    return if @touch_held
+    @touch_held = true
     if @preview
       @preview = nil
       redraw
