@@ -15,10 +15,13 @@ class AcidGame < AcidApp
       if ev == :close
         running = false
       elsif ev == :moved
-        # No-op: unlike AcidApp, a game redraws its whole scene every
-        # tick (on_tick's contract, see the design spec), so a stale
+        # No redraw here: unlike AcidApp, a game redraws its whole scene
+        # every tick (on_tick's contract, see the design spec), so a stale
         # chrome position after a drag self-corrects on the very next
-        # tick without a special case here.
+        # tick without a special case here. Still ack immediately so the
+        # router's repaint_all doesn't block waiting the full timeout on
+        # a window that was never going to redraw for this event.
+        acid_notify_redraw_done
       elsif ev.is_a?(Array) && ev[0] == :key
         on_key(ev[1], ev[2])
       elsif ev

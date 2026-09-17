@@ -29,6 +29,7 @@ class AcidApp
         running = false
       elsif ev == :moved
         redraw
+        acid_notify_redraw_done
       elsif ev.is_a?(Array) && ev[0] == :key
         on_key(ev[1], ev[2])
       elsif ev

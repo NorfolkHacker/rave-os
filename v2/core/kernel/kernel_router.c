@@ -5,6 +5,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "semphr.h"
 
 #include "kernel_router.h"
 #include "kernel_window.h"
@@ -29,9 +30,10 @@ static void * g_desktop_task = NULL;
 static int g_last_x = 0;
 static int g_last_y = 0;
 static void * g_focus_task = NULL;
-static int g_drag_repaint_tick = 0;
 
 static void send_event( struct kernel_window * win, int type, int x, int y, int pressed );
+static void send_event_timeout( struct kernel_window * win, int type, int x, int y, int pressed,
+                                 TickType_t timeout );
 
 /* Clears the whole physical screen and redraws every window back-to-front,
  * in z-order. This project's HAL has no real compositor: every app draws
@@ -64,7 +66,19 @@ kernel_router_repaint_all( void )
     while( ( win = kernel_window_next_by_z( z ) ) != NULL )
     {
         z = win->z_order;
-        send_event( win, KERNEL_EVENT_MOVED, win->x, win->y, 0 );
+        /* Drain any stale "done" signal left over from a redraw this
+         * window finished on its own between repaints (nothing takes
+         * this semaphore except this wait, but a defensive drain costs
+         * nothing and guarantees the take below reflects THIS send). */
+        xSemaphoreTake( ( SemaphoreHandle_t ) win->redraw_done_sem, 0 );
+        send_event_timeout( win, KERNEL_EVENT_MOVED, win->x, win->y, 0, pdMS_TO_TICKS( 50 ) );
+        /* Wait for this window's redraw to actually finish before moving
+         * on to the next one -- see kernel_window.h's redraw_done_sem
+         * comment for why send order alone doesn't guarantee draw-
+         * completion order. Bounded so one slow/dead app can't hang the
+         * whole compositor forever; a timeout here just means the next
+         * window might still race this one, same as before this fix. */
+        xSemaphoreTake( ( SemaphoreHandle_t ) win->redraw_done_sem, pdMS_TO_TICKS( 50 ) );
     }
 }
 
@@ -198,7 +212,6 @@ kernel_router_poll( void )
             }
             g_drag_mode = DRAG_NONE;
             g_drag_task = NULL;
-            g_drag_repaint_tick = 0;
             /* The final authoritative position sync above only reaches
              * the dragged window itself. Repaint everything on top of a
              * clean screen so the drag's own trail (every intermediate
@@ -222,21 +235,36 @@ kernel_router_poll( void )
                  * window (Fix 8). */
                 win->y = KERNEL_DESKTOP_STRIP_H;
             }
-            /* Throttled full repaint, not every single 16ms drag tick.
-             * Confirmed by direct testing: with 5-6 windows each needing
-             * several draw calls to fully redraw itself, a repaint every
-             * 16ms clears the screen again before apps finish their
-             * PREVIOUS redraw, and the screen never visibly settles --
-             * this was a real, reproduced bug, not a hypothetical. Every
-             * 4th tick (~64ms, still smooth to a human eye) gives apps
-             * real wall-clock time to finish a full redraw between
-             * clears. */
-            g_drag_repaint_tick++;
-            if( g_drag_repaint_tick >= 4 )
-            {
-                g_drag_repaint_tick = 0;
-                kernel_router_repaint_all();
-            }
+            /* Deliberately no redraw/repaint of any kind while the drag is
+             * still held -- only the position bookkeeping above. Confirmed
+             * by direct, isolated testing: it's specifically TWO OR MORE
+             * redraw-triggering sends in quick succession during one held
+             * drag (whether that's kernel_router_repaint_all() touching
+             * every window, or even just this ONE window's own MOVED sent
+             * repeatedly per-tick) that corrupts LGFX's SDL rendering/
+             * present pipeline hard enough that NOTHING ever renders
+             * correctly again for the rest of the process's life, no
+             * matter how long you wait afterward -- not the number of
+             * windows touched, not full-screen clears specifically, just
+             * repeated redraw cycles fired close together. A single
+             * redraw cycle -- no matter how many windows it touches --
+             * always works. This looks like a genuine concurrency
+             * assumption in vendored LGFX's Panel_sdl (a semaphore-based
+             * signal-and-wait-for-present protocol per draw call,
+             * seemingly not designed for many FreeRTOS-task-pthreads
+             * hammering it across repeated redraws) rather than a bug in
+             * this file -- not fixed at that layer, since it's vendored
+             * third-party code, and not root-caused further within this
+             * fix's own budget.
+             *
+             * The trade-off: a window doesn't visually track the cursor
+             * while actively being dragged (no live drag preview) -- it
+             * "warps" to its final position only on release, via the one
+             * guaranteed send_event_timeout + kernel_router_repaint_all()
+             * below, which is the ONLY redraw this whole interaction ever
+             * triggers. Losing live drag feedback is a real regression,
+             * but it's the only way found so far to guarantee the screen
+             * is never left permanently broken. */
         }
         return;
     }

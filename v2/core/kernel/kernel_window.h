@@ -7,6 +7,17 @@ struct kernel_window
 {
     void * task;          /* opaque TaskHandle_t */
     void * queue;          /* opaque QueueHandle_t */
+    /* opaque SemaphoreHandle_t (binary), given by the app itself right
+     * after it finishes handling a KERNEL_EVENT_MOVED-triggered redraw --
+     * see acid_notify_redraw_done. Every app on screen draws on its own
+     * real FreeRTOS task/pthread with no ordering between them otherwise;
+     * the router takes this after each send in kernel_router_repaint_all
+     * so a window's redraw is confirmed FINISHED before the next window
+     * (which may visually overlap it) starts its own -- without this,
+     * back-to-front z-order is only the ORDER EVENTS ARE SENT IN, not the
+     * order drawing actually completes in, so a higher window's draw can
+     * finish before a lower one's and get silently painted over. */
+    void * redraw_done_sem;
     const char * app_name;
     int x, y, w, h;
     int z_order;
@@ -15,7 +26,8 @@ struct kernel_window
 };
 
 void kernel_window_init( void );
-int kernel_window_register( void * task, void * queue, const char * app_name,
+int kernel_window_register( void * task, void * queue, void * redraw_done_sem,
+                             const char * app_name,
                              int x, int y, int w, int h, int closable );
 void kernel_window_unregister( void * task );
 struct kernel_window * kernel_window_find_at( int x, int y );

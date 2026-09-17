@@ -16,6 +16,7 @@
 struct kernel_app_context
 {
     QueueHandle_t queue;
+    void * redraw_done_sem;   /* opaque SemaphoreHandle_t (binary) */
     int window_x;
     int window_y;
     int window_w;

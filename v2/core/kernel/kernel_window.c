@@ -13,7 +13,8 @@ kernel_window_init( void )
 }
 
 int
-kernel_window_register( void * task, void * queue, const char * app_name,
+kernel_window_register( void * task, void * queue, void * redraw_done_sem,
+                         const char * app_name,
                          int x, int y, int w, int h, int closable )
 {
     int i;
@@ -23,6 +24,7 @@ kernel_window_register( void * task, void * queue, const char * app_name,
         {
             g_windows[ i ].task = task;
             g_windows[ i ].queue = queue;
+            g_windows[ i ].redraw_done_sem = redraw_done_sem;
             g_windows[ i ].app_name = app_name;
             g_windows[ i ].x = x;
             g_windows[ i ].y = y;

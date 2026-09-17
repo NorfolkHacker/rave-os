@@ -8,6 +8,7 @@
 
 #include "mruby/array.h"
 #include "queue.h"
+#include "semphr.h"
 
 static mrb_value
 acid_poll_event( mrb_state * mrb, mrb_value self )
@@ -60,9 +61,25 @@ acid_poll_event( mrb_state * mrb, mrb_value self )
     return mrb_ary_new_from_values( mrb, 3, values );
 }
 
+/* Called by AcidApp/AcidGame right after finishing a :moved-triggered
+ * redraw -- lets kernel_router_repaint_all wait for this specific window's
+ * drawing to actually land before it moves on to the next one, so
+ * back-to-front z-order is real completion order, not just send order
+ * (see kernel_window.h's redraw_done_sem comment). */
+static mrb_value
+acid_notify_redraw_done( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    struct kernel_app_context * ctx = ( struct kernel_app_context * ) mrb->ud;
+    xSemaphoreGive( ( SemaphoreHandle_t ) ctx->redraw_done_sem );
+    return mrb_nil_value();
+}
+
 void
 acid_event_bindings_register( mrb_state * mrb )
 {
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_poll_event",
                                  acid_poll_event, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_notify_redraw_done",
+                                 acid_notify_redraw_done, MRB_ARGS_NONE() );
 }

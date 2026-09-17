@@ -7,6 +7,7 @@ struct vm_host_params
 {
     const char * script_path;
     QueueHandle_t queue;
+    void * redraw_done_sem;   /* opaque SemaphoreHandle_t (binary) */
     int window_x;
     int window_y;
     int window_w;

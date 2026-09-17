@@ -14,8 +14,8 @@ main( void )
     void * task_c = &dummy_c;
 
     assert( kernel_window_count() == 0 );
-    assert( kernel_window_register( task_a, NULL, "a", 0, 0, 100, 100, 1 ) == 1 );
-    assert( kernel_window_register( task_b, NULL, "b", 50, 50, 100, 100, 1 ) == 1 );
+    assert( kernel_window_register( task_a, NULL, NULL, "a", 0, 0, 100, 100, 1 ) == 1 );
+    assert( kernel_window_register( task_b, NULL, NULL, "b", 50, 50, 100, 100, 1 ) == 1 );
     assert( kernel_window_count() == 2 );
 
     /* (60,60) is inside both; b was registered later so it has the higher
@@ -45,13 +45,13 @@ main( void )
     for( i = 0; i < KERNEL_WINDOW_MAX; i++ )
     {
         void * extra_task = ( void * ) ( long ) ( 1000 + i );
-        if( kernel_window_register( extra_task, NULL, "extra", 0, 0, 1, 1, 1 ) )
+        if( kernel_window_register( extra_task, NULL, NULL, "extra", 0, 0, 1, 1, 1 ) )
         {
             registered++;
         }
     }
     assert( registered == KERNEL_WINDOW_MAX );
-    assert( kernel_window_register( task_c, NULL, "c", 0, 0, 1, 1, 1 ) == 0 );
+    assert( kernel_window_register( task_c, NULL, NULL, "c", 0, 0, 1, 1, 1 ) == 0 );
 
     printf( "kernel_window: all assertions passed\n" );
     return 0;
