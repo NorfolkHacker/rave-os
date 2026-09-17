@@ -98,7 +98,20 @@ class DesktopApp < AcidApp
   end
 
   def on_touch(x, y, pressed)
-    return unless pressed
+    # The router sends a TOUCH event on every ~16ms tick for as long as the
+    # mouse stays held, not just once on the initial press (demo_touch
+    # relies on exactly that, to draw a continuous trail while dragging).
+    # Without this guard, holding down on the Menu slot re-toggled the
+    # mode on every single one of those ticks -- Menu/Back/Menu/Back --
+    # which looked like intense flicker (reported live); holding on a
+    # launcher entry would have been worse, rapid-firing acid_launcher_spawn
+    # for as long as it was held. A plain click should act once per press.
+    unless pressed
+      @touch_held = false
+      return
+    end
+    return if @touch_held
+    @touch_held = true
     if in_menu_slot?(x)
       @mode = ( @mode == :launcher ) ? :windows : :launcher
       redraw
