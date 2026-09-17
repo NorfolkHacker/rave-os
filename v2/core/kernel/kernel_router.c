@@ -28,6 +28,8 @@ static int g_last_x = 0;
 static int g_last_y = 0;
 static void * g_focus_task = NULL;
 
+static void send_event( struct kernel_window * win, int type, int x, int y, int pressed );
+
 void
 kernel_router_set_desktop_task( void * task )
 {
@@ -39,12 +41,35 @@ kernel_router_activate_window( void * task )
 {
     kernel_window_bring_to_front( task );
     g_focus_task = task;
+
+    /* Force a repaint so raising a window to front is actually visible --
+     * without this, z-order/focus state changes correctly but the shared
+     * framebuffer still shows whatever last drew on top, since apps only
+     * redraw on their own tick/event cadence (final review finding:
+     * "raise-to-front is a no-op on screen"). AcidApp#start already calls
+     * redraw() on :moved; AcidGame deliberately ignores :moved since it
+     * repaints every tick anyway -- so this covers every current app with
+     * no Ruby-side change. */
+    struct kernel_window * win = kernel_window_by_task( task );
+    if( win != NULL )
+    {
+        send_event( win, KERNEL_EVENT_MOVED, win->x, win->y, 0 );
+    }
 }
 
 void *
 kernel_router_get_focus( void )
 {
     return g_focus_task;
+}
+
+void
+kernel_router_clear_focus( void * task )
+{
+    if( g_focus_task == task )
+    {
+        g_focus_task = NULL;
+    }
 }
 
 static void

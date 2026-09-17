@@ -23,7 +23,15 @@ app_main( void )
 
     kernel_spawn_app( "v2/apps/demo_touch.rb", 10, 30, 140, 100, 1 );
     kernel_spawn_app( "v2/apps/demo_swatch.rb", 160, 70, 140, 100, 1 );
-    kernel_spawn_app( "v2/apps/acid_blaster.rb", 30, 40, 250, 180, 1 );
+    /* acid_blaster is the only continuously self-redrawing window in this
+     * boot set; on this screen size its window geometrically cannot avoid
+     * overlapping file_manager/editor, and unlike two static windows
+     * overlapping (fully fixed by kernel_router_activate_window's new
+     * repaint-on-raise, see kernel_router.c), an animating window keeps
+     * re-covering whatever's under it every tick regardless of z-order.
+     * Not spawned by default for now -- still a fully working app, just
+     * not auto-launched alongside five other apps on a small screen. See
+     * the phase 5 final review's finding on this. */
     kernel_spawn_app( "v2/apps/file_manager.rb", 40, 50, 220, 160, 1 );
     kernel_spawn_app( "v2/apps/editor.rb", 60, 60, 240, 170, 1 );
 

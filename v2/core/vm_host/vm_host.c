@@ -21,6 +21,7 @@
 #include "../kernel/kernel_app_context.h"
 #include "../kernel/kernel_window.h"
 #include "../kernel/kernel_audio.h"
+#include "../kernel/kernel_router.h"
 
 /* Loaded into every app's VM before its own script, so AcidApp is always
  * defined -- the vendored mruby's default gembox (mrbgems/default.gembox)
@@ -226,6 +227,7 @@ vm_host_task( void * pvParameters )
      * queue -- so this is the sole deletion point and safe to call once,
      * unconditionally, here. */
     kernel_window_unregister( ( void * ) xTaskGetCurrentTaskHandle() );
+    kernel_router_clear_focus( ( void * ) xTaskGetCurrentTaskHandle() );
     kernel_audio_release_owner( ( void * ) xTaskGetCurrentTaskHandle() );
     vQueueDelete( params->queue );
 
