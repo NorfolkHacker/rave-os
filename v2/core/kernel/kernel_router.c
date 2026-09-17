@@ -25,6 +25,11 @@ static enum drag_mode g_drag_mode = DRAG_NONE;
 static void * g_drag_task = NULL;
 static int g_drag_offset_x = 0;
 static int g_drag_offset_y = 0;
+/* The dragged window's position at the moment the drag started -- needed
+ * at release to repaint the union of where it WAS and where it ended up,
+ * since that's the only region a plain move can possibly have disturbed. */
+static int g_drag_orig_x = 0;
+static int g_drag_orig_y = 0;
 static bool g_was_pressed = false;
 static void * g_desktop_task = NULL;
 static int g_last_x = 0;
@@ -35,37 +40,62 @@ static void send_event( struct kernel_window * win, int type, int x, int y, int 
 static void send_event_timeout( struct kernel_window * win, int type, int x, int y, int pressed,
                                  TickType_t timeout );
 
-/* Clears the whole physical screen and redraws every window back-to-front,
- * in z-order. This project's HAL has no real compositor: every app draws
- * straight onto one shared framebuffer with no backing store or clipping,
- * so a window that closes, drags, or gets raised otherwise leaves stale
- * pixels behind (the phase 5 final review's "windows don't visually
- * close" / "dragging leaves trails" findings) -- fixing that properly
- * (per-window backing buffers, or a repaint-request/ack protocol) is
+static int
+rects_intersect( int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh )
+{
+    return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+}
+
+/* Clears only the given rect and redraws every window that overlaps it,
+ * back-to-front in z-order -- NOT the whole screen every time. This
+ * project's HAL has no real compositor: every app draws straight onto one
+ * shared framebuffer with no backing store or clipping, so a window that
+ * closes, drags, or gets raised otherwise leaves stale pixels behind (the
+ * phase 5 final review's "windows don't visually close" / "dragging
+ * leaves trails" findings). A full per-window backing-buffer compositor is
  * phase-sized and was explicitly parked as a roadmap item. This is the
  * cheap alternative: since every window already knows how to fully
- * repaint itself, just ask ALL of them to do it, in the right order, onto
- * a freshly-cleared screen, whenever anything changes.
+ * repaint itself, ask only the ones that could possibly be affected --
+ * windows entirely outside the dirty rect were never disturbed by the
+ * clear, so redrawing them too would just be a visible, pointless flicker
+ * (and wasted time) for a part of the screen nothing happened to.
  *
  * Reuses the existing KERNEL_EVENT_MOVED, which AcidApp#start already
  * handles by calling redraw() (a full self-repaint including chrome), and
  * which AcidGame deliberately ignores since it repaints every tick anyway
- * -- so every current app is covered with no Ruby-side change.
- *
- * Best-effort per window (0-timeout send, matching every other
- * high-frequency event in this file): this runs on every drag tick plus
- * every activate/close, so a single dropped frame is harmless -- the very
- * next trigger repaints again moments later. */
+ * -- so every current app is covered with no Ruby-side change. A window
+ * only ever redraws its OWN full bounds regardless of how small the dirty
+ * rect actually was; that's fine, it naturally clips to itself. */
 static void
-kernel_router_repaint_all( void )
+kernel_router_repaint_rect( int rx, int ry, int rw, int rh )
 {
-    gfx_clear_screen( THEME_BG );
+    gfx_fill_rect( rx, ry, rw, rh, THEME_BG );
+
+    /* acid_activate_window (window_binding.c) calls kernel_router_activate_window
+     * -- and so this function -- directly on the CALLING APP'S OWN task, not
+     * the router's (e.g. desktop.rb's on_touch handler activating a taskbar
+     * entry). If that caller's own window is anywhere in the z-order below,
+     * waiting on its redraw_done_sem would wait forever on itself: its task
+     * can't service its own queued MOVED event while it's sitting right here,
+     * blocked inside this very call. Detected and skipped below -- the event
+     * is still sent, so it's picked up (and acked) the moment this task next
+     * reaches its own poll loop, just without this function blocking on it. */
+    void * caller = ( void * ) xTaskGetCurrentTaskHandle();
 
     int z = -1;
     struct kernel_window * win;
     while( ( win = kernel_window_next_by_z( z ) ) != NULL )
     {
         z = win->z_order;
+        if( !rects_intersect( win->x, win->y, win->w, win->h, rx, ry, rw, rh ) )
+        {
+            continue;
+        }
+        if( win->task == caller )
+        {
+            send_event( win, KERNEL_EVENT_MOVED, win->x, win->y, 0 );
+            continue;
+        }
         /* Drain any stale "done" signal left over from a redraw this
          * window finished on its own between repaints (nothing takes
          * this semaphore except this wait, but a defensive drain costs
@@ -82,6 +112,20 @@ kernel_router_repaint_all( void )
     }
 }
 
+/* Repaints the union of a window's own bounds at two positions (where it
+ * was, and where it is now) -- the only region a plain move between those
+ * two points could possibly have left a trail in or exposed. Used by both
+ * the drag's in-progress and release paths. */
+static void
+kernel_router_repaint_move_union( int old_x, int old_y, int new_x, int new_y, int w, int h )
+{
+    int union_x = old_x < new_x ? old_x : new_x;
+    int union_y = old_y < new_y ? old_y : new_y;
+    int right = old_x + w > new_x + w ? old_x + w : new_x + w;
+    int bottom = old_y + h > new_y + h ? old_y + h : new_y + h;
+    kernel_router_repaint_rect( union_x, union_y, right - union_x, bottom - union_y );
+}
+
 void
 kernel_router_set_desktop_task( void * task )
 {
@@ -94,11 +138,18 @@ kernel_router_activate_window( void * task )
     kernel_window_bring_to_front( task );
     g_focus_task = task;
 
-    /* Force a full repaint so raising a window to front is actually
-     * visible -- without this, z-order/focus state changes correctly but
-     * the shared framebuffer still shows whatever last drew on top (final
-     * review finding: "raise-to-front is a no-op on screen"). */
-    kernel_router_repaint_all();
+    /* Force a repaint of this window's own footprint so raising it to
+     * front is actually visible -- without this, z-order/focus state
+     * changes correctly but the shared framebuffer still shows whatever
+     * last drew on top there (final review finding: "raise-to-front is a
+     * no-op on screen"). Nothing outside this window's own bounds could
+     * possibly change from a pure z-order raise, so that's the only
+     * region that ever needs to be touched. */
+    struct kernel_window * win = kernel_window_by_task( task );
+    if( win != NULL )
+    {
+        kernel_router_repaint_rect( win->x, win->y, win->w, win->h );
+    }
 }
 
 void *
@@ -209,18 +260,18 @@ kernel_router_poll( void )
             {
                 send_event_timeout( win, KERNEL_EVENT_MOVED, win->x, win->y, 0,
                                      pdMS_TO_TICKS( 50 ) );
+                /* The final authoritative position sync above only reaches
+                 * the dragged window itself. Repaint the union of where it
+                 * last got painted and where it ended up, so the trail is
+                 * gone once the drag ends without disturbing any window
+                 * the drag's path never crossed. Always unconditional here
+                 * (unlike the in-progress case below), so the drag's final
+                 * settled state is never skipped by anything. */
+                kernel_router_repaint_move_union( g_drag_orig_x, g_drag_orig_y, win->x, win->y,
+                                                    win->w, win->h );
             }
             g_drag_mode = DRAG_NONE;
             g_drag_task = NULL;
-            /* The final authoritative position sync above only reaches
-             * the dragged window itself. Repaint everything on top of a
-             * clean screen so the drag's own trail (every intermediate
-             * position this window passed through, still on the shared
-             * framebuffer -- no compositor) is gone once the drag ends.
-             * Always unconditional here (unlike the in-progress case
-             * below), so the drag's final settled state is never skipped
-             * by the throttle. */
-            kernel_router_repaint_all();
         }
         else
         {
@@ -235,36 +286,22 @@ kernel_router_poll( void )
                  * window (Fix 8). */
                 win->y = KERNEL_DESKTOP_STRIP_H;
             }
-            /* Deliberately no redraw/repaint of any kind while the drag is
-             * still held -- only the position bookkeeping above. Confirmed
-             * by direct, isolated testing: it's specifically TWO OR MORE
-             * redraw-triggering sends in quick succession during one held
-             * drag (whether that's kernel_router_repaint_all() touching
-             * every window, or even just this ONE window's own MOVED sent
-             * repeatedly per-tick) that corrupts LGFX's SDL rendering/
-             * present pipeline hard enough that NOTHING ever renders
-             * correctly again for the rest of the process's life, no
-             * matter how long you wait afterward -- not the number of
-             * windows touched, not full-screen clears specifically, just
-             * repeated redraw cycles fired close together. A single
-             * redraw cycle -- no matter how many windows it touches --
-             * always works. This looks like a genuine concurrency
-             * assumption in vendored LGFX's Panel_sdl (a semaphore-based
-             * signal-and-wait-for-present protocol per draw call,
-             * seemingly not designed for many FreeRTOS-task-pthreads
-             * hammering it across repeated redraws) rather than a bug in
-             * this file -- not fixed at that layer, since it's vendored
-             * third-party code, and not root-caused further within this
-             * fix's own budget.
-             *
-             * The trade-off: a window doesn't visually track the cursor
-             * while actively being dragged (no live drag preview) -- it
-             * "warps" to its final position only on release, via the one
-             * guaranteed send_event_timeout + kernel_router_repaint_all()
-             * below, which is the ONLY redraw this whole interaction ever
-             * triggers. Losing live drag feedback is a real regression,
-             * but it's the only way found so far to guarantee the screen
-             * is never left permanently broken. */
+            /* Live drag feedback: repaint the union of where this window
+             * last got painted and where it is now, then remember THIS
+             * position as the new baseline for next tick -- keeps the
+             * dirty rect a tight, incremental sliver instead of growing to
+             * cover the whole drag path. (An earlier version of this code
+             * skipped all mid-drag repaints entirely, from a since-
+             * disproven theory that repeated redraw cycles corrupted
+             * LGFX's own SDL present pipeline -- the real cause, fixed
+             * separately, was a redraw-completion race between windows'
+             * independent tasks with no ordering guarantee at all;
+             * kernel_router_repaint_rect's redraw_done_sem wait now makes
+             * every one of these calls safe.) */
+            kernel_router_repaint_move_union( g_drag_orig_x, g_drag_orig_y, win->x, win->y,
+                                                win->w, win->h );
+            g_drag_orig_x = win->x;
+            g_drag_orig_y = win->y;
         }
         return;
     }
@@ -318,10 +355,12 @@ kernel_router_poll( void )
                     }
                     /* The closed window's last-drawn pixels are still on
                      * the shared framebuffer -- nothing else will ever
-                     * erase them on its own (no compositor). Repaint
-                     * everything still open on top of a clean screen so
-                     * the close is actually visible. */
-                    kernel_router_repaint_all();
+                     * erase them on its own (no compositor). Repaint just
+                     * its own now-vacated footprint (the only region the
+                     * close could possibly have exposed) so it's actually
+                     * gone, without disturbing any window whose own area
+                     * this window never overlapped. */
+                    kernel_router_repaint_rect( win->x, win->y, win->w, win->h );
                     return;
                 }
             }
@@ -331,6 +370,8 @@ kernel_router_poll( void )
             g_drag_task = win->task;
             g_drag_offset_x = rel_x;
             g_drag_offset_y = rel_y;
+            g_drag_orig_x = win->x;
+            g_drag_orig_y = win->y;
             return;
         }
 
