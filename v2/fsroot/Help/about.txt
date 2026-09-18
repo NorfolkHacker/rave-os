@@ -1,5 +1,12 @@
 acid OS v2
 
-Menu (top right) opens the app launcher. Drop a <name>.rb and a
-matching <name>.app.toml into v2/apps and it shows up there too --
-no rebuild needed.
+FreeRTOS + mruby, one
+Ruby VM per app window.
+
+Menu (top right) opens
+the app launcher.
+
+Drop a <name>.rb plus a
+<name>.app.toml into
+v2/apps -- it shows up
+in Menu, no rebuild.
