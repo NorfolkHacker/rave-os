@@ -10,6 +10,20 @@ static LGFX lcd( 320, 240 );
 
 extern "C" void hal_display_init( void )
 {
+    /* Must be called before init() (it only affects window creation).
+     * Without this, the host window manager is free to resize the SDL
+     * window on its own initiative -- observed live doing exactly that,
+     * repeatedly, unprompted by anything this app does. Every such resize
+     * makes Panel_sdl recompute its touch-to-framebuffer scaling factor
+     * from whatever size the window ended up at, so a resize landing at
+     * the wrong moment desyncs where a click is reported from where it
+     * visually landed -- reported live as "clicking the close button (and
+     * separately, the menu) does nothing." A fixed-size, non-resizable
+     * window removes the whole class of problem instead of chasing scaling
+     * math. (Matches the reference project's own approach: family-mruby's
+     * Linux sim boots at one fixed resolution per hardware target,
+     * selected once, never resized at runtime.) */
+    lgfx::v1::Panel_sdl::setResizable( false );
     lcd.init();
     lcd.fillScreen( TFT_BLACK );
 }
