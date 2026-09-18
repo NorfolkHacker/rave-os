@@ -34,31 +34,12 @@ sim_freertos_main( void )
     void * desktop_task = kernel_spawn_app( "v2/apps/desktop.rb", 0, 0, 320, 132, 0 );
     kernel_router_set_desktop_task( desktop_task );
 
-    kernel_spawn_app( "v2/apps/demo_touch.rb", 10, 30, 140, 100, 1 );
-    kernel_spawn_app( "v2/apps/demo_swatch.rb", 160, 70, 140, 100, 1 );
-    /* acid_blaster is the only continuously self-redrawing window in this
-     * boot set; on this screen size its window geometrically cannot avoid
-     * overlapping file_manager/editor, and unlike two static windows
-     * overlapping (fully fixed by kernel_router_activate_window's new
-     * repaint-on-raise, see kernel_router.c), an animating window keeps
-     * re-covering whatever's under it every tick regardless of z-order.
-     * Not spawned by default for now -- still a fully working app, just
-     * not auto-launched alongside five other apps on a small screen. See
-     * the phase 5 final review's finding on this. */
-    kernel_spawn_app( "v2/apps/file_manager.rb", 40, 50, 220, 160, 1 );
-    void * editor_task = kernel_spawn_app( "v2/apps/editor.rb", 60, 60, 240, 170, 1 );
-
-    /* Without this, boot left g_focus_task NULL -- no taskbar entry ever
-     * highlighted until the user clicked something, even though a window
-     * (editor, spawned last) was already visually on top. Every real
-     * desktop starts with something focused; this just makes that
-     * already-true z-order state explicit. Safe to call before the
-     * router/scheduler start: editor is already topmost from registration
-     * order, so this only sets focus, no repaint is attempted. */
-    if( editor_task != NULL )
-    {
-        kernel_router_activate_window( editor_task );
-    }
+    /* Boot used to also auto-spawn demo_touch/demo_swatch/file_manager/
+     * editor here, so there was always something to test the launcher
+     * against before it could discover apps itself. Now that desktop.rb
+     * scans v2/apps for *.app.toml manifests at boot (see its own
+     * comment), that crutch just clutters a fresh boot with four windows
+     * nobody asked to open -- every app is reachable from Menu instead. */
 
     xTaskCreate( kernel_router_task, "router", 4096, NULL, tskIDLE_PRIORITY + 2, NULL );
     vTaskStartScheduler();
