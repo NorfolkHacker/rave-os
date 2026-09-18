@@ -38,7 +38,7 @@ class Breakout < AcidGame
     acid_configure_filter(180, 3, FILTER_MODE_LP)
     acid_configure_voice(BRICK_VOICE, 1, 2, 30, 50, 50)
     acid_configure_voice(PADDLE_VOICE, 1, 2, 30, 50, 50)
-    acid_configure_voice(OVER_VOICE, 1, 8, 100, 35, 100)
+    acid_configure_voice(OVER_VOICE, 1, 5, 60, 35, 40)
     reset_game
   end
 
@@ -143,7 +143,7 @@ class Breakout < AcidGame
 
     if b[:y] - BALL_R > WINDOW_H - 1
       @game_over = true
-      trigger_sfx(OVER_VOICE, OVER_NOTES, 4, 45, 40, 4)
+      trigger_sfx(OVER_VOICE, OVER_NOTES, 2, 25, 35, 2)
       return
     end
 
@@ -165,7 +165,7 @@ class Breakout < AcidGame
     return if @bricks.any? { |brick| brick[:alive] }
     @win = true
     @game_over = true
-    trigger_sfx(OVER_VOICE, OVER_NOTES.reverse, 4, 45, 40, 4)
+    trigger_sfx(OVER_VOICE, OVER_NOTES.reverse, 2, 25, 35, 2)
   end
 
   def draw
