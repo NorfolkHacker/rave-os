@@ -50,7 +50,7 @@ class EditorApp < AcidApp
 
   def redraw
     acid_clear_user_area
-    acid_draw_window_frame
+    acid_draw_window_frame(window_title)
     draw_status
     draw_lines
     draw_cursor

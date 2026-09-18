@@ -46,7 +46,19 @@ sim_freertos_main( void )
      * not auto-launched alongside five other apps on a small screen. See
      * the phase 5 final review's finding on this. */
     kernel_spawn_app( "v2/apps/file_manager.rb", 40, 50, 220, 160, 1 );
-    kernel_spawn_app( "v2/apps/editor.rb", 60, 60, 240, 170, 1 );
+    void * editor_task = kernel_spawn_app( "v2/apps/editor.rb", 60, 60, 240, 170, 1 );
+
+    /* Without this, boot left g_focus_task NULL -- no taskbar entry ever
+     * highlighted until the user clicked something, even though a window
+     * (editor, spawned last) was already visually on top. Every real
+     * desktop starts with something focused; this just makes that
+     * already-true z-order state explicit. Safe to call before the
+     * router/scheduler start: editor is already topmost from registration
+     * order, so this only sets focus, no repaint is attempted. */
+    if( editor_task != NULL )
+    {
+        kernel_router_activate_window( editor_task );
+    }
 
     xTaskCreate( kernel_router_task, "router", 4096, NULL, tskIDLE_PRIORITY + 2, NULL );
     vTaskStartScheduler();

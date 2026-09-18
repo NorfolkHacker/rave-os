@@ -171,7 +171,7 @@ class AcidBlaster < AcidGame
 
   def draw
     acid_clear_user_area
-    acid_draw_window_frame
+    acid_draw_window_frame(window_title)
     if @game_over
       draw_game_over
     else
