@@ -4,6 +4,9 @@
 #include "../kernel/kernel_spawn.h"
 #include "../kernel/kernel_layout.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include "mruby/array.h"
 
 /* Apps the launcher menu can start. A fixed, C-owned table rather than
@@ -85,6 +88,34 @@ acid_launcher_spawn( mrb_state * mrb, mrb_value self )
     return mrb_bool_value( task != NULL );
 }
 
+/* Lets the CALLING app's own window drop to the very back of the z-order
+ * -- the opposite of acid_activate_window, and always targets the caller
+ * itself (xTaskGetCurrentTaskHandle), the same self-detection pattern
+ * kernel_router_repaint_rect already uses, so there's no way to send some
+ * OTHER window to the back by mistake. Desktop.rb's dropdown menu is the
+ * only user so far: it temporarily raises itself and claims a taller
+ * clickable area to show the dropdown, then needs to give both back
+ * cleanly on close so it stops winning hit-tests for windows that are
+ * actually there normally. */
+static mrb_value
+acid_send_self_to_back( mrb_state * mrb, mrb_value self )
+{
+    ( void ) mrb;
+    ( void ) self;
+    kernel_window_send_to_back( ( void * ) xTaskGetCurrentTaskHandle() );
+    return mrb_nil_value();
+}
+
+static mrb_value
+acid_repaint_region( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int x, y, w, h;
+    mrb_get_args( mrb, "iiii", &x, &y, &w, &h );
+    kernel_router_repaint_region( ( int ) x, ( int ) y, ( int ) w, ( int ) h );
+    return mrb_nil_value();
+}
+
 static mrb_value
 acid_window_max( mrb_state * mrb, mrb_value self )
 {
@@ -156,4 +187,8 @@ acid_window_bindings_register( mrb_state * mrb )
                                  acid_launcher_path, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_spawn",
                                  acid_launcher_spawn, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_send_self_to_back",
+                                 acid_send_self_to_back, MRB_ARGS_NONE() );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_repaint_region",
+                                 acid_repaint_region, MRB_ARGS_REQ( 4 ) );
 }

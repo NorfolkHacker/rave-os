@@ -47,4 +47,10 @@ struct kernel_window * kernel_window_next_by_z( int after_z );
  * currently drawn frontmost), or NULL if no window is registered at all. */
 struct kernel_window * kernel_window_topmost( void );
 
+/* Opposite of kernel_window_bring_to_front: reassigns this window's
+ * z_order below every other in-use window's, so it's drawn first (and
+ * loses every future hit-test) until something else raises it again.
+ * A no-op if the task has no window. */
+void kernel_window_send_to_back( void * task );
+
 #endif

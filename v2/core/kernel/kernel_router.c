@@ -112,6 +112,12 @@ kernel_router_repaint_rect( int rx, int ry, int rw, int rh )
     }
 }
 
+void
+kernel_router_repaint_region( int x, int y, int w, int h )
+{
+    kernel_router_repaint_rect( x, y, w, h );
+}
+
 /* Repaints the union of a window's own bounds at two positions (where it
  * was, and where it is now) -- the only region a plain move between those
  * two points could possibly have left a trail in or exposed. Used by both

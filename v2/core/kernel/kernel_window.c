@@ -163,3 +163,23 @@ kernel_window_topmost( void )
     }
     return best;
 }
+
+void
+kernel_window_send_to_back( void * task )
+{
+    struct kernel_window * win = kernel_window_by_task( task );
+    if( win == NULL )
+    {
+        return;
+    }
+    int min_z = win->z_order;
+    int i;
+    for( i = 0; i < KERNEL_WINDOW_MAX; i++ )
+    {
+        if( g_windows[ i ].in_use && &g_windows[ i ] != win && g_windows[ i ].z_order < min_z )
+        {
+            min_z = g_windows[ i ].z_order;
+        }
+    }
+    win->z_order = min_z - 1;
+}

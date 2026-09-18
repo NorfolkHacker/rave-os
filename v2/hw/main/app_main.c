@@ -18,7 +18,12 @@ app_main( void )
     kernel_audio_init();
     hal_audio_init();
 
-    void * desktop_task = kernel_spawn_app( "v2/apps/desktop.rb", 0, 0, 320, 24, 0 );
+    /* Height is taller than the visible strip (24px) on purpose: desktop.rb's
+     * launcher dropdown needs its clickable area to extend down to where it
+     * actually draws (24 + 4 entries * 18px = 96) -- see desktop.rb's
+     * DROPDOWN_H/TOTAL_H comment for the full explanation. Must match that
+     * constant exactly. */
+    void * desktop_task = kernel_spawn_app( "v2/apps/desktop.rb", 0, 0, 320, 96, 0 );
     kernel_router_set_desktop_task( desktop_task );
 
     kernel_spawn_app( "v2/apps/demo_touch.rb", 10, 30, 140, 100, 1 );
