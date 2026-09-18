@@ -33,6 +33,14 @@ class AcidBlaster < AcidGame
     @spawn_timer = 0
     @game_over = false
     @sfx = []
+    # Dirty-tracking state for draw() -- see its own comment for why this
+    # exists. needs_frame starts true so the very first draw does a full
+    # clear+chrome paint.
+    @drawn_enemies = []
+    @drawn_score = nil
+    @drawn_game_over = false
+    @needs_frame = true
+    @was_focused = false
   end
 
   def trigger_sfx(voice, ona, volume, ticks)
@@ -174,22 +182,59 @@ class AcidBlaster < AcidGame
     # repaint) -- if it kept drawing while genuinely behind another
     # window, it would paint over that window's visible content on every
     # single tick. Skipping it here means the window some other app has
-    # on top stays correctly on top; once this window is focused again,
-    # drawing resumes on the very next tick (at most TICK_MS later --
-    # here, 50ms, imperceptible).
-    draw if focused?
+    # on top stays correctly on top.
+    is_focused = focused?
+    # Something else painted over our window's pixels for however long we
+    # were unfocused, so the incremental erase-old/draw-new below (which
+    # assumes the framebuffer still shows what we last drew) is no longer
+    # valid -- force one full clear+chrome repaint on the tick we regain
+    # focus, same as the very first draw.
+    @needs_frame = true if is_focused && !@was_focused
+    @was_focused = is_focused
+    draw if is_focused
   end
 
+  # Redraws only what actually changed since the last draw call, instead
+  # of a full acid_clear_user_area + window-frame + border every single
+  # tick (20/sec while focused). That full-window clear was visible as a
+  # flicker (a black flash the moment before enemies were redrawn, with
+  # no double buffering to hide it -- see this codebase's documented "no
+  # real compositor" gap) and was slow on the software renderer (a ~250x
+  # 164px fill 20 times a second, for a scene that's mostly a handful of
+  # small circles). Erasing just the previously-drawn enemy positions and
+  # redrawing just the current ones touches a tiny fraction of that area.
   def draw
-    acid_clear_user_area
-    acid_draw_window_frame(window_title)
-    if @game_over
-      draw_game_over
-    else
-      @enemies.each { |e| acid_fill_circle(e[:x], e[:y], ENEMY_R, ENEMY_COLOR) }
-      acid_draw_text("SCORE: #{@score}", 4, TITLE_BAR_H + 2, TEXT_COLOR, BG_COLOR)
+    if @needs_frame
+      acid_clear_user_area
+      acid_draw_window_frame(window_title)
+      acid_draw_window_border
+      @drawn_enemies = []
+      @drawn_score = nil
+      @drawn_game_over = false
+      @needs_frame = false
     end
-    acid_draw_window_border
+
+    if @game_over
+      unless @drawn_game_over
+        erase_drawn_enemies
+        draw_game_over
+        @drawn_game_over = true
+      end
+      return
+    end
+
+    erase_drawn_enemies
+    @enemies.each { |e| acid_fill_circle(e[:x], e[:y], ENEMY_R, ENEMY_COLOR) }
+    @drawn_enemies = @enemies.map { |e| { x: e[:x], y: e[:y] } }
+
+    return if @drawn_score == @score
+    acid_draw_text("SCORE: #{@score}", 4, TITLE_BAR_H + 2, TEXT_COLOR, BG_COLOR)
+    @drawn_score = @score
+  end
+
+  def erase_drawn_enemies
+    @drawn_enemies.each { |d| acid_fill_circle(d[:x], d[:y], ENEMY_R, BG_COLOR) }
+    @drawn_enemies = []
   end
 
   def draw_game_over
