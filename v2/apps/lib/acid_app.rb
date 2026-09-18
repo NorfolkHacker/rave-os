@@ -17,6 +17,7 @@ class AcidApp
   def redraw
     acid_clear_user_area
     acid_draw_window_frame(window_title)
+    acid_draw_window_border
   end
 
   # Every window was previously chrome with no label at all -- just a bare

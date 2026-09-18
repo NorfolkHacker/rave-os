@@ -178,6 +178,7 @@ class AcidBlaster < AcidGame
       @enemies.each { |e| acid_fill_circle(e[:x], e[:y], ENEMY_R, ENEMY_COLOR) }
       acid_draw_text("SCORE: #{@score}", 4, TITLE_BAR_H + 2, TEXT_COLOR, BG_COLOR)
     end
+    acid_draw_window_border
   end
 
   def draw_game_over

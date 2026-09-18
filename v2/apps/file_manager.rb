@@ -69,6 +69,7 @@ class FileManagerApp < AcidApp
     else
       draw_listing
     end
+    acid_draw_window_border
   end
 
   def draw_listing

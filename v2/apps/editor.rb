@@ -54,6 +54,7 @@ class EditorApp < AcidApp
     draw_status
     draw_lines
     draw_cursor
+    acid_draw_window_border
   end
 
   def draw_status
