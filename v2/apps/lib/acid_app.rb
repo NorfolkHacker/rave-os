@@ -33,6 +33,16 @@ class AcidApp
     name[0, 16]
   end
 
+  # True if this app's own window currently holds keyboard focus, which in
+  # this codebase always means "is the actual topmost/visible window" too
+  # (kernel_router_activate_window sets both together, nothing changes
+  # either one independently). AcidGame uses this to avoid redrawing
+  # itself while covered by another window (see its own comment); any
+  # app is free to use it too.
+  def focused?
+    acid_am_i_focused
+  end
+
   def start
     on_create
     redraw

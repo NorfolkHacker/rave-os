@@ -39,18 +39,27 @@ class DesktopApp < AcidApp
   # simply not listed in the taskbar (the window itself is still open and
   # usable, just not represented here) -- a small-screen limitation that
   # predates the launcher, just newly reachable now that opening a 5th app
-  # is actually possible. Also the launchable-app table's own capacity
-  # (window_binding.c's g_launchable is kept at or under this).
+  # is actually possible. This is a horizontal-slot-width constraint
+  # specific to the taskbar row (BUTTON_W columns) -- NOT the dropdown's
+  # own capacity (see MAX_LAUNCHER_ITEMS below), which has no such
+  # constraint since dropdown rows are full-width, not columns.
   MAX_TASKBAR_SLOTS = MENU_SLOT_X / BUTTON_W
 
   # The dropdown itself: a full-width panel directly under the strip,
-  # one row per launchable app. Must match sim_main.c/app_main.c's own
+  # one row per launchable app. Deliberately its own constant, not
+  # MAX_TASKBAR_SLOTS -- a dropdown row spans the full screen width, so
+  # it isn't limited by how many BUTTON_W-wide columns fit in the strip
+  # the way MAX_TASKBAR_SLOTS is; the only real constraint is vertical
+  # room on a 240px-tall screen, which 6 rows comfortably leaves (132px
+  # for the strip+dropdown, 108px still free for windows below). Must
+  # match sim_main.c/app_main.c's own
   # kernel_spawn_app(MY_APP_NAME, 0, 0, 320, TOTAL_H, 0) call -- desktop's
   # registered window has to be exactly this tall for the router's normal
   # (non-strip) hit-testing to ever find desktop down here at all. Synced
   # by comment on both sides, same as SCREEN_W above.
+  MAX_LAUNCHER_ITEMS = 6
   ITEM_H = 18
-  DROPDOWN_H = ITEM_H * MAX_TASKBAR_SLOTS
+  DROPDOWN_H = ITEM_H * MAX_LAUNCHER_ITEMS
   TOTAL_H = STRIP_H + DROPDOWN_H
 
   BG_COLOR = 0x0B1712      # THEME_PANEL
@@ -162,7 +171,7 @@ class DesktopApp < AcidApp
       return
     end
     row = ( y - STRIP_H ) / ITEM_H
-    if row >= 0 && row < MAX_TASKBAR_SLOTS && row < acid_launcher_count
+    if row >= 0 && row < MAX_LAUNCHER_ITEMS && row < acid_launcher_count
       acid_launcher_spawn(row)
     end
     close_menu
@@ -270,7 +279,7 @@ class DesktopApp < AcidApp
     acid_fill_rect(0, STRIP_H, SCREEN_W, DROPDOWN_H, BG_COLOR)
     count = acid_launcher_count
     i = 0
-    while i < count && i < MAX_TASKBAR_SLOTS
+    while i < count && i < MAX_LAUNCHER_ITEMS
       y = STRIP_H + i * ITEM_H
       acid_draw_text(short_name(acid_launcher_path(i)), 6, y + 4, TEXT_COLOR, BG_COLOR)
       i += 1

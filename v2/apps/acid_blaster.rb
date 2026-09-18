@@ -166,7 +166,18 @@ class AcidBlaster < AcidGame
       end
     end
     tick_sfx
-    draw
+    # Game state (enemy positions, spawns, game-over) keeps advancing
+    # every tick regardless -- only the DRAWING is skipped while covered.
+    # draw() has no z-order awareness at all (it paints straight onto the
+    # shared framebuffer every tick, unlike a static window's redraw,
+    # which only ever runs inside the compositor's own z-order-aware
+    # repaint) -- if it kept drawing while genuinely behind another
+    # window, it would paint over that window's visible content on every
+    # single tick. Skipping it here means the window some other app has
+    # on top stays correctly on top; once this window is focused again,
+    # drawing resumes on the very next tick (at most TICK_MS later --
+    # here, 50ms, imperceptible).
+    draw if focused?
   end
 
   def draw

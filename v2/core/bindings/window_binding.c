@@ -23,17 +23,21 @@ struct launchable_app
     int h;
 };
 
-/* Capped at desktop.rb's own MAX_TASKBAR_SLOTS (currently 4, one taskbar
- * row's worth before entries would start drawing under the reserved
- * Menu/Back slot) -- acid_blaster.rb deliberately isn't in this table for
- * that reason (a 5th entry has nowhere on screen to go without adding
- * pagination, which is out of scope for now). It's still a fully working
- * app, just not launchable from this menu yet. */
+/* Capped at desktop.rb's own MAX_LAUNCHER_ITEMS (currently 6, the
+ * dropdown's own row capacity -- independent of the taskbar's narrower
+ * MAX_TASKBAR_SLOTS, since dropdown rows are full-width, not
+ * BUTTON_W-wide columns). acid_blaster.rb is a continuously
+ * self-redrawing window (an AcidGame, not a static AcidApp); it's only
+ * safe to list here now that it skips its own per-tick redraw while
+ * covered (see acid_blaster.rb's on_tick and AcidApp#focused?) --
+ * before that fix, it would repaint over whatever window was actually
+ * on top of it, every tick, with no z-order awareness at all. */
 static const struct launchable_app g_launchable[] = {
     { "v2/apps/demo_touch.rb", 140, 100 },
     { "v2/apps/demo_swatch.rb", 140, 100 },
     { "v2/apps/file_manager.rb", 220, 160 },
     { "v2/apps/editor.rb", 240, 170 },
+    { "v2/apps/acid_blaster.rb", 250, 180 },
 };
 #define LAUNCHABLE_COUNT ( sizeof( g_launchable ) / sizeof( g_launchable[ 0 ] ) )
 
@@ -104,6 +108,27 @@ acid_send_self_to_back( mrb_state * mrb, mrb_value self )
     ( void ) self;
     kernel_window_send_to_back( ( void * ) xTaskGetCurrentTaskHandle() );
     return mrb_nil_value();
+}
+
+/* True if the CALLING app's own window currently holds keyboard focus
+ * (xTaskGetCurrentTaskHandle, the same self-detection pattern
+ * acid_send_self_to_back already uses) -- in this codebase, focus and
+ * being the topmost/frontmost window always change together
+ * (kernel_router_activate_window sets both in the same call, and nothing
+ * else changes either independently), so this doubles as "am I the
+ * window actually visible on top right now." AcidGame uses this to skip
+ * its own per-tick self-redraw while covered: unlike a static window's
+ * redraw (which only ever runs inside the compositor's own z-order-aware
+ * repaint), a game repaints itself directly, every tick, with no z-order
+ * awareness at all -- if it kept doing that while some other window was
+ * genuinely on top, it would just paint over that window's visible
+ * content on every single tick. */
+static mrb_value
+acid_am_i_focused( mrb_state * mrb, mrb_value self )
+{
+    ( void ) mrb;
+    ( void ) self;
+    return mrb_bool_value( kernel_router_get_focus() == ( void * ) xTaskGetCurrentTaskHandle() );
 }
 
 static mrb_value
@@ -191,4 +216,6 @@ acid_window_bindings_register( mrb_state * mrb )
                                  acid_send_self_to_back, MRB_ARGS_NONE() );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_repaint_region",
                                  acid_repaint_region, MRB_ARGS_REQ( 4 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_am_i_focused",
+                                 acid_am_i_focused, MRB_ARGS_NONE() );
 }
