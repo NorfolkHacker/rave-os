@@ -5,7 +5,7 @@ class FileManagerApp < AcidApp
   WINDOW_H = 160
   TITLE_BAR_H = 16
   ROW_H = 12
-  ROOT_DIR = "v2/home"
+  ROOT_DIR = "v2/fsroot"
 
   BG_COLOR = 0x0B1712      # THEME_PANEL -- header row
   BODY_BG = 0x050607       # THEME_BG -- list/preview rows

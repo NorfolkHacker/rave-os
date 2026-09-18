@@ -1,0 +1,5 @@
+acid OS v2
+
+Menu (top right) opens the app launcher. Drop a <name>.rb and a
+matching <name>.app.toml into v2/apps and it shows up there too --
+no rebuild needed.

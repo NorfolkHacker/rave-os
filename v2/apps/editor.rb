@@ -5,7 +5,7 @@ class EditorApp < AcidApp
   WINDOW_H = 170
   TITLE_BAR_H = 16
   LINE_H = 10
-  EDIT_FILE = "v2/home/notes.txt"
+  EDIT_FILE = "v2/fsroot/Home/notes.txt"
 
   BG_COLOR = 0x0B1712      # THEME_PANEL -- status line
   BODY_BG = 0x050607       # THEME_BG -- text body
