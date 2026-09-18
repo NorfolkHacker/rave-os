@@ -16,11 +16,25 @@ class AcidBlaster < AcidGame
   ENEMY_COLOR = 0x00FF66  # THEME_HARD
   TEXT_COLOR = 0xD4E6DB   # THEME_TEXT
 
+  # Each SFX steps through a short note sequence (the synth's own
+  # arpeggiator -- see acid_trigger_arp) instead of holding one flat
+  # pitch, so a hit sounds like a quick two-tone zap and game-over like an
+  # actual descending run, not a plain beep. Unused slots beyond each
+  # ARP_COUNT are never read -- 1 is just a valid placeholder (see
+  # acid_trigger_arp's own comment).
   HIT_VOICE = 0
   HIT_ONA = 55
+  HIT_NOTES = [ HIT_ONA, HIT_ONA - 4, 1, 1 ]
+  HIT_ARP_COUNT = 2
+  HIT_ARP_RATE_MS = 18
+  HIT_VOLUME = 35
   HIT_TICKS = 3
   OVER_VOICE = 1
   OVER_ONA = 25
+  OVER_NOTES = [ OVER_ONA, OVER_ONA - 3, OVER_ONA - 7, OVER_ONA - 12 ]
+  OVER_ARP_COUNT = 4
+  OVER_ARP_RATE_MS = 70
+  OVER_VOLUME = 40
   OVER_TICKS = 8
 
   # By default every synth voice is an unfiltered pulse wave with an
@@ -54,8 +68,9 @@ class AcidBlaster < AcidGame
     @was_focused = false
   end
 
-  def trigger_sfx(voice, ona, volume, ticks)
-    acid_play_note(voice, ona, volume)
+  def trigger_sfx(voice, notes, arp_count, arp_rate_ms, volume, ticks)
+    acid_play_note(voice, notes[0], volume)
+    acid_trigger_arp(voice, notes[0], notes[1], notes[2], notes[3], arp_count, arp_rate_ms)
     @sfx << { voice: voice, ticks: ticks }
   end
 
@@ -159,7 +174,7 @@ class AcidBlaster < AcidGame
     return false unless hit_index
     @enemies.delete_at(hit_index)
     @score += 1
-    trigger_sfx(HIT_VOICE, HIT_ONA, 90, HIT_TICKS)
+    trigger_sfx(HIT_VOICE, HIT_NOTES, HIT_ARP_COUNT, HIT_ARP_RATE_MS, HIT_VOLUME, HIT_TICKS)
     true
   end
 
@@ -181,7 +196,7 @@ class AcidBlaster < AcidGame
       end
       if update_enemies
         @game_over = true
-        trigger_sfx(OVER_VOICE, OVER_ONA, 90, OVER_TICKS)
+        trigger_sfx(OVER_VOICE, OVER_NOTES, OVER_ARP_COUNT, OVER_ARP_RATE_MS, OVER_VOLUME, OVER_TICKS)
       end
     end
     tick_sfx

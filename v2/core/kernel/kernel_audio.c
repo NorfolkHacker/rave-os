@@ -122,6 +122,25 @@ kernel_audio_enqueue_configure_filter( int cutoff, int resonance, int filter_mod
 }
 
 void
+kernel_audio_enqueue_trigger_arp( int voice, const int notes[4], int count, int rate_ms )
+{
+    struct kernel_audio_command cmd;
+    int i;
+    cmd.type = AUDIO_CMD_TRIGGER_ARP;
+    cmd.voice = voice;
+    cmd.ona = 0;
+    cmd.volume = 0;
+    cmd.owner_task = NULL;
+    for( i = 0; i < 4; i++ )
+    {
+        cmd.arp_notes[ i ] = notes[ i ];
+    }
+    cmd.arp_count = count;
+    cmd.arp_rate_ms = rate_ms;
+    try_enqueue( &cmd );
+}
+
+void
 kernel_audio_release_owner( void * owner_task )
 {
     struct kernel_audio_command cmd;
@@ -182,7 +201,35 @@ apply( const struct kernel_audio_command * cmd )
          * see the spec's "Ambiguity closed explicitly" note on voice
          * stealing. */
         synth_gate_off( cmd->voice );
+        /* Stop any arpeggio this voice was running too -- otherwise a
+         * now-silent (gated off) voice would keep stepping phase_increment
+         * forever, and the NEXT plain note_on (no arp) on this voice would
+         * inherit whatever step it happened to land on. */
+        synth_voices[ cmd->voice ].arp_active = 0;
         g_voice_owner[ cmd->voice ] = NULL;
+    }
+    else if( cmd->type == AUDIO_CMD_TRIGGER_ARP )
+    {
+        int i;
+        if( cmd->voice < 0 || cmd->voice >= SYNTH_NUM_VOICES )
+        {
+            return;
+        }
+        for( i = 0; i < 4; i++ )
+        {
+            synth_set_arp_note( cmd->voice, i, cmd->arp_notes[ i ] );
+        }
+        synth_set_arp_rate( cmd->voice, cmd->arp_rate_ms );
+        /* Always restart from the first step -- see this command's own
+         * comment in kernel_audio_command.h on why (repeated triggers,
+         * e.g. one per enemy hit, must all sound the same, not continue
+         * from wherever a previous run left off). synth_arp_on() itself
+         * doesn't reset these (it only validates+sets count and flips
+         * arp_active), so it's done directly here -- apply() is the one
+         * place allowed to touch synth_voices[] fields with no setter. */
+        synth_voices[ cmd->voice ].arp_step = 0;
+        synth_voices[ cmd->voice ].arp_step_counter = 0;
+        synth_arp_on( cmd->voice, cmd->arp_count );
     }
     else if( cmd->type == AUDIO_CMD_CONFIGURE_VOICE )
     {

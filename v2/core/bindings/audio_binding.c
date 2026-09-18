@@ -49,6 +49,26 @@ acid_configure_filter( mrb_state * mrb, mrb_value self )
     return mrb_nil_value();
 }
 
+/* Starts a voice stepping through up to 4 notes instead of holding one
+ * flat pitch -- call right after acid_play_note on the same voice. Unused
+ * slots (count < 4) can be any valid 1..88 value; only the first count
+ * slots are ever read. See AUDIO_CMD_TRIGGER_ARP's own comment. */
+static mrb_value
+acid_trigger_arp( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int voice, note0, note1, note2, note3, count, rate_ms;
+    mrb_get_args( mrb, "iiiiiii", &voice, &note0, &note1, &note2, &note3,
+                  &count, &rate_ms );
+    int notes[ 4 ];
+    notes[ 0 ] = ( int ) note0;
+    notes[ 1 ] = ( int ) note1;
+    notes[ 2 ] = ( int ) note2;
+    notes[ 3 ] = ( int ) note3;
+    kernel_audio_enqueue_trigger_arp( ( int ) voice, notes, ( int ) count, ( int ) rate_ms );
+    return mrb_nil_value();
+}
+
 static mrb_value
 acid_stop_note( mrb_state * mrb, mrb_value self )
 {
@@ -70,4 +90,6 @@ acid_audio_bindings_register( mrb_state * mrb )
                                  acid_configure_voice, MRB_ARGS_REQ( 6 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_configure_filter",
                                  acid_configure_filter, MRB_ARGS_REQ( 3 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_trigger_arp",
+                                 acid_trigger_arp, MRB_ARGS_REQ( 7 ) );
 }

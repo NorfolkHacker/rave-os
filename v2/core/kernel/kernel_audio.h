@@ -28,6 +28,13 @@ void kernel_audio_enqueue_configure_voice( int voice, int filter_route,
  * as the enqueue functions above. */
 void kernel_audio_enqueue_configure_filter( int cutoff, int resonance, int filter_mode );
 
+/* Enqueues an AUDIO_CMD_TRIGGER_ARP command -- call right after
+ * kernel_audio_enqueue_note_on() on the same voice (that sets the
+ * envelope/volume/gate; this drives pitch-stepping on top of it). Same
+ * best-effort/any-task-safe contract as the enqueue functions above. */
+void kernel_audio_enqueue_trigger_arp( int voice, const int notes[4],
+                                        int count, int rate_ms );
+
 /* Enqueues an AUDIO_CMD_RELEASE_OWNER command -- called synchronously from
  * vm_host_task's own unconditional per-app cleanup (Task 5), covering
  * every app-exit path, not just the close button. Unlike note_on/note_off,

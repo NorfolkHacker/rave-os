@@ -21,7 +21,18 @@ enum kernel_audio_command_type
      * audio-thread-only-mutation reasoning as CONFIGURE_VOICE above
      * applies (synth_filter_cutoff_index etc. are read every sample by
      * synth_render_half()). */
-    AUDIO_CMD_CONFIGURE_FILTER = 4
+    AUDIO_CMD_CONFIGURE_FILTER = 4,
+    /* Starts a voice stepping through up to 4 notes (the synth's own
+     * arpeggiator -- see synth.h's struct synth_voice comment) instead of
+     * holding one flat pitch. Always paired with a NOTE_ON on the same
+     * voice (which sets the envelope/volume/gate) -- this only drives
+     * phase_increment afterwards. Resets the step position to the start
+     * of the sequence every time, so repeated triggers (e.g. one per
+     * enemy hit) always begin the same way instead of picking up
+     * wherever a previous run left off. NOTE_OFF turns the arp back off
+     * (see apply()), so it never keeps stepping a silent, gated-off
+     * voice. */
+    AUDIO_CMD_TRIGGER_ARP = 5
 };
 
 struct kernel_audio_command
@@ -42,6 +53,10 @@ struct kernel_audio_command
     int cutoff;           /* CONFIGURE_FILTER only -- 0..255 */
     int resonance;         /* CONFIGURE_FILTER only -- 0..15 */
     int filter_mode;       /* CONFIGURE_FILTER only -- SYNTH_FILTER_MODE_* bits */
+    int arp_notes[4];      /* TRIGGER_ARP only -- 1..88 each, only the
+                            * first arp_count slots are used */
+    int arp_count;          /* TRIGGER_ARP only -- 2..4 */
+    int arp_rate_ms;        /* TRIGGER_ARP only -- ms per step */
 };
 
 #endif
