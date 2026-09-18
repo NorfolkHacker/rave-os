@@ -56,8 +56,19 @@ kernel_window_unregister( void * task )
 struct kernel_window *
 kernel_window_find_at( int x, int y )
 {
+    /* best == NULL is the "nothing found yet" guard -- NOT a hardcoded
+     * z_order sentinel. This used to start best_z at -1 and require
+     * z_order > best_z, which quietly assumed z_order never goes negative.
+     * kernel_window_send_to_back sets a window's z_order to (the current
+     * lowest z_order among every OTHER window) - 1 every time it's called
+     * -- repeated calls (desktop.rb's dropdown menu calls it on every
+     * close) drive it arbitrarily negative over a long session. Once a
+     * window's z_order dropped below -1, it could never be found by this
+     * function again, even as the ONLY window covering that point --
+     * confirmed live: reproduced exactly this, desktop's dropdown menu
+     * became permanently unclickable after enough open/close cycles
+     * pushed its z_order to -4. */
     struct kernel_window * best = NULL;
-    int best_z = -1;
     int i;
     for( i = 0; i < KERNEL_WINDOW_MAX; i++ )
     {
@@ -68,9 +79,8 @@ kernel_window_find_at( int x, int y )
         if( x >= g_windows[ i ].x && x < g_windows[ i ].x + g_windows[ i ].w &&
             y >= g_windows[ i ].y && y < g_windows[ i ].y + g_windows[ i ].h )
         {
-            if( g_windows[ i ].z_order > best_z )
+            if( best == NULL || g_windows[ i ].z_order > best->z_order )
             {
-                best_z = g_windows[ i ].z_order;
                 best = &g_windows[ i ];
             }
         }
