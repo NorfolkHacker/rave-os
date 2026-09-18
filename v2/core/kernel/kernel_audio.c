@@ -88,6 +88,40 @@ kernel_audio_enqueue_note_off( void * owner_task, int voice )
 }
 
 void
+kernel_audio_enqueue_configure_voice( int voice, int filter_route,
+                                       int attack_ms, int decay_ms,
+                                       int sustain_percent, int release_ms )
+{
+    struct kernel_audio_command cmd;
+    cmd.type = AUDIO_CMD_CONFIGURE_VOICE;
+    cmd.voice = voice;
+    cmd.ona = 0;
+    cmd.volume = 0;
+    cmd.owner_task = NULL;
+    cmd.filter_route = filter_route;
+    cmd.attack_ms = attack_ms;
+    cmd.decay_ms = decay_ms;
+    cmd.sustain_percent = sustain_percent;
+    cmd.release_ms = release_ms;
+    try_enqueue( &cmd );
+}
+
+void
+kernel_audio_enqueue_configure_filter( int cutoff, int resonance, int filter_mode )
+{
+    struct kernel_audio_command cmd;
+    cmd.type = AUDIO_CMD_CONFIGURE_FILTER;
+    cmd.voice = 0;
+    cmd.ona = 0;
+    cmd.volume = 0;
+    cmd.owner_task = NULL;
+    cmd.cutoff = cutoff;
+    cmd.resonance = resonance;
+    cmd.filter_mode = filter_mode;
+    try_enqueue( &cmd );
+}
+
+void
 kernel_audio_release_owner( void * owner_task )
 {
     struct kernel_audio_command cmd;
@@ -149,6 +183,22 @@ apply( const struct kernel_audio_command * cmd )
          * stealing. */
         synth_gate_off( cmd->voice );
         g_voice_owner[ cmd->voice ] = NULL;
+    }
+    else if( cmd->type == AUDIO_CMD_CONFIGURE_VOICE )
+    {
+        if( cmd->voice < 0 || cmd->voice >= SYNTH_NUM_VOICES )
+        {
+            return;
+        }
+        synth_set_voice_filter_route( cmd->voice, cmd->filter_route );
+        synth_set_adsr( cmd->voice, cmd->attack_ms, cmd->decay_ms,
+                         cmd->sustain_percent, cmd->release_ms );
+    }
+    else if( cmd->type == AUDIO_CMD_CONFIGURE_FILTER )
+    {
+        synth_set_filter_cutoff( cmd->cutoff );
+        synth_set_filter_resonance( cmd->resonance );
+        synth_set_filter_mode( cmd->filter_mode );
     }
     else if( cmd->type == AUDIO_CMD_RELEASE_OWNER )
     {

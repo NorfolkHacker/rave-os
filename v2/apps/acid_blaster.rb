@@ -23,7 +23,18 @@ class AcidBlaster < AcidGame
   OVER_ONA = 25
   OVER_TICKS = 8
 
+  # By default every synth voice is an unfiltered pulse wave with an
+  # instant attack and instant release (see synth_init()'s own comment) --
+  # a hard digital click on every hit, harsh even at a short duration.
+  # Routing both SFX voices through the shared filter and giving them a
+  # real (if brief) envelope turns that click into a short, filtered
+  # "acid" blip instead. Configured once here, not per-hit in
+  # trigger_sfx -- these are voice-wide settings, not per-note.
+  FILTER_MODE_LP = 1
   def on_create
+    acid_configure_filter(180, 3, FILTER_MODE_LP)
+    acid_configure_voice(HIT_VOICE, 1, 3, 40, 55, 70)
+    acid_configure_voice(OVER_VOICE, 1, 8, 150, 35, 250)
     reset_game
   end
 

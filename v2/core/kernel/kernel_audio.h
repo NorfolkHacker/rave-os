@@ -16,6 +16,18 @@ void kernel_audio_init( void );
 void kernel_audio_enqueue_note_on( void * owner_task, int voice, int ona, int volume );
 void kernel_audio_enqueue_note_off( void * owner_task, int voice );
 
+/* Enqueues an AUDIO_CMD_CONFIGURE_VOICE command -- shapes a voice's ADSR
+ * envelope and filter routing ahead of whatever note_on calls follow.
+ * Same best-effort/any-task-safe contract as note_on/note_off above. */
+void kernel_audio_enqueue_configure_voice( int voice, int filter_route,
+                                            int attack_ms, int decay_ms,
+                                            int sustain_percent, int release_ms );
+
+/* Enqueues an AUDIO_CMD_CONFIGURE_FILTER command -- sets the one shared
+ * filter's cutoff/resonance/mode. Same best-effort/any-task-safe contract
+ * as the enqueue functions above. */
+void kernel_audio_enqueue_configure_filter( int cutoff, int resonance, int filter_mode );
+
 /* Enqueues an AUDIO_CMD_RELEASE_OWNER command -- called synchronously from
  * vm_host_task's own unconditional per-app cleanup (Task 5), covering
  * every app-exit path, not just the close button. Unlike note_on/note_off,
