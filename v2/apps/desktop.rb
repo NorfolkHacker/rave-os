@@ -50,14 +50,19 @@ class DesktopApp < AcidApp
   # MAX_TASKBAR_SLOTS -- a dropdown row spans the full screen width, so
   # it isn't limited by how many BUTTON_W-wide columns fit in the strip
   # the way MAX_TASKBAR_SLOTS is; the only real constraint is vertical
-  # room on a 240px-tall screen, which 6 rows comfortably leaves (132px
-  # for the strip+dropdown, 108px still free for windows below). Must
+  # room on a 240px-tall screen. Bumped from 6 once the dynamic launcher
+  # (scanning v2/apps for *.app.toml) pushed the real app count past that
+  # -- a 7th app (About, Acid Blaster, Breakout, Demo Swatch, Demo Touch,
+  # Editor, File Manager) silently fell off the bottom of the dropdown
+  # and became unreachable from Menu. 10 rows (204px for strip+dropdown,
+  # still 36px free for windows below) leaves headroom for a few more
+  # before this has to become scrollable instead of just taller. Must
   # match sim_main.c/app_main.c's own
   # kernel_spawn_app(MY_APP_NAME, 0, 0, 320, TOTAL_H, 0) call -- desktop's
   # registered window has to be exactly this tall for the router's normal
   # (non-strip) hit-testing to ever find desktop down here at all. Synced
   # by comment on both sides, same as SCREEN_W above.
-  MAX_LAUNCHER_ITEMS = 6
+  MAX_LAUNCHER_ITEMS = 10
   ITEM_H = 18
   DROPDOWN_H = ITEM_H * MAX_LAUNCHER_ITEMS
   TOTAL_H = STRIP_H + DROPDOWN_H

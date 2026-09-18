@@ -333,11 +333,23 @@ kernel_router_poll( void )
              * separately, was a redraw-completion race between windows'
              * independent tasks with no ordering guarantee at all;
              * kernel_router_repaint_rect's redraw_done_sem wait now makes
-             * every one of these calls safe.) */
-            kernel_router_repaint_move_union( g_drag_orig_x, g_drag_orig_y, win->x, win->y,
-                                                win->w, win->h );
-            g_drag_orig_x = win->x;
-            g_drag_orig_y = win->y;
+             * every one of these calls safe.)
+             *
+             * Only when the position actually changed, though -- holding
+             * the mouse still on a title bar (no motion at all, just a
+             * long press) re-entered this branch every ~16ms tick same as
+             * a real drag, and with no guard here it repainted the
+             * window's whole rect every single one of those ticks for
+             * zero actual movement (reported live as "if you hold the
+             * mouse on it it redraws itself"). Mirrors the same guard the
+             * drag-end branch above already has. */
+            if( win->x != g_drag_orig_x || win->y != g_drag_orig_y )
+            {
+                kernel_router_repaint_move_union( g_drag_orig_x, g_drag_orig_y, win->x, win->y,
+                                                    win->w, win->h );
+                g_drag_orig_x = win->x;
+                g_drag_orig_y = win->y;
+            }
         }
         return;
     }
