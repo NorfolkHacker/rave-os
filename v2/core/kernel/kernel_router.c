@@ -25,11 +25,32 @@ static enum drag_mode g_drag_mode = DRAG_NONE;
 static void * g_drag_task = NULL;
 static int g_drag_offset_x = 0;
 static int g_drag_offset_y = 0;
-/* The dragged window's position at the moment the drag started -- needed
+/* The dragged window's position at the moment the drag started. Fixed for
+ * the whole drag (set once, at fresh_press, never reassigned mid-drag) --
+ * every in-progress and release repaint unions against THIS, not just the
+ * previous tick's position (see g_drag_last_x/y below for that). Needed
  * at release to repaint the union of where it WAS and where it ended up,
  * since that's the only region a plain move can possibly have disturbed. */
 static int g_drag_orig_x = 0;
 static int g_drag_orig_y = 0;
+/* The dragged window's position as of the last tick a repaint actually
+ * ran for -- used only to detect "hasn't moved since last tick" (holding
+ * the mouse still shouldn't repaint every ~16ms, see its own comment
+ * below). Unioning against g_drag_orig (the fixed drag start) instead of
+ * this on every tick, rather than against "the previous tick's position"
+ * the way this used to work, is deliberate: repainting only the delta
+ * since the previous tick assumes that tick's repaint (and the dragged
+ * app's own redraw inside it) fully completed before the next tick reads
+ * this window's position again. Under a fast enough drag that assumption
+ * doesn't always hold (bounded semaphore waits, a busy app task, ...),
+ * and when it doesn't, the sliver each tick repaints can miss wherever
+ * the window visually was one or more ticks ago -- reported live as
+ * "if i move the window it leaves a trail". Always unioning against the
+ * fixed start instead means every tick's repaint fully covers the whole
+ * path so far, so any tick that individually raced still gets corrected
+ * by the very next one, instead of the gap persisting once the drag ends. */
+static int g_drag_last_x = 0;
+static int g_drag_last_y = 0;
 static bool g_was_pressed = false;
 static void * g_desktop_task = NULL;
 static int g_last_x = 0;
@@ -283,8 +304,8 @@ kernel_router_poll( void )
              * motion in between -- the common case of just switching
              * focus to a window by clicking it) starts and ends a drag
              * with the window never actually having moved at all
-             * (win->x/y still equal g_drag_orig_x/y, since only the
-             * in-progress branch below ever changes them). Nothing to
+             * (win->x/y still equal g_drag_orig_x/y, since g_drag_orig is
+             * fixed for the whole drag -- see its own comment). Nothing to
              * sync and nothing to repaint in that case -- skipping this
              * avoids a pointless clear-and-redraw of the window's own
              * rect on every single title-bar click, which is exactly
@@ -323,32 +344,24 @@ kernel_router_poll( void )
                 win->y = KERNEL_DESKTOP_STRIP_H;
             }
             /* Live drag feedback: repaint the union of where this window
-             * last got painted and where it is now, then remember THIS
-             * position as the new baseline for next tick -- keeps the
-             * dirty rect a tight, incremental sliver instead of growing to
-             * cover the whole drag path. (An earlier version of this code
-             * skipped all mid-drag repaints entirely, from a since-
-             * disproven theory that repeated redraw cycles corrupted
-             * LGFX's own SDL present pipeline -- the real cause, fixed
-             * separately, was a redraw-completion race between windows'
-             * independent tasks with no ordering guarantee at all;
-             * kernel_router_repaint_rect's redraw_done_sem wait now makes
-             * every one of these calls safe.)
-             *
-             * Only when the position actually changed, though -- holding
-             * the mouse still on a title bar (no motion at all, just a
-             * long press) re-entered this branch every ~16ms tick same as
-             * a real drag, and with no guard here it repainted the
+             * started the drag and where it is now (see g_drag_last_x/y's
+             * comment for why this unions against the fixed start rather
+             * than just the previous tick's position -- that incremental
+             * version is what actually left the trail reported live as
+             * "if i move the window it leaves a trail"). Skipped when the
+             * position hasn't changed since the last tick that did repaint
+             * -- holding the mouse still on a title bar (no motion at all,
+             * just a long press) re-enters this branch every ~16ms tick
+             * same as a real drag, and without this guard it repainted the
              * window's whole rect every single one of those ticks for
-             * zero actual movement (reported live as "if you hold the
-             * mouse on it it redraws itself"). Mirrors the same guard the
-             * drag-end branch above already has. */
-            if( win->x != g_drag_orig_x || win->y != g_drag_orig_y )
+             * zero actual movement (reported live separately as "if you
+             * hold the mouse on it it redraws itself"). */
+            if( win->x != g_drag_last_x || win->y != g_drag_last_y )
             {
                 kernel_router_repaint_move_union( g_drag_orig_x, g_drag_orig_y, win->x, win->y,
                                                     win->w, win->h );
-                g_drag_orig_x = win->x;
-                g_drag_orig_y = win->y;
+                g_drag_last_x = win->x;
+                g_drag_last_y = win->y;
             }
         }
         return;
@@ -420,6 +433,8 @@ kernel_router_poll( void )
             g_drag_offset_y = rel_y;
             g_drag_orig_x = win->x;
             g_drag_orig_y = win->y;
+            g_drag_last_x = win->x;
+            g_drag_last_y = win->y;
             return;
         }
 
