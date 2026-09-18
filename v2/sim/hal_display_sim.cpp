@@ -24,6 +24,19 @@ extern "C" void hal_display_init( void )
      * Linux sim boots at one fixed resolution per hardware target,
      * selected once, never resized at runtime.) */
     lgfx::v1::Panel_sdl::setResizable( false );
+    /* Also observed live, even with the window locked to a fixed size:
+     * enough rapid clicks (the window manager focusing this window on
+     * each one) leave the accelerated/vsync'd renderer presenting
+     * nothing at all -- the window stays mapped and otherwise normal, it
+     * just stops drawing, which looks identical to "the menu doesn't
+     * work" since nothing on screen ever changes again. Confirmed by
+     * pixel-sampling the window after reproducing it live: solid black,
+     * every time, only after several clicks in quick succession, never
+     * on the Xvfb harness (no real window manager, so no focus churn).
+     * Software rendering doesn't depend on holding a live GPU context
+     * across a focus change, and costs nothing noticeable for this
+     * small, mostly-flat-fills-and-text UI. */
+    lgfx::v1::Panel_sdl::setAccelerated( false );
     lcd.init();
     lcd.fillScreen( TFT_BLACK );
 }
