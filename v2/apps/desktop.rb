@@ -71,12 +71,19 @@ class DesktopApp < AcidApp
                            # "pressed state inverts to a solid --hard
                            # fill, label switches to a dark color" rule).
 
-  # No on_create override needed: AcidApp#start already calls redraw once,
-  # automatically, right after on_create -- DesktopApp has no other setup
-  # to do (active_windows is computed fresh on every redraw, not cached),
-  # matching file_manager.rb/editor.rb/acid_blaster.rb's own convention of
-  # never calling redraw from inside on_create itself. @mode starts as nil,
-  # treated the same as :windows everywhere it's checked.
+  # Directory the launcher scans for <name>.app.toml manifests at boot.
+  # Every *.rb file in here that has NO matching manifest (desktop.rb
+  # itself, lib/*.rb) is simply never discovered -- the manifest, not the
+  # directory, is what makes something launchable.
+  APPS_DIR = "v2/apps"
+
+  # AcidApp#start already calls redraw once, automatically, right after
+  # on_create -- this override exists only to build the launcher list
+  # before that first redraw runs (so Menu's entry count is right from
+  # frame one), not to skip that default behavior.
+  def on_create
+    scan_launchable_apps
+  end
 
   def on_idle
     # Nothing has to touch the desktop strip itself for the taskbar to go
@@ -222,6 +229,63 @@ class DesktopApp < AcidApp
     nil
   end
 
+  # Finds every <name>.app.toml in APPS_DIR and registers the matching
+  # <name>.rb as launchable. A manifest is a plain text file, a few
+  # "key = value" lines -- not real TOML, just enough of its syntax to
+  # read by hand with String#split, matching how family-mruby's own
+  # launcher parses its .app.toml files (it isn't a real TOML parser
+  # there either -- confirmed reading its source; a full TOML library
+  # would be a lot of machinery for four fields). Malformed or unreadable
+  # manifests are skipped, not fatal -- one bad file shouldn't take the
+  # whole launcher down.
+  #
+  #   name = Demo Touch
+  #   w = 140
+  #   h = 100
+  def scan_launchable_apps
+    d = Dir.open(APPS_DIR)
+    names = []
+    while (entry = d.read)
+      names << entry if entry.end_with?(".app.toml")
+    end
+    d.close
+
+    names.sort.each do |entry|
+      register_launchable("#{APPS_DIR}/#{entry}")
+    end
+  rescue
+    # A directory that can't even be opened shouldn't stop desktop.rb
+    # itself from starting -- it just means an empty launcher, a visible,
+    # self-explanatory state on its own.
+  end
+
+  def register_launchable(toml_path)
+    rb_path = toml_path[0, toml_path.length - ".app.toml".length] + ".rb"
+    fields = parse_manifest(toml_path)
+    return unless fields["name"] && fields["w"] && fields["h"]
+    acid_launcher_register(rb_path, fields["name"], fields["w"].to_i, fields["h"].to_i)
+  rescue
+    # One malformed/unreadable manifest shouldn't take the whole scan
+    # down -- just skip it and keep going with the rest.
+  end
+
+  def parse_manifest(path)
+    fields = {}
+    f = File.open(path, "r")
+    text = f.read
+    f.close
+    text.split("\n").each do |line|
+      line = line.strip
+      next if line.empty? || line.start_with?("#")
+      eq = line.index("=")
+      next unless eq
+      key = line[0, eq].strip
+      value = line[eq + 1, line.length - eq - 1].strip
+      fields[key] = value
+    end
+    fields
+  end
+
   def in_menu_slot?(x)
     x >= MENU_SLOT_X
   end
@@ -281,7 +345,7 @@ class DesktopApp < AcidApp
     i = 0
     while i < count && i < MAX_LAUNCHER_ITEMS
       y = STRIP_H + i * ITEM_H
-      acid_draw_text(short_name(acid_launcher_path(i)), 6, y + 4, TEXT_COLOR, BG_COLOR)
+      acid_draw_text(acid_launcher_name(i), 6, y + 4, TEXT_COLOR, BG_COLOR)
       i += 1
     end
   end

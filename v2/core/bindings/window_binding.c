@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "window_binding.h"
 #include "../kernel/kernel_window.h"
 #include "../kernel/kernel_router.h"
@@ -9,44 +11,89 @@
 
 #include "mruby/array.h"
 
-/* Apps the launcher menu can start. A fixed, C-owned table rather than
- * taking a path string from Ruby: kernel_spawn_app stores the pointer it's
- * given (app_name in kernel_window, script_path in vm_host_params) for the
- * ENTIRE lifetime of the spawned task, well past this binding call
- * returning -- a Ruby-string's char* would be safe only until mruby's GC
- * next runs. C string literals live forever, so indexing into this table
- * is the only safe way to let Ruby choose what to launch. */
+/* Apps the launcher menu can start. Populated at runtime by
+ * acid_launcher_register (desktop.rb scans v2/apps for *.app.toml
+ * manifests at boot and registers whatever it finds -- see its own
+ * comment), NOT a fixed compile-time table anymore: dropping a new
+ * <name>.rb + <name>.app.toml pair into that directory is enough to make
+ * it launchable, no C change or rebuild required.
+ *
+ * Still C-owned storage, not a Ruby-string pointer taken directly:
+ * kernel_spawn_app stores the pointer it's given (app_name in
+ * kernel_window, script_path in vm_host_params) for the ENTIRE lifetime
+ * of the spawned task, well past any binding call returning -- a
+ * Ruby-string's char* would only be safe until mruby's next GC pass.
+ * acid_launcher_register copies both strings into heap memory that's
+ * never freed (matches every other "lives for the process" allocation
+ * in this codebase, e.g. kernel_spawn.c's own vm_host_params), which is
+ * the only way to let Ruby discover what's launchable at runtime while
+ * keeping that same safety guarantee. */
 struct launchable_app
 {
-    const char * path;
+    char * path;
+    char * name;
     int w;
     int h;
 };
 
-/* Capped at desktop.rb's own MAX_LAUNCHER_ITEMS (currently 6, the
- * dropdown's own row capacity -- independent of the taskbar's narrower
- * MAX_TASKBAR_SLOTS, since dropdown rows are full-width, not
- * BUTTON_W-wide columns). acid_blaster.rb is a continuously
- * self-redrawing window (an AcidGame, not a static AcidApp); it's only
- * safe to list here now that it skips its own per-tick redraw while
- * covered (see acid_blaster.rb's on_tick and AcidApp#focused?) --
- * before that fix, it would repaint over whatever window was actually
- * on top of it, every tick, with no z-order awareness at all. */
-static const struct launchable_app g_launchable[] = {
-    { "v2/apps/demo_touch.rb", 140, 100 },
-    { "v2/apps/demo_swatch.rb", 140, 100 },
-    { "v2/apps/file_manager.rb", 220, 160 },
-    { "v2/apps/editor.rb", 240, 170 },
-    { "v2/apps/acid_blaster.rb", 250, 180 },
-};
-#define LAUNCHABLE_COUNT ( sizeof( g_launchable ) / sizeof( g_launchable[ 0 ] ) )
+/* Bounded, not a Ruby-sized dynamic array -- matches this codebase's own
+ * style elsewhere (KERNEL_WINDOW_MAX, etc.). desktop.rb's own dropdown
+ * only has room to ever show MAX_LAUNCHER_ITEMS (6) of these regardless;
+ * this is deliberately a little larger so a scan that finds more doesn't
+ * silently drop entries the UI might grow room for later. */
+#define MAX_REGISTERED_APPS 16
+static struct launchable_app g_registered[ MAX_REGISTERED_APPS ];
+static int g_registered_count = 0;
+
+static char *
+dup_cstr( const char * src )
+{
+    size_t len = strlen( src ) + 1;
+    char * copy = ( char * ) pvPortMalloc( len );
+    if( copy != NULL )
+    {
+        memcpy( copy, src, len );
+    }
+    return copy;
+}
+
+static mrb_value
+acid_launcher_register( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    char * path;
+    mrb_int path_len;
+    char * name;
+    mrb_int name_len;
+    mrb_int w, h;
+    mrb_get_args( mrb, "ssii", &path, &path_len, &name, &name_len, &w, &h );
+    ( void ) path_len;
+    ( void ) name_len;
+
+    if( g_registered_count >= MAX_REGISTERED_APPS )
+    {
+        return mrb_bool_value( 0 );
+    }
+
+    struct launchable_app * slot = &g_registered[ g_registered_count ];
+    slot->path = dup_cstr( path );
+    slot->name = dup_cstr( name );
+    if( slot->path == NULL || slot->name == NULL )
+    {
+        return mrb_bool_value( 0 );
+    }
+    slot->w = ( int ) w;
+    slot->h = ( int ) h;
+    g_registered_count++;
+    return mrb_bool_value( 1 );
+}
 
 static mrb_value
 acid_launcher_count( mrb_state * mrb, mrb_value self )
 {
     ( void ) mrb;
     ( void ) self;
-    return mrb_fixnum_value( ( mrb_int ) LAUNCHABLE_COUNT );
+    return mrb_fixnum_value( ( mrb_int ) g_registered_count );
 }
 
 static mrb_value
@@ -55,14 +102,26 @@ acid_launcher_path( mrb_state * mrb, mrb_value self )
     ( void ) self;
     mrb_int index;
     mrb_get_args( mrb, "i", &index );
-    if( index < 0 || ( size_t ) index >= LAUNCHABLE_COUNT )
+    if( index < 0 || index >= g_registered_count )
     {
         return mrb_nil_value();
     }
     /* mrb_str_new_cstr copies into a fresh Ruby String -- safe regardless
-     * of the source literal's own lifetime, which outlives the process
-     * anyway. */
-    return mrb_str_new_cstr( mrb, g_launchable[ index ].path );
+     * of the source's own lifetime, which outlives the process anyway. */
+    return mrb_str_new_cstr( mrb, g_registered[ index ].path );
+}
+
+static mrb_value
+acid_launcher_name( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int index;
+    mrb_get_args( mrb, "i", &index );
+    if( index < 0 || index >= g_registered_count )
+    {
+        return mrb_nil_value();
+    }
+    return mrb_str_new_cstr( mrb, g_registered[ index ].name );
 }
 
 static mrb_value
@@ -71,7 +130,7 @@ acid_launcher_spawn( mrb_state * mrb, mrb_value self )
     ( void ) self;
     mrb_int index;
     mrb_get_args( mrb, "i", &index );
-    if( index < 0 || ( size_t ) index >= LAUNCHABLE_COUNT )
+    if( index < 0 || index >= g_registered_count )
     {
         return mrb_bool_value( 0 );
     }
@@ -83,8 +142,8 @@ acid_launcher_spawn( mrb_state * mrb, mrb_value self )
     int x = 20 + ( ( n * 18 ) % 140 );
     int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 90 );
 
-    void * task = kernel_spawn_app( g_launchable[ index ].path, x, y,
-                                     g_launchable[ index ].w, g_launchable[ index ].h, 1 );
+    void * task = kernel_spawn_app( g_registered[ index ].path, x, y,
+                                     g_registered[ index ].w, g_registered[ index ].h, 1 );
     if( task != NULL )
     {
         kernel_router_activate_window( task );
@@ -206,10 +265,14 @@ acid_window_bindings_register( mrb_state * mrb )
                                  acid_window_info, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_activate_window",
                                  acid_activate_window, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_register",
+                                 acid_launcher_register, MRB_ARGS_REQ( 4 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_count",
                                  acid_launcher_count, MRB_ARGS_NONE() );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_path",
                                  acid_launcher_path, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_name",
+                                 acid_launcher_name, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_spawn",
                                  acid_launcher_spawn, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_send_self_to_back",
