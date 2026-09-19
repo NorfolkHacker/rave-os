@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "kernel_window.h"
+#include "../gfx/gfx.h"
 
 static struct kernel_window g_windows[ KERNEL_WINDOW_MAX ];
 static int g_next_z;
@@ -13,7 +14,7 @@ kernel_window_init( void )
 }
 
 int
-kernel_window_register( void * task, void * queue, void * redraw_done_sem,
+kernel_window_register( void * task, void * queue, void * redraw_done_sem, void * canvas,
                          const char * app_name,
                          int x, int y, int w, int h, int closable )
 {
@@ -25,6 +26,7 @@ kernel_window_register( void * task, void * queue, void * redraw_done_sem,
             g_windows[ i ].task = task;
             g_windows[ i ].queue = queue;
             g_windows[ i ].redraw_done_sem = redraw_done_sem;
+            g_windows[ i ].canvas = canvas;
             g_windows[ i ].app_name = app_name;
             g_windows[ i ].x = x;
             g_windows[ i ].y = y;
@@ -48,6 +50,8 @@ kernel_window_unregister( void * task )
         if( g_windows[ i ].in_use && g_windows[ i ].task == task )
         {
             g_windows[ i ].in_use = 0;
+            gfx_destroy_canvas( g_windows[ i ].canvas );
+            g_windows[ i ].canvas = NULL;
             return;
         }
     }

@@ -27,7 +27,7 @@ acid_fill_rect( mrb_state * mrb, mrb_value self )
         return mrb_nil_value();
     }
 
-    gfx_fill_rect( ctx->window_x + cx, ctx->window_y + cy, cw, ch, ( unsigned int ) color );
+    gfx_fill_rect( ctx->canvas, cx, cy, cw, ch, ( unsigned int ) color );
     return mrb_nil_value();
 }
 
@@ -38,8 +38,7 @@ acid_fill_circle( mrb_state * mrb, mrb_value self )
     mrb_int x, y, r, color;
     mrb_get_args( mrb, "iiii", &x, &y, &r, &color );
     struct kernel_app_context * ctx = ( struct kernel_app_context * ) mrb->ud;
-    gfx_fill_circle( ctx->window_x + ( int ) x, ctx->window_y + ( int ) y,
-                      ( int ) r, ( unsigned int ) color );
+    gfx_fill_circle( ctx->canvas, ( int ) x, ( int ) y, ( int ) r, ( unsigned int ) color );
     return mrb_nil_value();
 }
 
@@ -64,8 +63,7 @@ acid_draw_text( mrb_state * mrb, mrb_value self )
         return mrb_nil_value();
     }
 
-    gfx_draw_text( ctx->window_x + ( int ) x, ctx->window_y + ( int ) y,
-                   str, ( unsigned int ) fg, ( unsigned int ) bg );
+    gfx_draw_text( ctx->canvas, ( int ) x, ( int ) y, str, ( unsigned int ) fg, ( unsigned int ) bg );
     return mrb_nil_value();
 }
 

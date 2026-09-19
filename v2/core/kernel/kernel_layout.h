@@ -1,6 +1,16 @@
 #ifndef ACID_KERNEL_LAYOUT_H
 #define ACID_KERNEL_LAYOUT_H
 
+/* The simulated screen's own fixed resolution -- matches hal_display_sim.cpp's
+ * `LGFX lcd( 320, 240 )` and sim_main.c/app_main.c's desktop spawn width.
+ * Needed here so the router's compositor (kernel_router.c) can paint the
+ * full-screen background without hardcoding its own copy of these numbers.
+ * Kept in sync by comment, the same as every other screen-dimension
+ * constant already duplicated across this project (see desktop.rb's own
+ * SCREEN_W comment). */
+#define KERNEL_SCREEN_W 320
+#define KERNEL_SCREEN_H 240
+
 /* Per-window chrome geometry, shared between kernel_router's hit-testing
  * (this task, and Task 5) and the chrome-drawing binding (Task 6) -- one
  * source of truth so a click always lands exactly where the chrome is

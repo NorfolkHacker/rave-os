@@ -9,6 +9,7 @@
 #include "kernel_window.h"
 #include "kernel_event.h"
 #include "../vm_host/vm_host.h"
+#include "../gfx/gfx.h"
 
 void *
 kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int closable )
@@ -44,11 +45,24 @@ kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int clos
         return NULL;
     }
 
+    /* This window's own private offscreen canvas (see hal_display.h) --
+     * every draw call the app makes goes here, never straight to the real
+     * screen; the router's compositor blits it onto the screen every
+     * frame (kernel_router.c's kernel_router_composite_frame). */
+    void * canvas = gfx_create_canvas( w, h );
+    if( canvas == NULL )
+    {
+        vSemaphoreDelete( redraw_done_sem );
+        vQueueDelete( queue );
+        return NULL;
+    }
+
     struct vm_host_params * params =
         ( struct vm_host_params * ) pvPortMalloc( sizeof( struct vm_host_params ) );
     params->script_path = script_path;
     params->queue = queue;
     params->redraw_done_sem = redraw_done_sem;
+    params->canvas = canvas;
     params->window_x = x;
     params->window_y = y;
     params->window_w = w;
@@ -59,6 +73,7 @@ kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int clos
                                   tskIDLE_PRIORITY + 1, &task );
     if( ok != pdPASS )
     {
+        gfx_destroy_canvas( canvas );
         vSemaphoreDelete( redraw_done_sem );
         vQueueDelete( queue );
         vPortFree( params );
@@ -68,7 +83,7 @@ kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int clos
     /* Guaranteed to succeed: the capacity check at the top of this
      * function already reserved a slot's worth of headroom, and nothing
      * else registers windows concurrently. */
-    kernel_window_register( ( void * ) task, ( void * ) queue, ( void * ) redraw_done_sem,
+    kernel_window_register( ( void * ) task, ( void * ) queue, ( void * ) redraw_done_sem, canvas,
                              script_path, x, y, w, h, closable );
     return ( void * ) task;
 }

@@ -28,14 +28,4 @@ void * kernel_router_get_focus( void );
  * first). */
 void kernel_router_clear_focus( void * task );
 
-/* Clears the given rect and redraws every window overlapping it,
- * back-to-front in z-order, synchronized so each window's redraw is
- * confirmed finished before the next one starts (see kernel_router.c's
- * own comment on the static version this wraps). Exposed publicly so a
- * Ruby binding (acid_repaint_region) can let an app explicitly hand back
- * a region it was temporarily drawing into -- desktop.rb's dropdown menu
- * is the first user: closing it needs to restore whatever real windows
- * are actually underneath, not just stop drawing there itself. */
-void kernel_router_repaint_region( int x, int y, int w, int h );
-
 #endif

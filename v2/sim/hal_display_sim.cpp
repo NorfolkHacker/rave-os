@@ -8,6 +8,17 @@ extern "C" {
 
 static LGFX lcd( 320, 240 );
 
+/* target == NULL means "the real screen" (lcd); non-NULL is an LGFX_Sprite*
+ * previously returned by hal_display_create_canvas. A plain branch instead
+ * of dispatching through a common LovyanGFX base pointer -- there are only
+ * ever these two concrete cases, so there's no polymorphism to gain and
+ * this keeps each call site obviously correct. */
+static inline LGFX_Sprite *
+as_canvas( void * target )
+{
+    return reinterpret_cast<LGFX_Sprite *>( target );
+}
+
 extern "C" void hal_display_init( void )
 {
     /* Must be called before init() (it only affects window creation).
@@ -41,9 +52,28 @@ extern "C" void hal_display_init( void )
     lcd.fillScreen( TFT_BLACK );
 }
 
-extern "C" void hal_display_fill_rect( int x, int y, int w, int h, unsigned int color )
+extern "C" void * hal_display_create_canvas( int w, int h )
 {
-    lcd.fillRect( x, y, w, h, color );
+    /* Parented to lcd so its color depth/palette matches the real screen
+     * (required for pushSprite to blit onto it correctly). Left at
+     * whatever createSprite zero-initializes it to (black) until the
+     * owning app's own first redraw() fills it for real -- same as the
+     * real screen's own brief black flash before anything is drawn to it
+     * at boot, not a new startup artifact. */
+    LGFX_Sprite * canvas = new LGFX_Sprite( &lcd );
+    canvas->createSprite( w, h );
+    return canvas;
+}
+
+extern "C" void hal_display_destroy_canvas( void * canvas )
+{
+    delete as_canvas( canvas );
+}
+
+extern "C" void hal_display_fill_rect( void * target, int x, int y, int w, int h, unsigned int color )
+{
+    if( target == NULL ) { lcd.fillRect( x, y, w, h, color ); return; }
+    as_canvas( target )->fillRect( x, y, w, h, color );
 }
 
 extern "C" void hal_display_clear_screen( unsigned int color )
@@ -60,15 +90,28 @@ extern "C" void hal_display_clear_screen( unsigned int color )
     lcd.fillRect( 0, 0, lcd.width(), lcd.height(), color );
 }
 
-extern "C" void hal_display_fill_circle( int x, int y, int r, unsigned int color )
+extern "C" void hal_display_fill_circle( void * target, int x, int y, int r, unsigned int color )
 {
-    lcd.fillCircle( x, y, r, color );
+    if( target == NULL ) { lcd.fillCircle( x, y, r, color ); return; }
+    as_canvas( target )->fillCircle( x, y, r, color );
 }
 
-extern "C" void hal_display_draw_text( int x, int y, const char * str, unsigned int fg, unsigned int bg )
+extern "C" void hal_display_draw_text( void * target, int x, int y, const char * str, unsigned int fg, unsigned int bg )
 {
-    lcd.setTextColor( fg, bg );
-    lcd.drawString( str, x, y );
+    if( target == NULL )
+    {
+        lcd.setTextColor( fg, bg );
+        lcd.drawString( str, x, y );
+        return;
+    }
+    LGFX_Sprite * canvas = as_canvas( target );
+    canvas->setTextColor( fg, bg );
+    canvas->drawString( str, x, y );
+}
+
+extern "C" void hal_display_blit_canvas( void * canvas, int x, int y )
+{
+    as_canvas( canvas )->pushSprite( &lcd, x, y );
 }
 
 extern "C" void hal_input_poll_touch( int * x, int * y, bool * pressed )

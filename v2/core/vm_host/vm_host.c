@@ -181,6 +181,7 @@ vm_host_task( void * pvParameters )
     struct kernel_app_context ctx;
     ctx.queue = params->queue;
     ctx.redraw_done_sem = params->redraw_done_sem;
+    ctx.canvas = params->canvas;
     ctx.window_x = params->window_x;
     ctx.window_y = params->window_y;
     ctx.window_w = params->window_w;

@@ -107,12 +107,22 @@ class DesktopApp < AcidApp
     redraw_if_changed
   end
 
-  # Full redraw of the strip; the dropdown (if open) is drawn separately by
-  # open_menu, since it needs to happen only once, right when opening, not
-  # on every idle tick.
+  # AcidApp#start calls this both for the very first paint (right after
+  # on_create, @last_state still nil so redraw_if_changed always draws
+  # that time) and for every :moved event -- and :moved fires any time
+  # ANY window's drag touches desktop's registered bounds, which (see
+  # TOTAL_H's comment) covers virtually the whole screen, not just the
+  # visible 24px strip. Before this delegated to redraw_if_changed it
+  # unconditionally cleared and redrew the strip -- including the Menu
+  # button -- on every single tick of dragging some OTHER, unrelated
+  # window around, since that window's drag rect almost always overlaps
+  # desktop's oversized dropdown-hit-test bounds even though the strip's
+  # own visible content never changed. Reported live as "the word Menu
+  # also flickers when moving the piano window". redraw_if_changed already
+  # existed for exactly this reason on the on_idle path (see its own
+  # comment) -- reusing it here covers the :moved path with no new logic.
   def redraw
-    draw_strip
-    draw_menu_button
+    redraw_if_changed
   end
 
   # Same as redraw, but a no-op when the window list and focus state are
@@ -216,7 +226,14 @@ class DesktopApp < AcidApp
     # bottom-most window for this region instead of the topmost.
     acid_send_self_to_back
     acid_repaint_region(0, STRIP_H, SCREEN_W, DROPDOWN_H)
-    redraw
+    # Explicit, unconditional draw_strip/draw_menu_button here, NOT redraw --
+    # redraw now delegates to redraw_if_changed (see its own comment), which
+    # would wrongly skip this if the window list/focus signature happens to
+    # be unchanged from before the dropdown opened. The Menu button's own
+    # label (Back -> Menu) depends on @mode, which state_signature doesn't
+    # track, so that skip would leave it stuck reading "Back" after closing.
+    draw_strip
+    draw_menu_button
   end
 
   # Desktop's own kernel index -- active_windows deliberately excludes it

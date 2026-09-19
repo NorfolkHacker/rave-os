@@ -7,17 +7,20 @@ struct kernel_window
 {
     void * task;          /* opaque TaskHandle_t */
     void * queue;          /* opaque QueueHandle_t */
-    /* opaque SemaphoreHandle_t (binary), given by the app itself right
-     * after it finishes handling a KERNEL_EVENT_MOVED-triggered redraw --
-     * see acid_notify_redraw_done. Every app on screen draws on its own
-     * real FreeRTOS task/pthread with no ordering between them otherwise;
-     * the router takes this after each send in kernel_router_repaint_all
-     * so a window's redraw is confirmed FINISHED before the next window
-     * (which may visually overlap it) starts its own -- without this,
-     * back-to-front z-order is only the ORDER EVENTS ARE SENT IN, not the
-     * order drawing actually completes in, so a higher window's draw can
-     * finish before a lower one's and get silently painted over. */
+    /* Unused by the router any more (the compositor no longer waits on
+     * apps to redraw -- see kernel_router.c's kernel_router_composite_frame),
+     * but kept: acid_notify_redraw_done still posts it harmlessly, and
+     * removing the whole plumbing (kernel_spawn.c, vm_host.c, acid_app.rb,
+     * acid_game.rb) isn't needed just to land the compositor fix. */
     void * redraw_done_sem;
+    /* This window's private offscreen pixel buffer -- see hal_display.h's
+     * own comment. Every app draws into this (never the real screen
+     * directly), using its own window-relative coordinates; the router's
+     * compositor is the only thing that ever blits it onto the visible
+     * screen. Created in kernel_window_register, destroyed in
+     * kernel_window_unregister. Opaque outside the gfx layer -- treat as
+     * a plain handle, pass straight through to gfx_blit_canvas. */
+    void * canvas;
     const char * app_name;
     int x, y, w, h;
     int z_order;
@@ -26,7 +29,7 @@ struct kernel_window
 };
 
 void kernel_window_init( void );
-int kernel_window_register( void * task, void * queue, void * redraw_done_sem,
+int kernel_window_register( void * task, void * queue, void * redraw_done_sem, void * canvas,
                              const char * app_name,
                              int x, int y, int w, int h, int closable );
 void kernel_window_unregister( void * task );

@@ -5,6 +5,9 @@
 #include "../kernel/kernel_router.h"
 #include "../kernel/kernel_spawn.h"
 #include "../kernel/kernel_layout.h"
+#include "../kernel/kernel_app_context.h"
+#include "../kernel/kernel_theme.h"
+#include "../gfx/gfx.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -196,7 +199,22 @@ acid_repaint_region( mrb_state * mrb, mrb_value self )
     ( void ) self;
     mrb_int x, y, w, h;
     mrb_get_args( mrb, "iiii", &x, &y, &w, &h );
-    kernel_router_repaint_region( ( int ) x, ( int ) y, ( int ) w, ( int ) h );
+    struct kernel_app_context * ctx = ( struct kernel_app_context * ) mrb->ud;
+    /* Under the compositor (kernel_router.c's kernel_router_composite_
+     * frame), the real screen is recomputed fresh every frame purely from
+     * each window's own canvas -- there's no persistent "real screen"
+     * state left for a caller to hand back to whatever's underneath the
+     * way there used to be. What this call actually needs to do now is
+     * erase the caller's OWN claim on that region by clearing it, in its
+     * OWN canvas, to background: the very next composite tick then shows
+     * whatever's really there (another window, or plain background) on
+     * its own, automatically. desktop.rb's dropdown-close is the one
+     * caller -- it drew the dropdown into its own (oversized, invisible-
+     * outside-:launcher-mode) canvas, and closing the menu needs those
+     * pixels actually gone from that canvas, not just a request to some
+     * other window to redraw over now-stale real-screen pixels that no
+     * longer exist as a persistent concept. */
+    gfx_fill_rect( ctx->canvas, ( int ) x, ( int ) y, ( int ) w, ( int ) h, THEME_BG );
     return mrb_nil_value();
 }
 

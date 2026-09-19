@@ -17,6 +17,11 @@ struct kernel_app_context
 {
     QueueHandle_t queue;
     void * redraw_done_sem;   /* opaque SemaphoreHandle_t (binary) */
+    /* This app's own private offscreen canvas -- every drawing binding
+     * (gfx_binding.c, chrome_binding.c) targets this, using coordinates
+     * relative to the window's own origin (0,0), never the real screen
+     * directly. See hal_display.h's own comment. */
+    void * canvas;
     int window_x;
     int window_y;
     int window_w;

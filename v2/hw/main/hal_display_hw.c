@@ -9,22 +9,44 @@ hal_display_init( void )
     ESP_LOGI( TAG, "hal_display_init: stub, no panel driver wired up yet" );
 }
 
-void
-hal_display_fill_rect( int x, int y, int w, int h, unsigned int color )
+void *
+hal_display_create_canvas( int w, int h )
 {
-    ESP_LOGI( TAG, "hal_display_fill_rect(%d, %d, %d, %d, 0x%06x): stub, not drawn", x, y, w, h, color );
+    ESP_LOGI( TAG, "hal_display_create_canvas(%d, %d): stub, no canvas allocated", w, h );
+    return NULL;
 }
 
 void
-hal_display_fill_circle( int x, int y, int r, unsigned int color )
+hal_display_destroy_canvas( void * canvas )
 {
-    ESP_LOGI( TAG, "hal_display_fill_circle(%d, %d, %d, 0x%06x): stub, not drawn", x, y, r, color );
+    ( void ) canvas;
 }
 
 void
-hal_display_draw_text( int x, int y, const char * str, unsigned int fg, unsigned int bg )
+hal_display_fill_rect( void * target, int x, int y, int w, int h, unsigned int color )
 {
-    ESP_LOGI( TAG, "hal_display_draw_text(%d, %d, \"%s\", 0x%06x, 0x%06x): stub, not drawn", x, y, str, fg, bg );
+    ESP_LOGI( TAG, "hal_display_fill_rect(target=%p, %d, %d, %d, %d, 0x%06x): stub, not drawn",
+              target, x, y, w, h, color );
+}
+
+void
+hal_display_fill_circle( void * target, int x, int y, int r, unsigned int color )
+{
+    ESP_LOGI( TAG, "hal_display_fill_circle(target=%p, %d, %d, %d, 0x%06x): stub, not drawn",
+              target, x, y, r, color );
+}
+
+void
+hal_display_draw_text( void * target, int x, int y, const char * str, unsigned int fg, unsigned int bg )
+{
+    ESP_LOGI( TAG, "hal_display_draw_text(target=%p, %d, %d, \"%s\", 0x%06x, 0x%06x): stub, not drawn",
+              target, x, y, str, fg, bg );
+}
+
+void
+hal_display_blit_canvas( void * canvas, int x, int y )
+{
+    ESP_LOGI( TAG, "hal_display_blit_canvas(canvas=%p, %d, %d): stub, not drawn", canvas, x, y );
 }
 
 void
