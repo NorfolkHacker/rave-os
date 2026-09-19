@@ -6,9 +6,9 @@
 #include "../kernel/kernel_spawn.h"
 #include "../kernel/kernel_layout.h"
 #include "../kernel/kernel_app_context.h"
-#include "../kernel/kernel_theme.h"
 #include "../kernel/kernel_audio.h"
 #include "../gfx/gfx.h"
+#include "../gfx/wallpaper.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -356,9 +356,38 @@ acid_repaint_region( mrb_state * mrb, mrb_value self )
      * outside-:launcher-mode) canvas, and closing the menu needs those
      * pixels actually gone from that canvas, not just a request to some
      * other window to redraw over now-stale real-screen pixels that no
-     * longer exist as a persistent concept. */
-    gfx_fill_rect( ctx->canvas, ( int ) x, ( int ) y, ( int ) w, ( int ) h, THEME_BG );
+     * longer exist as a persistent concept. That "background" is the real
+     * wallpaper now, not a flat THEME_BG fill -- see wallpaper.h's own
+     * comment on wallpaper_draw_into -- so the desktop area behind a
+     * closed dropdown actually shows it instead of a permanent black
+     * rectangle. */
+    wallpaper_draw_into( ctx->canvas, ( int ) x, ( int ) y, ( int ) w, ( int ) h );
     return mrb_nil_value();
+}
+
+/* Config's wallpaper on/off toggle -- see wallpaper.h's own comment. Only
+ * flips the flag and asks the router to recomposite (gfx_mark_dirty);
+ * desktop.rb is responsible for noticing the change and repainting its own
+ * already-drawn dropdown-closed area to match (see its state_signature/
+ * redraw_if_changed), the same way it already notices a window opening or
+ * closing. */
+static mrb_value
+acid_set_wallpaper_enabled( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_bool enabled;
+    mrb_get_args( mrb, "b", &enabled );
+    wallpaper_set_enabled( enabled );
+    gfx_mark_dirty();
+    return mrb_nil_value();
+}
+
+static mrb_value
+acid_get_wallpaper_enabled( mrb_state * mrb, mrb_value self )
+{
+    ( void ) mrb;
+    ( void ) self;
+    return mrb_bool_value( wallpaper_is_enabled() );
 }
 
 static mrb_value
@@ -500,6 +529,10 @@ acid_window_bindings_register( mrb_state * mrb )
                                  acid_send_self_to_back, MRB_ARGS_NONE() );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_repaint_region",
                                  acid_repaint_region, MRB_ARGS_REQ( 4 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_set_wallpaper_enabled",
+                                 acid_set_wallpaper_enabled, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_get_wallpaper_enabled",
+                                 acid_get_wallpaper_enabled, MRB_ARGS_NONE() );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_am_i_focused",
                                  acid_am_i_focused, MRB_ARGS_NONE() );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_spawn_app",

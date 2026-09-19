@@ -10,9 +10,9 @@
 #include "kernel_window.h"
 #include "kernel_event.h"
 #include "kernel_layout.h"
-#include "kernel_theme.h"
 #include "../hal/hal_input.h"
 #include "../gfx/gfx.h"
+#include "../gfx/wallpaper.h"
 
 enum drag_mode
 {
@@ -80,7 +80,7 @@ static void send_event( struct kernel_window * win, int type, int x, int y, int 
 static void
 kernel_router_composite_frame( void )
 {
-    gfx_clear_screen( THEME_BG );
+    wallpaper_blit();
 
     int z = -1;
     struct kernel_window * win;

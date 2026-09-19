@@ -69,17 +69,9 @@ class DesktopApp < AcidApp
   TOTAL_H = STRIP_H + DROPDOWN_H
 
   BG_COLOR = 0x0B1712      # THEME_PANEL
-  # The general desktop background every OTHER window's own canvas
-  # defaults to (kernel_theme.h's THEME_BG, which is also what the
-  # router's compositor clears the real screen to). Desktop's own window
-  # is registered TOTAL_H tall for the dropdown's sake (see TOTAL_H's
-  # comment) but only ever DRAWS its top STRIP_H of that -- a canvas
-  # starts zero-initialized (black), so the rest of it silently stayed
-  # black forever, painted opaquely over the real background on every
-  # composite. Invisible at the old 320x240 resolution (black and
-  # near-black THEME_BG read the same at a glance in a screenshot);
-  # obviously wrong as a big black rectangle once the screen grew to
-  # 640x360. Painted over once in on_create -- see its own comment.
+  # Only used for the strip row itself now -- see on_create's own comment
+  # for why the rest of desktop's (much taller) registered window is
+  # repainted with the real wallpaper instead of this flat color.
   SCREEN_BG_COLOR = 0x050607 # THEME_BG
   ACCENT_COLOR = 0x00FF66  # THEME_HARD
   TEXT_COLOR = 0xD4E6DB    # THEME_TEXT
@@ -100,11 +92,20 @@ class DesktopApp < AcidApp
   # before that first redraw runs (so Menu's entry count is right from
   # frame one), not to skip that default behavior.
   def on_create
-    # See SCREEN_BG_COLOR's own comment -- paints the whole registered
-    # window (not just the STRIP_H this app actually draws day to day)
-    # once, so the canvas never has raw zero-initialized black baked into
-    # the part of it nothing else ever touches.
-    acid_fill_rect(0, 0, SCREEN_W, TOTAL_H, SCREEN_BG_COLOR)
+    # The strip row is real chrome (Menu/clock/window buttons), always a
+    # flat panel color -- draw_strip repaints it immediately after this
+    # anyway (AcidApp#start's automatic first redraw), this is just so the
+    # canvas never has raw zero-initialized black baked in before that.
+    acid_fill_rect(0, 0, SCREEN_W, STRIP_H, SCREEN_BG_COLOR)
+    # Below the strip is desktop's own registered bounds but NOT chrome --
+    # it's only ever drawn on while the dropdown is open (see TOTAL_H's own
+    # comment on why desktop is registered this tall at all). Closed, it
+    # should show the real wallpaper, the same as any other unclaimed part
+    # of the screen -- acid_repaint_region does exactly that (see its own
+    # C-side comment), so reuse it here instead of a flat SCREEN_BG_COLOR
+    # fill, which used to paint a permanent black rectangle over the
+    # wallpaper's sun/stars/hills the instant desktop started.
+    acid_repaint_region(0, STRIP_H, SCREEN_W, DROPDOWN_H)
     scan_launchable_apps
   end
 
@@ -156,6 +157,15 @@ class DesktopApp < AcidApp
     @last_state = sig
     draw_strip(windows)
     draw_menu_button
+    # state_signature includes Config's wallpaper toggle (see its own
+    # comment) precisely so a change there lands here too -- the
+    # dropdown-closed area below the strip was already painted once, in
+    # on_create/close_menu, with whatever the toggle said at the time, and
+    # nothing else ever asks desktop to repaint it. Guarded the same way
+    # close_menu itself is guarded: never repaint over the dropdown's own
+    # drawn content while it's actually open (redraw, unlike this method's
+    # other callers, can run in :launcher mode too -- see its own comment).
+    acid_repaint_region(0, STRIP_H, SCREEN_W, DROPDOWN_H) unless @mode == :launcher
   end
 
   def on_touch(x, y, pressed)
@@ -372,16 +382,18 @@ class DesktopApp < AcidApp
   end
 
   # A plain value (Array, structurally comparable with ==) that changes
-  # if and only if what the strip would actually LOOK like changes: which
-  # apps are open, in which slots, which one is focused, and the clock
-  # text. Position/size aren't included -- the taskbar never draws those
-  # -- so a window being dragged around the screen doesn't cause the
-  # strip to think it needs a redraw every tick. The clock IS included
-  # deliberately -- it's the one part of the strip that changes on its
-  # own, once a minute, with no window-list change to trigger a redraw
-  # otherwise.
+  # if and only if what the strip (and, see redraw_if_changed, the
+  # dropdown-closed area below it) would actually LOOK like changes: which
+  # apps are open, in which slots, which one is focused, the clock text,
+  # and Config's wallpaper on/off toggle. Position/size aren't included --
+  # the taskbar never draws those -- so a window being dragged around the
+  # screen doesn't cause the strip to think it needs a redraw every tick.
+  # The clock and wallpaper flag ARE included deliberately -- they're the
+  # parts of this that can change on their own (a minute ticking over, a
+  # setting flipped in another window), with no window-list change to
+  # trigger a redraw otherwise.
   def state_signature(windows)
-    [ windows.map { |entry| [entry[1][0], entry[1][5]] }, clock_text ]
+    [ windows.map { |entry| [entry[1][0], entry[1][5]] }, clock_text, acid_get_wallpaper_enabled ]
   end
 
   # [[kernel_index, info], ...] for every in-use window except this one.

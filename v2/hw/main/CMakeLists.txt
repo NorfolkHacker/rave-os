@@ -15,6 +15,7 @@ idf_component_register(
         ../../core/bindings/task_binding.c
         ../../core/bindings/network_binding.c
         ../../core/gfx/gfx.c
+        ../../core/gfx/wallpaper.c
         ../../core/audio/synth.c
         ../../core/kernel/kernel_window.c
         ../../core/kernel/kernel_spawn.c

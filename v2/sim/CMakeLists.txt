@@ -58,6 +58,7 @@ add_executable(acidos_sim
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/task_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/network_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/gfx/gfx.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/gfx/wallpaper.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/audio/synth.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_window.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_spawn.c
