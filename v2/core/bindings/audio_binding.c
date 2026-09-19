@@ -79,6 +79,26 @@ acid_stop_note( mrb_state * mrb, mrb_value self )
     return mrb_nil_value();
 }
 
+/* System-wide output gain (0..100) -- for a Config app's volume control.
+ * See kernel_audio_set_master_volume's own doc comment. */
+static mrb_value
+acid_set_volume( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int percent;
+    mrb_get_args( mrb, "i", &percent );
+    kernel_audio_set_master_volume( ( int ) percent );
+    return mrb_nil_value();
+}
+
+static mrb_value
+acid_get_volume( mrb_state * mrb, mrb_value self )
+{
+    ( void ) mrb;
+    ( void ) self;
+    return mrb_fixnum_value( kernel_audio_get_master_volume() );
+}
+
 void
 acid_audio_bindings_register( mrb_state * mrb )
 {
@@ -92,4 +112,8 @@ acid_audio_bindings_register( mrb_state * mrb )
                                  acid_configure_filter, MRB_ARGS_REQ( 3 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_trigger_arp",
                                  acid_trigger_arp, MRB_ARGS_REQ( 7 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_set_volume",
+                                 acid_set_volume, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_get_volume",
+                                 acid_get_volume, MRB_ARGS_NONE() );
 }

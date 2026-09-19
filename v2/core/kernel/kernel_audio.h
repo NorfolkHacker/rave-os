@@ -65,4 +65,17 @@ void kernel_audio_drain_and_render( unsigned char * buf, unsigned int len );
  * kernel_audio.c's own comment on the mask this reads. */
 int kernel_audio_active_voice_count( void );
 
+/* Global output gain, 0..100, applied to every voice's mixed output in
+ * kernel_audio_drain_and_render (post-synth_render_half, pre-buf handoff
+ * to the HAL) -- deliberately NOT inside synth.c, since this is a
+ * system-wide setting (a Config app's "Volume" knob), not a per-voice
+ * synth parameter. Safe to call from any FreeRTOS task; backed by a
+ * single _Atomic int, same single-writer-doesn't-matter-here discipline
+ * as g_active_voice_mask (a caller can only ever set it to one value, so
+ * there's no meaningful "last writer wins" race to worry about beyond
+ * ordinary atomic tearing, which _Atomic already prevents). Clamped to
+ * 0..100 inside the setter, not at every read site. */
+void kernel_audio_set_master_volume( int percent );
+int kernel_audio_get_master_volume( void );
+
 #endif

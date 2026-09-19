@@ -35,6 +35,9 @@ static void * g_voice_owner[ SYNTH_NUM_VOICES ];
  * way to observe it from Ruby at all before. */
 static _Atomic int g_active_voice_mask;
 
+/* See kernel_audio_set_master_volume's own doc comment in the header. */
+static _Atomic int g_master_volume_percent = 100;
+
 void
 kernel_audio_init( void )
 {
@@ -292,6 +295,24 @@ kernel_audio_drain_and_render( unsigned char * buf, unsigned int len )
     atomic_store_explicit( &g_audio_cmd_head, head, memory_order_release );
     synth_render_half( buf, len );
 
+    /* buf is 8-bit unsigned PCM biased around 128 (see synth_render_half's
+     * own comment on why) -- de-bias to signed, scale, clamp, re-bias.
+     * Skipped entirely at the default 100% so the common case costs
+     * nothing beyond the atomic load. */
+    int volume = atomic_load_explicit( &g_master_volume_percent, memory_order_relaxed );
+    if( volume != 100 )
+    {
+        unsigned int i;
+        for( i = 0; i < len; i++ )
+        {
+            int sample = ( int ) buf[ i ] - 128;
+            sample = sample * volume / 100;
+            if( sample > 127 ) sample = 127;
+            if( sample < -128 ) sample = -128;
+            buf[ i ] = ( unsigned char ) ( sample + 128 );
+        }
+    }
+
     int mask = 0;
     int i;
     for( i = 0; i < SYNTH_NUM_VOICES; i++ )
@@ -319,4 +340,18 @@ kernel_audio_active_voice_count( void )
         mask >>= 1;
     }
     return count;
+}
+
+void
+kernel_audio_set_master_volume( int percent )
+{
+    if( percent < 0 ) percent = 0;
+    if( percent > 100 ) percent = 100;
+    atomic_store_explicit( &g_master_volume_percent, percent, memory_order_relaxed );
+}
+
+int
+kernel_audio_get_master_volume( void )
+{
+    return atomic_load_explicit( &g_master_volume_percent, memory_order_relaxed );
 }
