@@ -18,14 +18,17 @@ class FileManagerApp < AcidApp
     @dir = ROOT_DIR
     @entries = []
     @selected = 0
+    @scroll = 0
     @preview = nil       # nil = browsing; a String = previewing this
                           # file's content
     @preview_name = nil
+    @preview_scroll = 0
     scan_dir
   end
 
   def scan_dir
     @entries = []
+    @scroll = 0
     @entries << { name: "..", dir: true, size: 0 } unless @dir == ROOT_DIR
     begin
       d = Dir.open(@dir)
@@ -61,6 +64,29 @@ class FileManagerApp < AcidApp
     (WINDOW_H - TITLE_BAR_H) / ROW_H
   end
 
+  # How many entry rows the listing has room for, below its own one-row
+  # path header -- the number draw_listing/on_touch/scrolling all need to
+  # agree on, previously duplicated as a bare `visible_rows - 1` in each.
+  def visible_listing_rows
+    visible_rows - 1
+  end
+
+  # Keeps @selected on screen by moving @scroll to match, same idea as
+  # editor.rb's own ensure_scroll -- without this, a directory with more
+  # entries than fit on screen (v2/apps, now browsable via fsroot/App,
+  # easily has more files than this window's dozen or so visible rows)
+  # left every entry past the first screenful permanently unreachable:
+  # arrow-key selection moved @selected past the visible range with
+  # nothing on screen ever scrolling to show it, and a tap below the
+  # visible rows had nothing real to hit-test against anyway.
+  def ensure_listing_scroll
+    if @selected < @scroll
+      @scroll = @selected
+    elsif @selected >= @scroll + visible_listing_rows
+      @scroll = @selected - visible_listing_rows + 1
+    end
+  end
+
   def redraw
     acid_clear_user_area
     acid_draw_window_frame(window_title)
@@ -75,33 +101,40 @@ class FileManagerApp < AcidApp
   def draw_listing
     y = TITLE_BAR_H
     acid_fill_rect(0, y, WINDOW_W, ROW_H, BG_COLOR)
-    acid_draw_text(@dir, 2, y + 2, TEXT_COLOR, BG_COLOR)
+    label = @entries.length > visible_listing_rows ? "#{@dir} (#{@selected + 1}/#{@entries.length})" : @dir
+    acid_draw_text(label, 2, y + 2, TEXT_COLOR, BG_COLOR)
     y += ROW_H
-    i = 0
-    while i < @entries.length && i < visible_rows - 1
+    i = @scroll
+    while i < @entries.length && i < @scroll + visible_listing_rows
       e = @entries[i]
       row_bg = (i == @selected) ? SEL_BG : BODY_BG
       acid_fill_rect(0, y, WINDOW_W, ROW_H, row_bg)
-      label = e[:dir] ? "[#{e[:name]}]" : " #{e[:name]} (#{e[:size]}B)"
+      entry_label = e[:dir] ? "[#{e[:name]}]" : " #{e[:name]} (#{e[:size]}B)"
       color = e[:dir] ? DIR_COLOR : TEXT_COLOR
-      acid_draw_text(label[0, 34], 2, y + 2, color, row_bg)
+      acid_draw_text(entry_label[0, 34], 2, y + 2, color, row_bg)
       y += ROW_H
       i += 1
     end
   end
 
   def draw_preview
-    acid_fill_rect(0, TITLE_BAR_H, WINDOW_W, ROW_H, BG_COLOR)
-    acid_draw_text(@preview_name, 2, TITLE_BAR_H + 2, TEXT_COLOR, BG_COLOR)
     lines = @preview.split("\n")
+    acid_fill_rect(0, TITLE_BAR_H, WINDOW_W, ROW_H, BG_COLOR)
+    header = lines.length > visible_listing_rows ? "#{@preview_name} (#{@preview_scroll + 1}/#{lines.length})" : @preview_name
+    acid_draw_text(header, 2, TITLE_BAR_H + 2, TEXT_COLOR, BG_COLOR)
     y = TITLE_BAR_H + ROW_H
-    i = 0
-    while i < lines.length && i < visible_rows - 1
+    i = @preview_scroll
+    while i < lines.length && i < @preview_scroll + visible_listing_rows
       acid_fill_rect(0, y, WINDOW_W, ROW_H, BODY_BG)
       acid_draw_text(lines[i][0, 34], 2, y + 2, TEXT_COLOR, BODY_BG)
       y += ROW_H
       i += 1
     end
+  end
+
+  def max_preview_scroll(lines)
+    over = lines.length - visible_listing_rows
+    over > 0 ? over : 0
   end
 
   def on_touch(x, y, pressed)
@@ -125,7 +158,7 @@ class FileManagerApp < AcidApp
       redraw
       return
     end
-    row = (y - TITLE_BAR_H) / ROW_H - 1
+    row = (y - TITLE_BAR_H) / ROW_H - 1 + @scroll
     return if row < 0 || row >= @entries.length
     @selected = row
     activate_selected
@@ -134,17 +167,24 @@ class FileManagerApp < AcidApp
   def on_key(code, pressed)
     return unless pressed
     if @preview
+      lines = @preview.split("\n")
       if code == AcidKeys::ESCAPE
         @preview = nil
-        redraw
+      elsif code == AcidKeys::UP
+        @preview_scroll -= 1 if @preview_scroll > 0
+      elsif code == AcidKeys::DOWN
+        @preview_scroll += 1 if @preview_scroll < max_preview_scroll(lines)
       end
+      redraw
       return
     end
     if code == AcidKeys::UP
       @selected -= 1 if @selected > 0
+      ensure_listing_scroll
       redraw
     elsif code == AcidKeys::DOWN
       @selected += 1 if @selected < @entries.length - 1
+      ensure_listing_scroll
       redraw
     elsif code == AcidKeys::ENTER
       activate_selected
@@ -177,6 +217,7 @@ class FileManagerApp < AcidApp
 
   def open_preview(name)
     path = "#{@dir}/#{name}"
+    @preview_scroll = 0
     begin
       f = File.open(path, "r")
       @preview = f.read
