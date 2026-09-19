@@ -323,7 +323,13 @@ class DesktopApp < AcidApp
     rb_path = toml_path[0, toml_path.length - ".app.toml".length] + ".rb"
     fields = parse_manifest(toml_path)
     return unless fields["name"] && fields["w"] && fields["h"]
-    return unless acid_launcher_register(rb_path, fields["name"], fields["w"].to_i, fields["h"].to_i)
+    # true only for the handful of apps explicitly allowed more than one
+    # window at once (Editor, File Manager, Terminal) via `multi = true`
+    # in their own manifest -- every other app defaults to singleton
+    # (acid_launcher_spawn/acid_spawn_app focus the existing window
+    # instead of opening a second one).
+    multi = fields["multi"] == "true"
+    return unless acid_launcher_register(rb_path, fields["name"], fields["w"].to_i, fields["h"].to_i, multi)
     @menu_visible << ( fields["menu"] != "false" )
   rescue
     # One malformed/unreadable manifest shouldn't take the whole scan

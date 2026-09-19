@@ -38,6 +38,11 @@ struct launchable_app
     char * name;
     int w;
     int h;
+    /* True for the handful of apps that make sense to have several
+     * windows of at once (Editor, File Manager, Terminal -- explicit
+     * user request); every other app is a singleton, see
+     * find_running_task_by_path's own comment. */
+    int multi;
 };
 
 /* Bounded, not a Ruby-sized dynamic array -- matches this codebase's own
@@ -70,7 +75,8 @@ acid_launcher_register( mrb_state * mrb, mrb_value self )
     char * name;
     mrb_int name_len;
     mrb_int w, h;
-    mrb_get_args( mrb, "ssii", &path, &path_len, &name, &name_len, &w, &h );
+    mrb_bool multi;
+    mrb_get_args( mrb, "ssiib", &path, &path_len, &name, &name_len, &w, &h, &multi );
     ( void ) path_len;
     ( void ) name_len;
 
@@ -88,8 +94,51 @@ acid_launcher_register( mrb_state * mrb, mrb_value self )
     }
     slot->w = ( int ) w;
     slot->h = ( int ) h;
+    slot->multi = multi ? 1 : 0;
     g_registered_count++;
     return mrb_bool_value( 1 );
+}
+
+/* Finds a currently-open window spawned from this exact script path,
+ * for singleton enforcement -- see struct launchable_app's own comment
+ * on `multi`. A plain linear scan of every registered window (at most
+ * KERNEL_WINDOW_MAX, a handful), same cost class as active_windows'
+ * equivalent scan in desktop.rb. Returns the owning task handle, or
+ * NULL if no such window is open. */
+static void *
+find_running_task_by_path( const char * path )
+{
+    int i;
+    for( i = 0; i < KERNEL_WINDOW_MAX; i++ )
+    {
+        struct kernel_window * win = kernel_window_at_index( i );
+        if( win != NULL && win->in_use && win->app_name != NULL &&
+            strcmp( win->app_name, path ) == 0 )
+        {
+            return win->task;
+        }
+    }
+    return NULL;
+}
+
+/* The registered `multi` flag for a script path -- used by acid_spawn_app,
+ * which (unlike acid_launcher_spawn) only has a path, not a registry
+ * index. Defaults to 0 (singleton) for a path with no registry entry at
+ * all, which shouldn't happen in practice (every real app has a manifest
+ * and is registered at boot regardless of Menu visibility) but is the
+ * safer default if it ever did. */
+static int
+is_multi_by_path( const char * path )
+{
+    int i;
+    for( i = 0; i < g_registered_count; i++ )
+    {
+        if( strcmp( g_registered[ i ].path, path ) == 0 )
+        {
+            return g_registered[ i ].multi;
+        }
+    }
+    return 0;
 }
 
 static mrb_value
@@ -139,6 +188,21 @@ acid_launcher_spawn( mrb_state * mrb, mrb_value self )
         return mrb_bool_value( 0 );
     }
 
+    /* Singleton enforcement -- see struct launchable_app's own comment
+     * on `multi`. A non-multi app that's already open gets focused
+     * instead of duplicated; only the handful of apps that opted into
+     * `multi = true` in their own manifest can have more than one
+     * window at once. */
+    if( !g_registered[ index ].multi )
+    {
+        void * existing = find_running_task_by_path( g_registered[ index ].path );
+        if( existing != NULL )
+        {
+            kernel_router_activate_window( existing );
+            return mrb_bool_value( 1 );
+        }
+    }
+
     /* Simple cascade so successively launched windows don't all land
      * exactly on top of each other -- based on how many windows already
      * exist, wrapped so it stays roughly on screen regardless of count. */
@@ -177,6 +241,22 @@ acid_spawn_app( mrb_state * mrb, mrb_value self )
     mrb_get_args( mrb, "siis", &path, &path_len, &w, &h, &arg, &arg_len );
     ( void ) path_len;
     ( void ) arg_len;
+
+    /* Same singleton enforcement as acid_launcher_spawn -- looked up by
+     * path against the registry (every app reachable this way, games
+     * included, is registered at boot regardless of Menu visibility, so
+     * this always finds a real multi flag rather than guessing one).
+     * An app somehow not registered at all defaults to singleton, the
+     * safer of the two behaviors. */
+    if( !is_multi_by_path( path ) )
+    {
+        void * existing = find_running_task_by_path( path );
+        if( existing != NULL )
+        {
+            kernel_router_activate_window( existing );
+            return mrb_bool_value( 1 );
+        }
+    }
 
     char * path_copy = dup_cstr( path );
     if( path_copy == NULL )
@@ -407,7 +487,7 @@ acid_window_bindings_register( mrb_state * mrb )
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_close_window",
                                  acid_close_window, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_register",
-                                 acid_launcher_register, MRB_ARGS_REQ( 4 ) );
+                                 acid_launcher_register, MRB_ARGS_REQ( 5 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_count",
                                  acid_launcher_count, MRB_ARGS_NONE() );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_path",
