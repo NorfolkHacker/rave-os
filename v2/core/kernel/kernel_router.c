@@ -28,6 +28,19 @@ static bool g_was_pressed = false;
 static void * g_desktop_task = NULL;
 static int g_last_x = 0;
 static int g_last_y = 0;
+
+/* Plain counters, not _Atomic: written only from this task's own loop
+ * (kernel_router_task below), read from any app task via
+ * kernel_router_composited_frames/kernel_router_skipped_frames for a
+ * system-monitor app to show real compositor activity -- e.g. how much
+ * the dirty-flag check (gfx_take_dirty, see its own comment) is actually
+ * saving. A plain int read from another thread isn't formally
+ * synchronized, but this codebase already reads kernel_window_count()
+ * the same cross-thread way for plain display/bookkeeping purposes
+ * (kernel_spawn.c); a monitoring counter that's occasionally one tick
+ * stale costs nothing real. */
+static int g_frames_composited = 0;
+static int g_frames_skipped = 0;
 static void * g_focus_task = NULL;
 
 static void send_event( struct kernel_window * win, int type, int x, int y, int pressed );
@@ -95,6 +108,37 @@ kernel_router_activate_window( void * task )
      * force an immediate, visible repaint of its own). */
     kernel_window_bring_to_front( task );
     g_focus_task = task;
+}
+
+/* Closes any window by task handle, not just the caller's own -- the
+ * fresh_press close-button hit-test below was the only caller until a
+ * system-monitor app needed to end an app it doesn't own from its own
+ * window list (see window_binding.c's acid_close_window), same idea as
+ * the reference OS's own task-list [X] button, just targeting acid OS
+ * v2's windows instead of generic OS tasks. */
+void
+kernel_router_close_window( void * task )
+{
+    struct kernel_window * win = kernel_window_by_task( task );
+    if( win == NULL )
+    {
+        return;
+    }
+    send_event( win, KERNEL_EVENT_CLOSE, 0, 0, 0 );
+    kernel_window_unregister( task );
+    if( g_focus_task == task )
+    {
+        /* Don't leave a dead task handle as the keyboard focus target. A
+         * later fresh press elsewhere, or a taskbar tap, will pick a real
+         * one; until then key events are simply dropped -- the same
+         * "no window, no-op" behavior every other nowhere-to-deliver
+         * input path in this file already has. */
+        g_focus_task = NULL;
+    }
+    /* No repaint call needed -- kernel_window_unregister already freed
+     * this window's canvas and marked it not-in-use, so the very next
+     * composite tick simply stops blitting it, exposing whatever's
+     * underneath (or background) on its own. */
 }
 
 void *
@@ -239,24 +283,7 @@ kernel_router_poll( void )
                 int hit_r = KERNEL_CLOSE_BTN_R + 3; /* a little forgiveness for touch */
                 if( ( dx * dx + dy * dy ) <= ( hit_r * hit_r ) )
                 {
-                    send_event( win, KERNEL_EVENT_CLOSE, 0, 0, 0 );
-                    kernel_window_unregister( win->task );
-                    if( g_focus_task == win->task )
-                    {
-                        /* Don't leave a dead task handle as the keyboard
-                         * focus target. A later fresh press elsewhere, or
-                         * a taskbar tap (Task 3), will pick a real one;
-                         * until then key events are simply dropped -- the
-                         * same "no window, no-op" behavior every other
-                         * nowhere-to-deliver input path in this file
-                         * already has. */
-                        g_focus_task = NULL;
-                    }
-                    /* No repaint call needed -- kernel_window_unregister
-                     * already freed this window's canvas and marked it
-                     * not-in-use, so the very next composite tick simply
-                     * stops blitting it, exposing whatever's underneath
-                     * (or background) on its own. */
+                    kernel_router_close_window( win->task );
                     return;
                 }
             }
@@ -319,7 +346,24 @@ kernel_router_task( void * pvParameters )
         if( gfx_take_dirty() )
         {
             kernel_router_composite_frame();
+            g_frames_composited++;
+        }
+        else
+        {
+            g_frames_skipped++;
         }
         vTaskDelay( pdMS_TO_TICKS( 16 ) );
     }
+}
+
+int
+kernel_router_composited_frames( void )
+{
+    return g_frames_composited;
+}
+
+int
+kernel_router_skipped_frames( void )
+{
+    return g_frames_skipped;
 }

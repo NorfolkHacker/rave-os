@@ -2,14 +2,18 @@
 #define ACID_KERNEL_LAYOUT_H
 
 /* The simulated screen's own fixed resolution -- matches hal_display_sim.cpp's
- * `LGFX lcd( 320, 240 )` and sim_main.c/app_main.c's desktop spawn width.
+ * `LGFX lcd( 640, 360 )` and sim_main.c/app_main.c's desktop spawn width.
  * Needed here so the router's compositor (kernel_router.c) can paint the
  * full-screen background without hardcoding its own copy of these numbers.
  * Kept in sync by comment, the same as every other screen-dimension
  * constant already duplicated across this project (see desktop.rb's own
- * SCREEN_W comment). */
-#define KERNEL_SCREEN_W 320
-#define KERNEL_SCREEN_H 240
+ * SCREEN_W comment). Landscape 640x360 (raised from the original 320x240,
+ * which the user found too small to comfortably work in -- a first pass
+ * at 360x640 turned out portrait, not what was wanted) -- still an
+ * arbitrary simulator resolution, not tied to Tab5's real panel spec,
+ * which phase 6's real hardware bring-up will need to revisit anyway. */
+#define KERNEL_SCREEN_W 640
+#define KERNEL_SCREEN_H 360
 
 /* Per-window chrome geometry, shared between kernel_router's hit-testing
  * (this task, and Task 5) and the chrome-drawing binding (Task 6) -- one

@@ -7,6 +7,7 @@
 #include "../kernel/kernel_layout.h"
 #include "../kernel/kernel_app_context.h"
 #include "../kernel/kernel_theme.h"
+#include "../kernel/kernel_audio.h"
 #include "../gfx/gfx.h"
 
 #include "FreeRTOS.h"
@@ -142,8 +143,8 @@ acid_launcher_spawn( mrb_state * mrb, mrb_value self )
      * exactly on top of each other -- based on how many windows already
      * exist, wrapped so it stays roughly on screen regardless of count. */
     int n = kernel_window_count();
-    int x = 20 + ( ( n * 18 ) % 140 );
-    int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 90 );
+    int x = 20 + ( ( n * 18 ) % 400 );
+    int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 200 );
 
     void * task = kernel_spawn_app( g_registered[ index ].path, x, y,
                                      g_registered[ index ].w, g_registered[ index ].h, 1, NULL );
@@ -193,8 +194,8 @@ acid_spawn_app( mrb_state * mrb, mrb_value self )
     }
 
     int n = kernel_window_count();
-    int x = 20 + ( ( n * 18 ) % 140 );
-    int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 90 );
+    int x = 20 + ( ( n * 18 ) % 400 );
+    int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 200 );
 
     void * task = kernel_spawn_app( path_copy, x, y, ( int ) w, ( int ) h, 1, arg_copy );
     if( task != NULL )
@@ -336,6 +337,64 @@ acid_activate_window( mrb_state * mrb, mrb_value self )
     return mrb_nil_value();
 }
 
+/* Ends any window by its acid_window_info index, not just the caller's
+ * own -- for a system-monitor app to offer a close/[stop] button per
+ * row the way the reference OS's own task-list monitor does, just for
+ * acid OS v2's windows rather than generic OS tasks. Refuses to close
+ * the CALLING app's own window (compare kernel_window_by_task's result
+ * against the running task): a monitor ending itself via its own window
+ * list is a confusing way to quit, and this codebase already has a
+ * normal close button (the title bar dot) for that. */
+static mrb_value
+acid_close_window( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int index;
+    mrb_get_args( mrb, "i", &index );
+
+    if( index < 0 || index >= KERNEL_WINDOW_MAX )
+    {
+        return mrb_bool_value( 0 );
+    }
+
+    struct kernel_window * win = kernel_window_at_index( ( int ) index );
+    if( win == NULL || !win->in_use || win->task == ( void * ) xTaskGetCurrentTaskHandle() )
+    {
+        return mrb_bool_value( 0 );
+    }
+    kernel_router_close_window( win->task );
+    return mrb_bool_value( 1 );
+}
+
+/* Kernel/compositor/audio internals exposed purely for a system-monitor
+ * app to show real activity of THIS build's own architecture -- what's
+ * actually distinctive about acid OS v2 (its own compositor, its own
+ * hand-built synth), not generic OS bookkeeping. See kernel_router.h/
+ * kernel_audio.h for what each of these actually counts. */
+static mrb_value
+acid_composited_frames( mrb_state * mrb, mrb_value self )
+{
+    ( void ) mrb;
+    ( void ) self;
+    return mrb_fixnum_value( kernel_router_composited_frames() );
+}
+
+static mrb_value
+acid_skipped_frames( mrb_state * mrb, mrb_value self )
+{
+    ( void ) mrb;
+    ( void ) self;
+    return mrb_fixnum_value( kernel_router_skipped_frames() );
+}
+
+static mrb_value
+acid_active_voice_count( mrb_state * mrb, mrb_value self )
+{
+    ( void ) mrb;
+    ( void ) self;
+    return mrb_fixnum_value( kernel_audio_active_voice_count() );
+}
+
 void
 acid_window_bindings_register( mrb_state * mrb )
 {
@@ -345,6 +404,8 @@ acid_window_bindings_register( mrb_state * mrb )
                                  acid_window_info, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_activate_window",
                                  acid_activate_window, MRB_ARGS_REQ( 1 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_close_window",
+                                 acid_close_window, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_register",
                                  acid_launcher_register, MRB_ARGS_REQ( 4 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_count",
@@ -365,4 +426,10 @@ acid_window_bindings_register( mrb_state * mrb )
                                  acid_spawn_app, MRB_ARGS_REQ( 4 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launch_arg",
                                  acid_launch_arg, MRB_ARGS_NONE() );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_composited_frames",
+                                 acid_composited_frames, MRB_ARGS_NONE() );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_skipped_frames",
+                                 acid_skipped_frames, MRB_ARGS_NONE() );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_active_voice_count",
+                                 acid_active_voice_count, MRB_ARGS_NONE() );
 }

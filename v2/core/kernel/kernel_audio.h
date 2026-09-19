@@ -59,4 +59,10 @@ void kernel_audio_release_owner( void * owner_task );
  * object race). */
 void kernel_audio_drain_and_render( unsigned char * buf, unsigned int len );
 
+/* How many of SYNTH_NUM_VOICES have a currently-sounding envelope (not
+ * ENV_OFF), as of the most recent audio callback. Safe from any thread.
+ * For a system-monitor app to show real synth activity -- see
+ * kernel_audio.c's own comment on the mask this reads. */
+int kernel_audio_active_voice_count( void );
+
 #endif

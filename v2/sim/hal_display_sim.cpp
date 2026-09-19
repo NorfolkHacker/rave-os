@@ -6,7 +6,7 @@ extern "C" {
 #include "../core/gfx/gfx.h"
 }
 
-static LGFX lcd( 320, 240 );
+static LGFX lcd( 640, 360 );
 
 /* target == NULL means "the real screen" (lcd); non-NULL is an LGFX_Sprite*
  * previously returned by hal_display_create_canvas. A plain branch instead

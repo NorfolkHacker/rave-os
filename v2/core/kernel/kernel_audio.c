@@ -23,6 +23,18 @@ static _Atomic unsigned int g_audio_cmd_tail;
 
 static void * g_voice_owner[ SYNTH_NUM_VOICES ];
 
+/* Snapshot of which voices are currently sounding (bit i set means voice
+ * i's envelope is anywhere other than ENV_OFF), refreshed once per audio
+ * callback below -- the only cross-thread visibility into synth_voices[]
+ * this file allows (everything else about that array stays audio-thread-
+ * only, per this file's own established rule). _Atomic, written only by
+ * the audio thread (single writer, same discipline as g_audio_cmd_head/
+ * tail above), read by any app task via kernel_audio_active_voice_count
+ * -- e.g. a system-monitor app showing what this OS's synth is actually
+ * doing right now, which is the entire reason this exists: there was no
+ * way to observe it from Ruby at all before. */
+static _Atomic int g_active_voice_mask;
+
 void
 kernel_audio_init( void )
 {
@@ -279,4 +291,32 @@ kernel_audio_drain_and_render( unsigned char * buf, unsigned int len )
     }
     atomic_store_explicit( &g_audio_cmd_head, head, memory_order_release );
     synth_render_half( buf, len );
+
+    int mask = 0;
+    int i;
+    for( i = 0; i < SYNTH_NUM_VOICES; i++ )
+    {
+        if( synth_voices[ i ].envelope_stage != ENV_OFF )
+        {
+            mask |= ( 1 << i );
+        }
+    }
+    atomic_store_explicit( &g_active_voice_mask, mask, memory_order_relaxed );
+}
+
+/* Popcount of g_active_voice_mask -- how many of SYNTH_NUM_VOICES are
+ * sounding right now. Safe from any thread (see g_active_voice_mask's
+ * own comment); a caller might see a value up to one audio-callback
+ * period stale, which is fine for a display/monitoring reading. */
+int
+kernel_audio_active_voice_count( void )
+{
+    int mask = atomic_load_explicit( &g_active_voice_mask, memory_order_relaxed );
+    int count = 0;
+    while( mask )
+    {
+        count += mask & 1;
+        mask >>= 1;
+    }
+    return count;
 }

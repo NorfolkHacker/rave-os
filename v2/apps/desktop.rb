@@ -5,12 +5,12 @@ class DesktopApp < AcidApp
   # recognizes and skips its own window.
   MY_APP_NAME = "v2/apps/desktop.rb"
 
-  # Must match sim_main.c/app_main.c's own screen width (both hardcode 320
-  # directly in their kernel_spawn_app(MY_APP_NAME, 0, 0, 320, ...) call) --
+  # Must match sim_main.c/app_main.c's own screen width (both hardcode 640
+  # directly in their kernel_spawn_app(MY_APP_NAME, 0, 0, 640, ...) call) --
   # there's no shared header between Ruby and those C files to pull this
   # from, so it's kept in sync by comment, the same way MY_APP_NAME already
   # has to be.
-  SCREEN_W = 320
+  SCREEN_W = 640
 
   # The visible taskbar strip's height -- matches kernel_layout.h's
   # KERNEL_DESKTOP_STRIP_H (24), which is what the router uses to decide a
@@ -68,6 +68,18 @@ class DesktopApp < AcidApp
   TOTAL_H = STRIP_H + DROPDOWN_H
 
   BG_COLOR = 0x0B1712      # THEME_PANEL
+  # The general desktop background every OTHER window's own canvas
+  # defaults to (kernel_theme.h's THEME_BG, which is also what the
+  # router's compositor clears the real screen to). Desktop's own window
+  # is registered TOTAL_H tall for the dropdown's sake (see TOTAL_H's
+  # comment) but only ever DRAWS its top STRIP_H of that -- a canvas
+  # starts zero-initialized (black), so the rest of it silently stayed
+  # black forever, painted opaquely over the real background on every
+  # composite. Invisible at the old 320x240 resolution (black and
+  # near-black THEME_BG read the same at a glance in a screenshot);
+  # obviously wrong as a big black rectangle once the screen grew to
+  # 640x360. Painted over once in on_create -- see its own comment.
+  SCREEN_BG_COLOR = 0x050607 # THEME_BG
   ACCENT_COLOR = 0x00FF66  # THEME_HARD
   TEXT_COLOR = 0xD4E6DB    # THEME_TEXT
   TEXT_DARK = 0x050607     # THEME_BG -- used as the label color on an
@@ -87,6 +99,11 @@ class DesktopApp < AcidApp
   # before that first redraw runs (so Menu's entry count is right from
   # frame one), not to skip that default behavior.
   def on_create
+    # See SCREEN_BG_COLOR's own comment -- paints the whole registered
+    # window (not just the STRIP_H this app actually draws day to day)
+    # once, so the canvas never has raw zero-initialized black baked into
+    # the part of it nothing else ever touches.
+    acid_fill_rect(0, 0, SCREEN_W, TOTAL_H, SCREEN_BG_COLOR)
     scan_launchable_apps
   end
 
