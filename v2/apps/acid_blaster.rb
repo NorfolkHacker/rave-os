@@ -16,6 +16,36 @@ class AcidBlaster < AcidGame
   ENEMY_COLOR = 0x00FF66  # THEME_HARD
   TEXT_COLOR = 0xD4E6DB   # THEME_TEXT
 
+  # A small pixel-art alien instead of a plain filled circle -- an
+  # original silhouette (not a copy of any specific game's own alien
+  # glyph), drawn as a grid of small squares to match this OS's existing
+  # blocky look (Tetris/Breakout draw the same way) rather than
+  # introducing a new rendering style just for this one enemy. Each row
+  # is one string, 'X' a filled cell, '.' empty; rows must all be the
+  # same length. Collision/spawn/despawn logic is untouched -- ENEMY_R is
+  # still the physics radius, this only changes what gets drawn at
+  # (e[:x], e[:y]).
+  ALIEN_PATTERN = [
+    ".XXXX.",
+    "XXXXXX",
+    "XX..XX",
+    "XXXXXX",
+    ".X..X.",
+    "X....X",
+  ]
+  ALIEN_CELL = 2
+  ALIEN_W = ALIEN_PATTERN[0].length * ALIEN_CELL
+  ALIEN_H = ALIEN_PATTERN.length * ALIEN_CELL
+
+  # The center every enemy is actually flying toward had no visual marker
+  # at all before -- a new player has no way to know what they're
+  # defending. A concentric ring-and-dot bullseye (three acid_fill_circle
+  # calls: accent ring, background gap, accent center) makes the target
+  # obvious without needing a new drawing primitive.
+  TARGET_R1 = 11
+  TARGET_R2 = 7
+  TARGET_R3 = 3
+
   # Each SFX steps through a short note sequence (the synth's own
   # arpeggiator -- see acid_trigger_arp) instead of holding one flat
   # pitch, so a hit sounds like a quick two-tone zap and game-over like an
@@ -233,6 +263,7 @@ class AcidBlaster < AcidGame
     if @needs_frame
       acid_clear_user_area
       acid_draw_window_frame(window_title)
+      draw_target
       acid_draw_window_border
       @drawn_enemies = []
       @drawn_score = nil
@@ -250,7 +281,15 @@ class AcidBlaster < AcidGame
     end
 
     erase_drawn_enemies
-    @enemies.each { |e| acid_fill_circle(e[:x], e[:y], ENEMY_R, ENEMY_COLOR) }
+    # Enemies fly straight at the target by design, so erasing one's old
+    # position (a square BG-colored patch, not a circle) routinely nicks
+    # a chunk out of the round target underneath it -- redrawing the
+    # target here, after every erase and before any alien is drawn fresh
+    # this tick, fixes any such nick every frame instead of leaving a
+    # permanent bite out of it (the same erase-overwrites-something-else
+    # bug class as breakout.rb's side-border fix, different shape).
+    draw_target
+    @enemies.each { |e| draw_alien(e[:x], e[:y], ENEMY_COLOR) }
     @drawn_enemies = @enemies.map { |e| { x: e[:x], y: e[:y] } }
 
     return if @drawn_score == @score
@@ -258,8 +297,31 @@ class AcidBlaster < AcidGame
     @drawn_score = @score
   end
 
+  def draw_target
+    acid_fill_circle(CENTER_X, CENTER_Y, TARGET_R1, ENEMY_COLOR)
+    acid_fill_circle(CENTER_X, CENTER_Y, TARGET_R2, BG_COLOR)
+    acid_fill_circle(CENTER_X, CENTER_Y, TARGET_R3, ENEMY_COLOR)
+  end
+
+  def draw_alien(cx, cy, color)
+    x0 = cx - ALIEN_W / 2
+    y0 = cy - ALIEN_H / 2
+    row = 0
+    while row < ALIEN_PATTERN.length
+      line = ALIEN_PATTERN[row]
+      col = 0
+      while col < line.length
+        if line[col] == "X"
+          acid_fill_rect(x0 + col * ALIEN_CELL, y0 + row * ALIEN_CELL, ALIEN_CELL, ALIEN_CELL, color)
+        end
+        col += 1
+      end
+      row += 1
+    end
+  end
+
   def erase_drawn_enemies
-    @drawn_enemies.each { |d| acid_fill_circle(d[:x], d[:y], ENEMY_R, BG_COLOR) }
+    @drawn_enemies.each { |d| draw_alien(d[:x], d[:y], BG_COLOR) }
     @drawn_enemies = []
   end
 

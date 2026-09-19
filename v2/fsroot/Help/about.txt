@@ -3,7 +3,7 @@ acid OS v2
 FreeRTOS + mruby, one
 Ruby VM per app window.
 
-Menu (top right) opens
+Menu (top left) opens
 the app launcher.
 
 Drop a <name>.rb plus a

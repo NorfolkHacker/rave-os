@@ -28,7 +28,7 @@ class Breakout < AcidGame
   PADDLE_Y = WINDOW_H - 10
 
   BALL_R = 2
-  BALL_SPEED = 2
+  BALL_SPEED = 3
 
   # Distinct voices from acid_blaster's (0/1) so the two never fight over
   # the same voice if somehow both were open at once.
@@ -125,11 +125,19 @@ class Breakout < AcidGame
     b[:x] += b[:dx]
     b[:y] += b[:dy]
 
-    if b[:x] - BALL_R < 0
-      b[:x] = BALL_R
+    # Clamped one pixel further in than the wall itself (BALL_R + 1 /
+    # WINDOW_W - 2 - BALL_R, not BALL_R / WINDOW_W - 1 - BALL_R) so the
+    # ball's circle never overlaps column 0 or WINDOW_W - 1 -- exactly
+    # where acid_draw_window_border's 1px side lines live. Without this
+    # margin the ball sat flush against the border on a side bounce, and
+    # every frame's erase_ball (a BG_COLOR circle at the ball's own
+    # position) painted straight over that border pixel, visibly eating a
+    # notch out of the green edge on every side hit (reported live).
+    if b[:x] - BALL_R < 1
+      b[:x] = BALL_R + 1
       b[:dx] = -b[:dx]
-    elsif b[:x] + BALL_R > WINDOW_W - 1
-      b[:x] = WINDOW_W - 1 - BALL_R
+    elsif b[:x] + BALL_R > WINDOW_W - 2
+      b[:x] = WINDOW_W - 2 - BALL_R
       b[:dx] = -b[:dx]
     end
     if b[:y] - BALL_R < TITLE_BAR_H

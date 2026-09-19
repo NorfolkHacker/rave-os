@@ -25,46 +25,47 @@ class DesktopApp < AcidApp
   BUTTON_MARGIN_X = 2
   BUTTON_MARGIN_Y = 2
 
-  # Always the rightmost slot in the strip -- Menu to open the dropdown,
+  # Always the leftmost slot in the strip -- Menu to open the dropdown,
   # Back to close it -- so there's one consistent place to tap regardless
-  # of what's currently on screen. Reserving a whole slot for it means it
-  # can never collide with a real window button as long as there are at
-  # most four of those (SCREEN_W / BUTTON_W - 1) -- the same slot-count
-  # ceiling the taskbar already had before this existed, not a new
-  # limitation.
-  MENU_SLOT_X = SCREEN_W - BUTTON_W
+  # of what's currently on screen. Moved here from the rightmost slot per
+  # explicit user request; reserving a whole slot for it still means it
+  # can never collide with a real window button, which now start at slot
+  # 1 instead of slot 0 (see MAX_TASKBAR_SLOTS and draw_strip/on_touch's
+  # own "+1"/"-1" slot-index comments below).
+  MENU_SLOT_X = 0
 
-  # How many window buttons actually fit in the strip before they'd start
-  # drawing underneath the reserved menu slot. Windows beyond this many are
-  # simply not listed in the taskbar (the window itself is still open and
-  # usable, just not represented here) -- a small-screen limitation that
-  # predates the launcher, just newly reachable now that opening a 5th app
-  # is actually possible. This is a horizontal-slot-width constraint
-  # specific to the taskbar row (BUTTON_W columns) -- NOT the dropdown's
-  # own capacity (see MAX_LAUNCHER_ITEMS below), which has no such
-  # constraint since dropdown rows are full-width, not columns.
-  MAX_TASKBAR_SLOTS = MENU_SLOT_X / BUTTON_W
+  # Reserved space at the right edge of the strip for the clock (see
+  # draw_clock) -- "23:59 31/12" is 11 chars, 66px at 6px/char; 90 leaves
+  # real margin either side without eating into a whole extra BUTTON_W
+  # column's worth of taskbar space unnecessarily.
+  CLOCK_W = 90
 
-  # The dropdown itself: a full-width panel directly under the strip,
-  # one row per launchable app. Deliberately its own constant, not
-  # MAX_TASKBAR_SLOTS -- a dropdown row spans the full screen width, so
-  # it isn't limited by how many BUTTON_W-wide columns fit in the strip
-  # the way MAX_TASKBAR_SLOTS is; the only real constraint is vertical
-  # room on a 240px-tall screen. Bumped from 6 once the dynamic launcher
-  # (scanning v2/apps for *.app.toml) pushed the real app count past that
-  # -- a 7th app (About, Acid Blaster, Breakout, Demo Swatch, Demo Touch,
-  # Editor, File Manager) silently fell off the bottom of the dropdown
-  # and became unreachable from Menu. 10 rows (204px for strip+dropdown,
-  # still 36px free for windows below) leaves headroom for a few more
-  # before this has to become scrollable instead of just taller. Must
-  # match sim_main.c/app_main.c's own
-  # kernel_spawn_app(MY_APP_NAME, 0, 0, 320, TOTAL_H, 0) call -- desktop's
-  # registered window has to be exactly this tall for the router's normal
-  # (non-strip) hit-testing to ever find desktop down here at all. Synced
-  # by comment on both sides, same as SCREEN_W above.
+  # How many window buttons actually fit in the strip once Menu's own
+  # slot 0 and the clock's reserved space are both set aside. Windows
+  # beyond this many are simply not listed in the taskbar (the window
+  # itself is still open and usable, just not represented here) -- a
+  # small-screen limitation that predates the launcher, just newly
+  # reachable now that opening a 5th app is actually possible.
+  MAX_TASKBAR_SLOTS = ( SCREEN_W - BUTTON_W - CLOCK_W ) / BUTTON_W
+
+  # The dropdown: a small rectangle directly under the Menu button (NOT
+  # the full screen width -- an explicit user request, since a single
+  # column of app names never needed the other 480+ px of a 640px-wide
+  # screen and it read as an oversized, out-of-place bar). Wide enough
+  # for the longest real app name today ("System Monitor", 14 chars) with
+  # a little breathing room either side.
+  DROPDOWN_W = 150
   MAX_LAUNCHER_ITEMS = 10
   ITEM_H = 18
   DROPDOWN_H = ITEM_H * MAX_LAUNCHER_ITEMS
+  # Desktop's own registered window still has to be the FULL screen width
+  # (the taskbar strip above it spans the whole top edge) and TOTAL_H
+  # tall (so the router's normal, non-strip hit-testing finds desktop
+  # at all beneath the strip while the dropdown is open) -- only what
+  # gets DRAWN inside that canvas shrank to a rectangle, not desktop's
+  # own registered bounds. Must match sim_main.c/app_main.c's own
+  # kernel_spawn_app(MY_APP_NAME, 0, 0, 640, TOTAL_H, 0) call, synced by
+  # comment on both sides, same as SCREEN_W above.
   TOTAL_H = STRIP_H + DROPDOWN_H
 
   BG_COLOR = 0x0B1712      # THEME_PANEL
@@ -181,9 +182,12 @@ class DesktopApp < AcidApp
         return
       end
       return unless @mode == :windows
-      slot = x / BUTTON_W
-      return if slot >= MAX_TASKBAR_SLOTS
-      entry = active_windows[slot]
+      # Slot 0 is Menu's own (already handled above by in_menu_slot?, which
+      # always wins ties) -- window buttons start at slot 1, so this is the
+      # window-list index, not the raw column number.
+      window_slot = x / BUTTON_W - 1
+      return if window_slot < 0 || window_slot >= MAX_TASKBAR_SLOTS
+      entry = active_windows[window_slot]
       return unless entry
       acid_activate_window(entry[0])
       redraw_if_changed
@@ -207,6 +211,15 @@ class DesktopApp < AcidApp
     # to change on screen since desktop draws nothing here anyway.
     unless @mode == :launcher
       acid_send_self_to_back
+      return
+    end
+    # A tap to the right of the dropdown's own rectangle is a tap on empty
+    # desktop background, not on any row -- close the menu (the ordinary
+    # "tap outside to dismiss" a dropdown gets everywhere else) instead of
+    # silently doing nothing while leaving desktop stuck on top of
+    # whatever window actually lives under that empty space.
+    if x >= DROPDOWN_W
+      close_menu
       return
     end
     row = ( y - STRIP_H ) / ITEM_H
@@ -349,17 +362,20 @@ class DesktopApp < AcidApp
   end
 
   def in_menu_slot?(x)
-    x >= MENU_SLOT_X
+    x < MENU_SLOT_X + BUTTON_W
   end
 
-  # A plain value (Array of Arrays, structurally comparable with ==) that
-  # changes if and only if what the strip would actually LOOK like
-  # changes: which apps are open, in which slots, and which one is
-  # focused. Position/size aren't included -- the taskbar never draws
-  # those -- so a window being dragged around the screen doesn't cause
-  # the strip to think it needs a redraw every tick.
+  # A plain value (Array, structurally comparable with ==) that changes
+  # if and only if what the strip would actually LOOK like changes: which
+  # apps are open, in which slots, which one is focused, and the clock
+  # text. Position/size aren't included -- the taskbar never draws those
+  # -- so a window being dragged around the screen doesn't cause the
+  # strip to think it needs a redraw every tick. The clock IS included
+  # deliberately -- it's the one part of the strip that changes on its
+  # own, once a minute, with no window-list change to trigger a redraw
+  # otherwise.
   def state_signature(windows)
-    windows.map { |entry| [entry[1][0], entry[1][5]] }
+    [ windows.map { |entry| [entry[1][0], entry[1][5]] }, clock_text ]
   end
 
   # [[kernel_index, info], ...] for every in-use window except this one.
@@ -379,9 +395,31 @@ class DesktopApp < AcidApp
 
   def draw_strip(windows = active_windows)
     acid_fill_rect(0, 0, SCREEN_W, STRIP_H, BG_COLOR)
+    # +1: slot 0 is reserved for the Menu button (see MENU_SLOT_X/
+    # MAX_TASKBAR_SLOTS above), window buttons start at slot 1.
     windows.first(MAX_TASKBAR_SLOTS).each_with_index do |entry, slot|
-      draw_button(slot, entry[1])
+      draw_button(slot + 1, entry[1])
     end
+    draw_clock
+  end
+
+  # This machine's real wall clock (mruby's Time class -- confirmed
+  # available and accurate on sim, since it's a plain Linux process
+  # reading the host's own clock; unverified on the hw target, which has
+  # no RTC/NTP sync wired up yet to make Time.now mean anything there --
+  # same "real on sim, not yet proven on hw" status as hal_meminfo/
+  # hal_network's own readouts). Minute resolution, not seconds -- a
+  # taskbar clock ticking every second would force a full strip repaint
+  # every second for no useful gain here.
+  def clock_text
+    t = Time.now
+    sprintf("%02d:%02d %02d/%02d", t.hour, t.min, t.day, t.mon)
+  end
+
+  def draw_clock
+    text = clock_text
+    x = SCREEN_W - text.length * 6 - 4
+    acid_draw_text(text, x, 8, TEXT_COLOR, BG_COLOR)
   end
 
   def draw_button(slot, info)
@@ -397,22 +435,21 @@ class DesktopApp < AcidApp
     acid_draw_text(short_name(name), x + 3, y + 5, fg, bg)
   end
 
-  # A proper vertical list, one row per launchable app, filling the whole
-  # width directly under the strip -- the actual floating-menu look, as
-  # opposed to squeezing entries into the same horizontal button slots the
-  # taskbar uses.
+  # A small rectangle (DROPDOWN_W wide, not the full screen) directly
+  # under the Menu button, one row per launchable app -- see DROPDOWN_W's
+  # own comment on why this isn't full-width.
   def draw_dropdown
-    acid_fill_rect(0, STRIP_H, SCREEN_W, DROPDOWN_H, BG_COLOR)
+    acid_fill_rect(0, STRIP_H, DROPDOWN_W, DROPDOWN_H, BG_COLOR)
     indices = menu_indices
     i = 0
     while i < indices.length && i < MAX_LAUNCHER_ITEMS
       y = STRIP_H + i * ITEM_H
-      acid_draw_text(acid_launcher_name(indices[i]), 6, y + 4, TEXT_COLOR, BG_COLOR)
+      acid_draw_text(acid_launcher_name(indices[i])[0, 22], 6, y + 4, TEXT_COLOR, BG_COLOR)
       i += 1
     end
   end
 
-  # Always the same reserved rightmost slot (MENU_SLOT_X) -- highlighted
+  # Always the same reserved leftmost slot (MENU_SLOT_X) -- highlighted
   # like a focused window button while the dropdown is open, as a "you are
   # here, tap to close" cue; plain otherwise.
   def draw_menu_button
