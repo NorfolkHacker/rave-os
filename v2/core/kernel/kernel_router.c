@@ -39,9 +39,11 @@ static void send_event( struct kernel_window * win, int type, int x, int y, int 
  * function is the ONLY place a canvas's pixels ever reach the real,
  * visible screen: paint the shared background, then walk every window
  * back-to-front in z-order and blit (copy) its current canvas onto the
- * screen at its current position. Called every ~16ms tick from
- * kernel_router_task, unconditionally -- not reactively on move/raise/
- * close the way an earlier version of this file worked.
+ * screen at its current position. Called from kernel_router_task whenever
+ * gfx_take_dirty() says something changed since the last tick (not on
+ * every single tick regardless, and not reactively on move/raise/close
+ * the way an earlier version of this file worked either -- see
+ * gfx_mark_dirty's own comment for why both of those turned out wrong).
  *
  * That earlier version asked each window's own app task to synchronously
  * redraw itself, live, on demand, and waited on a semaphore for that
@@ -207,6 +209,10 @@ kernel_router_poll( void )
                  * window (Fix 8). */
                 win->y = KERNEL_DESKTOP_STRIP_H;
             }
+            /* A plain position change never touches any canvas, so
+             * nothing else would tell the compositor a recomposite is
+             * needed -- see gfx_mark_dirty's own comment. */
+            gfx_mark_dirty();
         }
         return;
     }
@@ -303,7 +309,17 @@ kernel_router_task( void * pvParameters )
             _exit( 0 );
         }
         kernel_router_poll();
-        kernel_router_composite_frame();
+        /* Only recomposite when something actually changed since the last
+         * tick -- see gfx_mark_dirty's own comment for why unconditional
+         * per-tick compositing (this used to just call
+         * kernel_router_composite_frame() outright, every tick) was itself
+         * the cause of a real, confirmed bug: it slowed this loop down
+         * enough, under real load, to silently drop fast keydown/keyup
+         * transitions. */
+        if( gfx_take_dirty() )
+        {
+            kernel_router_composite_frame();
+        }
         vTaskDelay( pdMS_TO_TICKS( 16 ) );
     }
 }

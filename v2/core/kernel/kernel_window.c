@@ -35,6 +35,7 @@ kernel_window_register( void * task, void * queue, void * redraw_done_sem, void 
             g_windows[ i ].z_order = g_next_z++;
             g_windows[ i ].closable = closable;
             g_windows[ i ].in_use = 1;
+            gfx_mark_dirty();
             return 1;
         }
     }
@@ -52,6 +53,7 @@ kernel_window_unregister( void * task )
             g_windows[ i ].in_use = 0;
             gfx_destroy_canvas( g_windows[ i ].canvas );
             g_windows[ i ].canvas = NULL;
+            gfx_mark_dirty();
             return;
         }
     }
@@ -113,6 +115,7 @@ kernel_window_bring_to_front( void * task )
     if( win != NULL )
     {
         win->z_order = g_next_z++;
+        gfx_mark_dirty();
     }
 }
 
@@ -196,4 +199,5 @@ kernel_window_send_to_back( void * task )
         }
     }
     win->z_order = min_z - 1;
+    gfx_mark_dirty();
 }
