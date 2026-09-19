@@ -17,6 +17,7 @@
 #include "../bindings/chrome_binding.h"
 #include "../bindings/audio_binding.h"
 #include "../bindings/window_binding.h"
+#include "../bindings/task_binding.h"
 #include "../gfx/gfx.h"
 #include "../kernel/kernel_app_context.h"
 #include "../kernel/kernel_window.h"
@@ -196,6 +197,7 @@ vm_host_task( void * pvParameters )
     acid_chrome_bindings_register( mrb );
     acid_audio_bindings_register( mrb );
     acid_window_bindings_register( mrb );
+    acid_task_bindings_register( mrb );
 
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
     load_file_into_vm( mrb, cxt, ACID_KEYS_LIB_PATH );

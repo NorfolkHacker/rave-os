@@ -19,7 +19,12 @@
 #define configQUEUE_REGISTRY_SIZE                  10
 #define configUSE_QUEUE_SETS                       0
 #define configUSE_TASK_NOTIFICATIONS               1
-#define configUSE_TRACE_FACILITY                   0
+/* Both needed for uxTaskGetSystemState (kernel_task_binding.c) to return
+ * real data -- TRACE_FACILITY for TaskStatus_t/the API to exist at all,
+ * GENERATE_RUN_TIME_STATS for its ulRunTimeCounter field to be anything
+ * but permanently 0. */
+#define configUSE_TRACE_FACILITY                   1
+#define configGENERATE_RUN_TIME_STATS              1
 #define configUSE_STATS_FORMATTING_FUNCTIONS       0
 #define configCHECK_FOR_STACK_OVERFLOW             0
 #define configUSE_MALLOC_FAILED_HOOK               0

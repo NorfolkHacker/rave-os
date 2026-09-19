@@ -5,9 +5,12 @@
 #
 #   Page 1: WINDOWS -- every open window, [X] to close one (two clicks,
 #           same "click again to confirm" safety as a real task manager)
-#   Page 2: COMPOSITOR -- a live bar graph of composited vs. skipped
+#   Page 2: TASKS -- every real FreeRTOS task (not just windowed apps --
+#           the router, the timer service, IDLE too), each one's state
+#           and CPU%, plus this process's real memory footprint
+#   Page 3: COMPOSITOR -- a live bar graph of composited vs. skipped
 #           frames/sec over the last ~20 seconds
-#   Page 3: SYNTH -- one box per voice, lit while it's sounding
+#   Page 4: SYNTH -- one box per voice, lit while it's sounding
 #
 # Tap the "<" / ">" arrows in the bottom nav bar to switch pages.
 class SysMon < AcidApp
@@ -16,8 +19,14 @@ class SysMon < AcidApp
   TITLE_BAR_H = 16
   LINE_H = 11
   NAV_H = 12
-  PAGES = [ :windows, :compositor, :synth ]
+  PAGES = [ :windows, :tasks, :compositor, :synth ]
   HIST_LEN = 20
+  # uxTaskGetSystemState (acid_refresh_tasks) suspends the FreeRTOS
+  # scheduler for its duration -- FreeRTOS's own docs call it "intended
+  # for debugging use only" for exactly that reason. Sampled once a
+  # second, not on every ~200ms on_idle tick, same throttling idea as
+  # the compositor history below.
+  TASK_SAMPLE_SECS = 1.0
 
   BG_COLOR = 0x050607      # THEME_BG
   TEXT_COLOR = 0xD4E6DB    # THEME_TEXT
@@ -36,7 +45,9 @@ class SysMon < AcidApp
     @prev_composited = acid_composited_frames
     @prev_skipped = acid_skipped_frames
     @next_sample_at = Time.now.to_f + 1.0
+    @next_task_sample_at = 0
     @row_indices = []
+    sample_tasks
     redraw
   end
 
@@ -46,7 +57,15 @@ class SysMon < AcidApp
 
   def on_idle
     sample_history
+    sample_tasks
     redraw
+  end
+
+  def sample_tasks
+    now = Time.now.to_f
+    return if now < @next_task_sample_at
+    @next_task_sample_at = now + TASK_SAMPLE_SECS
+    acid_refresh_tasks
   end
 
   # Once a second (matching a real "per-second" rate stat), turns the two
@@ -72,6 +91,8 @@ class SysMon < AcidApp
     if @page == 0
       draw_windows_page
     elsif @page == 1
+      draw_tasks_page
+    elsif @page == 2
       draw_compositor_page
     else
       draw_synth_page
@@ -131,6 +152,35 @@ class SysMon < AcidApp
     x = WINDOW_W - BTN_W - 4
     acid_fill_rect(x, y, BTN_W, ROW_H - 1, bg)
     acid_draw_text(label, x + 2, y + 2, fg, bg)
+  end
+
+  # Every task the FreeRTOS scheduler actually knows about -- the router,
+  # the timer service, IDLE, and one per open app window -- not just the
+  # windowed apps the WINDOWS page manages. Read-only: unlike a window,
+  # ending an arbitrary FreeRTOS task from the outside has no clean
+  # shutdown path in this codebase (kernel_router_close_window works
+  # because an app's own event loop notices KERNEL_EVENT_CLOSE and exits
+  # itself -- IDLE or the timer service have no such loop to notice
+  # anything), so there's no [X] here the way there is on the WINDOWS
+  # page.
+  def draw_tasks_page
+    y = TITLE_BAR_H + 2
+    mem = acid_mem_used_kb
+    mem_text = mem >= 0 ? "MEM #{mem}K" : "MEM n/a"
+    acid_draw_text("TASKS", 2, y, MUTED_COLOR, BG_COLOR)
+    acid_draw_text(mem_text, WINDOW_W - mem_text.length * 6 - 2, y, MUTED_COLOR, BG_COLOR)
+    y += LINE_H
+    count = acid_task_count
+    i = 0
+    while i < count
+      break if y + ROW_H > content_bottom
+      name, state, cpu = acid_task_info(i)
+      color = state == "running" ? HARD_COLOR : TEXT_COLOR
+      row = "#{pad(short_name(name), 11)} #{pad(state, 8)} #{cpu}%"
+      acid_draw_text(row, 2, y + 1, color, BG_COLOR)
+      y += ROW_H
+      i += 1
+    end
   end
 
   def draw_compositor_page
@@ -240,9 +290,25 @@ class SysMon < AcidApp
     redraw
   end
 
+  # Left-align in a fixed width, truncating anything longer -- plain
+  # String#ljust isn't available in this mruby build.
+  def pad(str, width)
+    s = str[0, width]
+    s + " " * (width - s.length)
+  end
+
   def short_name(app_name)
     slash = app_name.rindex("/")
     base = slash ? app_name[slash + 1, app_name.length - slash - 1] : app_name
+    # A real FreeRTOS task's name (the TASKS page's own source, unlike
+    # WINDOWS' acid_window_info) is hard-truncated at configMAX_TASK_
+    # NAME_LEN (16) by the kernel itself, before this method ever sees
+    # it -- a script path exactly at or past that length loses its ".rb"
+    # mid-extension (e.g. "v2/apps/sysmon.rb" arrives here already cut
+    # to "v2/apps/sysmon."), so the plain /\.rb$/ match below never
+    # fires. Stripping a bare trailing "." first handles that truncated
+    # case too, harmlessly, since no real app name otherwise ends in one.
+    base = base.sub(/\.$/, "")
     base.sub(/\.rb$/, "")
   end
 end

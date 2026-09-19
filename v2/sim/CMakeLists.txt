@@ -46,6 +46,7 @@ add_executable(acidos_sim
     hal_display_sim.cpp
     hal_input_sim.cpp
     hal_audio_sim.c
+    hal_meminfo_sim.c
     main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/vm_host/vm_host.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/gfx_binding.c
@@ -53,6 +54,7 @@ add_executable(acidos_sim
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/chrome_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/audio_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/window_binding.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/bindings/task_binding.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/gfx/gfx.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/audio/synth.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_window.c

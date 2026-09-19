@@ -4,12 +4,14 @@ idf_component_register(
         hal_display_hw.c
         hal_input_hw.c
         hal_audio_hw.c
+        hal_meminfo_hw.c
         ../../core/vm_host/vm_host.c
         ../../core/bindings/gfx_binding.c
         ../../core/bindings/event_binding.c
         ../../core/bindings/chrome_binding.c
         ../../core/bindings/audio_binding.c
         ../../core/bindings/window_binding.c
+        ../../core/bindings/task_binding.c
         ../../core/gfx/gfx.c
         ../../core/audio/synth.c
         ../../core/kernel/kernel_window.c
