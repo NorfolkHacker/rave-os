@@ -21,12 +21,6 @@ class Tetris < AcidGame
   # (50ms) times this is the real fall interval (10 * 50ms = 500ms/row).
   FALL_TICKS = 10
 
-  # Same small accent palette every other app in this codebase already
-  # draws from -- no new colors invented for this one either. Cycles by
-  # piece index, purely for telling pieces apart, not standard per-piece
-  # Tetris colors (this theme doesn't have seven distinct hues to spare).
-  PIECE_COLORS = [ 0x00FF66, 0xD4E6DB, 0x9DAAA3, 0x00FF66, 0xD4E6DB, 0x9DAAA3, 0x00FF66 ]
-
   # Each piece: one cell layout per rotation state, as [x,y] pairs inside
   # a 4x4 box (rotated around that box's own center, not the cell grid) --
   # the standard, simplest-to-hardcode representation for a first cut with
@@ -49,6 +43,19 @@ class Tetris < AcidGame
              [[0,1],[1,1],[2,1],[0,2]], [[0,0],[1,0],[1,1],[1,2]] ],
   }
   PIECE_NAMES = PIECES.keys
+
+  # A distinct, vivid hue per piece from the real 256-step color wheel
+  # (AcidPalette, loaded into every app automatically -- see vm_host.c)
+  # instead of cycling through the same few reused UI theme colors, which
+  # is what every piece of on-screen content in this codebase did before
+  # (the user's own "up the colours" request). Evenly spaced around the
+  # full wheel so all seven pieces read as clearly different at a glance.
+  PIECE_COLORS = []
+  i = 0
+  while i < PIECE_NAMES.length
+    PIECE_COLORS << AcidPalette.hue(i * 256 / PIECE_NAMES.length)
+    i += 1
+  end
 
   VOICE = 6
   FILTER_MODE_LP = 1

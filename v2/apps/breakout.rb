@@ -12,9 +12,16 @@ class Breakout < AcidGame
   BRICK_W = ( WINDOW_W - ( BRICK_COLS + 1 ) * BRICK_GAP ) / BRICK_COLS
   BRICK_H = 8
   BRICK_TOP = TITLE_BAR_H + 4
-  # Cycles through the same theme accents demo_swatch.rb already uses --
-  # no new colors invented for this app.
-  BRICK_COLORS = [ 0x00FF66, 0xD4E6DB, 0x9DAAA3, 0x00FF66 ]
+  # One distinct hue per row from the real 256-step color wheel
+  # (AcidPalette, loaded into every app automatically -- see vm_host.c)
+  # instead of the handful of reused UI theme colors every piece of
+  # on-screen content in this codebase used before.
+  BRICK_COLORS = []
+  brick_row = 0
+  while brick_row < BRICK_ROWS
+    BRICK_COLORS << AcidPalette.hue( brick_row * 256 / BRICK_ROWS )
+    brick_row += 1
+  end
 
   PADDLE_W = 32
   PADDLE_H = 4

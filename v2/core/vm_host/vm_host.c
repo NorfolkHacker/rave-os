@@ -31,6 +31,7 @@
 #define ACID_APP_LIB_PATH "v2/apps/lib/acid_app.rb"
 #define ACID_GAME_LIB_PATH "v2/apps/lib/acid_game.rb"
 #define ACID_KEYS_LIB_PATH "v2/apps/lib/acid_keys.rb"
+#define ACID_PALETTE_LIB_PATH "v2/apps/lib/acid_palette.rb"
 
 /* mruby's Prism parser/codegen are not thread-safe -- concurrent parsing
  * across different app VMs' own pthreads (this project's POSIX port backs
@@ -197,6 +198,7 @@ vm_host_task( void * pvParameters )
 
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
     load_file_into_vm( mrb, cxt, ACID_KEYS_LIB_PATH );
+    load_file_into_vm( mrb, cxt, ACID_PALETTE_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_GAME_LIB_PATH );
     load_file_into_vm( mrb, cxt, params->script_path );
