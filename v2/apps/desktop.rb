@@ -193,8 +193,9 @@ class DesktopApp < AcidApp
       return
     end
     row = ( y - STRIP_H ) / ITEM_H
-    if row >= 0 && row < MAX_LAUNCHER_ITEMS && row < acid_launcher_count
-      acid_launcher_spawn(row)
+    indices = menu_indices
+    if row >= 0 && row < MAX_LAUNCHER_ITEMS && row < indices.length
+      acid_launcher_spawn(indices[row])
     end
     close_menu
   end
@@ -265,6 +266,13 @@ class DesktopApp < AcidApp
   #   w = 140
   #   h = 100
   def scan_launchable_apps
+    # Parallel to the C-side registry (acid_launcher_*), indexed the same
+    # way -- true unless the manifest says `menu = false`. Apps a user
+    # should reach by clicking their icon in File Manager rather than
+    # from this dropdown (games, Piano, etc.) opt out this way; they stay
+    # registered in the C registry regardless, so Terminal's `run`/`open`
+    # still finds them by name -- only THIS dropdown filters on it.
+    @menu_visible = []
     d = Dir.open(APPS_DIR)
     names = []
     while (entry = d.read)
@@ -285,10 +293,25 @@ class DesktopApp < AcidApp
     rb_path = toml_path[0, toml_path.length - ".app.toml".length] + ".rb"
     fields = parse_manifest(toml_path)
     return unless fields["name"] && fields["w"] && fields["h"]
-    acid_launcher_register(rb_path, fields["name"], fields["w"].to_i, fields["h"].to_i)
+    return unless acid_launcher_register(rb_path, fields["name"], fields["w"].to_i, fields["h"].to_i)
+    @menu_visible << ( fields["menu"] != "false" )
   rescue
     # One malformed/unreadable manifest shouldn't take the whole scan
     # down -- just skip it and keep going with the rest.
+  end
+
+  # Registry indices (acid_launcher_name/spawn's own index space) that
+  # this dropdown should actually list -- see scan_launchable_apps'
+  # comment on @menu_visible.
+  def menu_indices
+    indices = []
+    i = 0
+    count = acid_launcher_count
+    while i < count
+      indices << i if @menu_visible[i]
+      i += 1
+    end
+    indices
   end
 
   def parse_manifest(path)
@@ -363,11 +386,11 @@ class DesktopApp < AcidApp
   # taskbar uses.
   def draw_dropdown
     acid_fill_rect(0, STRIP_H, SCREEN_W, DROPDOWN_H, BG_COLOR)
-    count = acid_launcher_count
+    indices = menu_indices
     i = 0
-    while i < count && i < MAX_LAUNCHER_ITEMS
+    while i < indices.length && i < MAX_LAUNCHER_ITEMS
       y = STRIP_H + i * ITEM_H
-      acid_draw_text(acid_launcher_name(i), 6, y + 4, TEXT_COLOR, BG_COLOR)
+      acid_draw_text(acid_launcher_name(indices[i]), 6, y + 4, TEXT_COLOR, BG_COLOR)
       i += 1
     end
   end

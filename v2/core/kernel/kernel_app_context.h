@@ -22,6 +22,7 @@ struct kernel_app_context
      * relative to the window's own origin (0,0), never the real screen
      * directly. See hal_display.h's own comment. */
     void * canvas;
+    const char * arg;   /* optional startup string, NULL if none -- see kernel_spawn.h */
     int window_x;
     int window_y;
     int window_w;

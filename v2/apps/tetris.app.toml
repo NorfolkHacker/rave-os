@@ -1,3 +1,4 @@
 name = Tetris
 w = 160
 h = 160
+menu = false

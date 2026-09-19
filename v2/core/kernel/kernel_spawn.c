@@ -12,7 +12,8 @@
 #include "../gfx/gfx.h"
 
 void *
-kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int closable )
+kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int closable,
+                   const char * arg )
 {
     /* Checked BEFORE creating the task, not after: xTaskCreate can start
      * the task running immediately (this is a pthread underneath, on the
@@ -63,6 +64,7 @@ kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int clos
     params->queue = queue;
     params->redraw_done_sem = redraw_done_sem;
     params->canvas = canvas;
+    params->arg = arg;
     params->window_x = x;
     params->window_y = y;
     params->window_w = w;

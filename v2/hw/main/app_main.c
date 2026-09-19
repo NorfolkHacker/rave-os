@@ -23,7 +23,7 @@ app_main( void )
      * actually draws (24 + 10 entries * 18px = 204) -- see desktop.rb's
      * DROPDOWN_H/TOTAL_H comment for the full explanation. Must match that
      * constant exactly. */
-    void * desktop_task = kernel_spawn_app( "v2/apps/desktop.rb", 0, 0, 320, 204, 0 );
+    void * desktop_task = kernel_spawn_app( "v2/apps/desktop.rb", 0, 0, 320, 204, 0, NULL );
     kernel_router_set_desktop_task( desktop_task );
 
     /* Boot used to also auto-spawn demo_touch/demo_swatch/file_manager/

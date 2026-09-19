@@ -146,12 +146,74 @@ acid_launcher_spawn( mrb_state * mrb, mrb_value self )
     int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 90 );
 
     void * task = kernel_spawn_app( g_registered[ index ].path, x, y,
-                                     g_registered[ index ].w, g_registered[ index ].h, 1 );
+                                     g_registered[ index ].w, g_registered[ index ].h, 1, NULL );
     if( task != NULL )
     {
         kernel_router_activate_window( task );
     }
     return mrb_bool_value( task != NULL );
+}
+
+/* General-purpose spawn, for launching an app by path directly rather
+ * than through the Menu dropdown's registered-index list -- File
+ * Manager's own "open" action is the first caller: launching a game by
+ * clicking its .app.toml, or opening Editor with a specific file to
+ * view/edit (the `arg` string) rather than Editor's own hardcoded
+ * default. `arg` is optional -- an empty string means none, read back on
+ * the spawned side via acid_launch_arg. Both path and arg are heap-
+ * copied here (never freed, same "lives for the process" contract as
+ * acid_launcher_register's own copies) since the caller's mruby strings
+ * are temporary and wouldn't outlive the spawned task otherwise. */
+static mrb_value
+acid_spawn_app( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    char * path;
+    mrb_int path_len;
+    mrb_int w, h;
+    char * arg;
+    mrb_int arg_len;
+    mrb_get_args( mrb, "siis", &path, &path_len, &w, &h, &arg, &arg_len );
+    ( void ) path_len;
+    ( void ) arg_len;
+
+    char * path_copy = dup_cstr( path );
+    if( path_copy == NULL )
+    {
+        return mrb_bool_value( 0 );
+    }
+    char * arg_copy = NULL;
+    if( arg[ 0 ] != '\0' )
+    {
+        arg_copy = dup_cstr( arg );
+        if( arg_copy == NULL )
+        {
+            return mrb_bool_value( 0 );
+        }
+    }
+
+    int n = kernel_window_count();
+    int x = 20 + ( ( n * 18 ) % 140 );
+    int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 90 );
+
+    void * task = kernel_spawn_app( path_copy, x, y, ( int ) w, ( int ) h, 1, arg_copy );
+    if( task != NULL )
+    {
+        kernel_router_activate_window( task );
+    }
+    return mrb_bool_value( task != NULL );
+}
+
+/* The optional startup string this app was spawned with (kernel_spawn_
+ * app's own `arg`, see its comment) -- "" if none. Reading it more than
+ * once is safe (it's just ctx state, not consumed), though every current
+ * caller only checks it once, in on_create. */
+static mrb_value
+acid_launch_arg( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    struct kernel_app_context * ctx = ( struct kernel_app_context * ) mrb->ud;
+    return mrb_str_new_cstr( mrb, ctx->arg ? ctx->arg : "" );
 }
 
 /* Lets the CALLING app's own window drop to the very back of the z-order
@@ -299,4 +361,8 @@ acid_window_bindings_register( mrb_state * mrb )
                                  acid_repaint_region, MRB_ARGS_REQ( 4 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_am_i_focused",
                                  acid_am_i_focused, MRB_ARGS_NONE() );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_spawn_app",
+                                 acid_spawn_app, MRB_ARGS_REQ( 4 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_launch_arg",
+                                 acid_launch_arg, MRB_ARGS_NONE() );
 }

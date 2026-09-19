@@ -193,6 +193,13 @@ class FileManagerApp < AcidApp
     end
   end
 
+  # Editor's own window size (editor.app.toml) -- kept in sync by comment,
+  # the same convention this codebase already uses for other cross-file
+  # constants (e.g. desktop.rb's SCREEN_W).
+  EDITOR_PATH = "v2/apps/editor.rb"
+  EDITOR_W = 240
+  EDITOR_H = 170
+
   def activate_selected
     entry = @entries[@selected]
     return unless entry
@@ -202,9 +209,46 @@ class FileManagerApp < AcidApp
       @dir = "#{@dir}/#{entry[:name]}"
       scan_dir
       redraw
+    elsif entry[:name].end_with?(".app.toml")
+      launch_manifest(entry[:name])
+    elsif entry[:name].end_with?(".rb")
+      acid_spawn_app(EDITOR_PATH, EDITOR_W, EDITOR_H, "#{@dir}/#{entry[:name]}")
     else
       open_preview(entry[:name])
     end
+  end
+
+  # Clicking an app's manifest launches it directly -- games/Piano/etc
+  # are deliberately left out of desktop.rb's Menu dropdown now (they opt
+  # out via `menu = false` in their own .app.toml) specifically so this
+  # is how you reach them: click their icon here instead. Uses the same
+  # plain "key = value" manifest format desktop.rb's own parser reads;
+  # duplicated rather than shared since the two apps want different
+  # things from a manifest (desktop.rb also needs the `menu` flag and
+  # registers into the launcher list, this just needs enough to spawn
+  # once).
+  def launch_manifest(name)
+    path = "#{@dir}/#{name}"
+    fields = {}
+    begin
+      f = File.open(path, "r")
+      text = f.read
+      f.close
+      text.split("\n").each do |line|
+        line = line.strip
+        next if line.empty? || line.start_with?("#")
+        eq = line.index("=")
+        next unless eq
+        key = line[0, eq].strip
+        value = line[eq + 1, line.length - eq - 1].strip
+        fields[key] = value
+      end
+    rescue
+      return
+    end
+    return unless fields["w"] && fields["h"]
+    rb_path = "#{@dir}/#{name[0, name.length - ".app.toml".length]}.rb"
+    acid_spawn_app(rb_path, fields["w"].to_i, fields["h"].to_i, "")
   end
 
   def go_up

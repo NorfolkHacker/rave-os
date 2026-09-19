@@ -1,3 +1,4 @@
 name = Breakout
 w = 200
 h = 160
+menu = false

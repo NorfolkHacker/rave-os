@@ -1,3 +1,4 @@
 name = Piano
 w = 200
 h = 100
+menu = false

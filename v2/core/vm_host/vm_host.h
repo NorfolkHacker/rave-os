@@ -9,6 +9,7 @@ struct vm_host_params
     QueueHandle_t queue;
     void * redraw_done_sem;   /* opaque SemaphoreHandle_t (binary) */
     void * canvas;            /* opaque, see hal_display.h/kernel_window.h */
+    const char * arg;         /* optional startup string, NULL if none -- see kernel_spawn.h */
     int window_x;
     int window_y;
     int window_w;
