@@ -1,3 +1,4 @@
 name = System Monitor
 w = 200
 h = 160
+desc = Live kernel/task/audio stats

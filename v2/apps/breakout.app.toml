@@ -1,4 +1,5 @@
 name = Breakout
 w = 200
 h = 160
+desc = Brick-breaker arcade
 menu = false

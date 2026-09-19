@@ -1,3 +1,4 @@
 name = Terminal
 w = 260
 h = 160
+desc = Command-line shell

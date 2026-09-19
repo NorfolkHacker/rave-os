@@ -1,3 +1,4 @@
 name = Editor
 w = 240
 h = 170
+desc = Text editor for app source
