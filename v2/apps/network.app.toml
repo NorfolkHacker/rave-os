@@ -1,0 +1,4 @@
+name = Network
+w = 200
+h = 110
+desc = Hostname and LAN address

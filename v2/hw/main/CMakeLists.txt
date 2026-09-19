@@ -5,6 +5,7 @@ idf_component_register(
         hal_input_hw.c
         hal_audio_hw.c
         hal_meminfo_hw.c
+        hal_network_hw.c
         ../../core/vm_host/vm_host.c
         ../../core/bindings/gfx_binding.c
         ../../core/bindings/event_binding.c
@@ -12,6 +13,7 @@ idf_component_register(
         ../../core/bindings/audio_binding.c
         ../../core/bindings/window_binding.c
         ../../core/bindings/task_binding.c
+        ../../core/bindings/network_binding.c
         ../../core/gfx/gfx.c
         ../../core/audio/synth.c
         ../../core/kernel/kernel_window.c
