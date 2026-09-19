@@ -156,6 +156,33 @@ kernel_audio_enqueue_trigger_arp( int voice, const int notes[4], int count, int 
 }
 
 void
+kernel_audio_enqueue_configure_osc( int voice, int waveform, int duty_percent )
+{
+    struct kernel_audio_command cmd;
+    cmd.type = AUDIO_CMD_CONFIGURE_OSC;
+    cmd.voice = voice;
+    cmd.ona = 0;
+    cmd.volume = 0;
+    cmd.owner_task = NULL;
+    cmd.waveform = waveform;
+    cmd.duty_percent = duty_percent;
+    try_enqueue( &cmd );
+}
+
+void
+kernel_audio_enqueue_set_ring_partner( int voice, int partner )
+{
+    struct kernel_audio_command cmd;
+    cmd.type = AUDIO_CMD_SET_RING_PARTNER;
+    cmd.voice = voice;
+    cmd.ona = 0;
+    cmd.volume = 0;
+    cmd.owner_task = NULL;
+    cmd.ring_partner = partner;
+    try_enqueue( &cmd );
+}
+
+void
 kernel_audio_release_owner( void * owner_task )
 {
     struct kernel_audio_command cmd;
@@ -261,6 +288,22 @@ apply( const struct kernel_audio_command * cmd )
         synth_set_filter_cutoff( cmd->cutoff );
         synth_set_filter_resonance( cmd->resonance );
         synth_set_filter_mode( cmd->filter_mode );
+    }
+    else if( cmd->type == AUDIO_CMD_CONFIGURE_OSC )
+    {
+        synth_set_voice_waveform( cmd->voice, ( enum synth_waveform ) cmd->waveform );
+        synth_set_duty( cmd->voice, cmd->duty_percent );
+    }
+    else if( cmd->type == AUDIO_CMD_SET_RING_PARTNER )
+    {
+        if( cmd->ring_partner < 0 )
+        {
+            synth_clear_ring_partner( cmd->voice );
+        }
+        else
+        {
+            synth_set_ring_partner( cmd->voice, cmd->ring_partner );
+        }
     }
     else if( cmd->type == AUDIO_CMD_RELEASE_OWNER )
     {

@@ -17,9 +17,11 @@ struct kernel_window
      * own comment. Every app draws into this (never the real screen
      * directly), using its own window-relative coordinates; the router's
      * compositor is the only thing that ever blits it onto the visible
-     * screen. Created in kernel_window_register, destroyed in
-     * kernel_window_unregister. Opaque outside the gfx layer -- treat as
-     * a plain handle, pass straight through to gfx_blit_canvas. */
+     * screen. Created in kernel_window_register. Freed by the OWNING
+     * task itself (vm_host_task, via its own already-held ctx.canvas
+     * pointer), never by kernel_window_unregister -- see that function's
+     * own comment for why. Opaque outside the gfx layer -- treat as a
+     * plain handle, pass straight through to gfx_blit_canvas. */
     void * canvas;
     const char * app_name;
     int x, y, w, h;
@@ -32,6 +34,25 @@ void kernel_window_init( void );
 int kernel_window_register( void * task, void * queue, void * redraw_done_sem, void * canvas,
                              const char * app_name,
                              int x, int y, int w, int h, int closable );
+/* Removes this task's window from the list (so it stops being
+ * hit-tested/composited/counted) and marks the screen dirty. Deliberately
+ * does NOT free the window's canvas -- kernel_router_close_window (the
+ * router's own click-to-close AND acid_close_window's remote-close path)
+ * calls this from the ROUTER's task, never the window's own owning app
+ * task, and freeing the canvas there raced a real use-after-free: the
+ * owning app task could still be mid-draw (on_tick/on_touch/on_idle,
+ * using its own cached ctx->canvas pointer) when some OTHER task decided
+ * to free that same memory out from under it, with nothing but a mutex
+ * (which only serializes access, not lifetime) between them. Safe to
+ * call more than once for the same task (a no-op after the first) --
+ * both call sites (kernel_router_close_window, and vm_host_task's own
+ * unconditional per-app cleanup covering every exit path) rely on that.
+ * The actual gfx_destroy_canvas call now happens only in vm_host_task,
+ * AFTER this, using the canvas pointer it has held since spawn -- always
+ * on the window's own owning task, always after that task's Ruby VM has
+ * already stopped running (so no further draw call from it is possible),
+ * which is the only way to free it that can never race a concurrent
+ * draw. */
 void kernel_window_unregister( void * task );
 struct kernel_window * kernel_window_find_at( int x, int y );
 struct kernel_window * kernel_window_by_task( void * task );

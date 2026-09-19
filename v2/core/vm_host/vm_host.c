@@ -34,6 +34,7 @@
 #define ACID_GAME_LIB_PATH "v2/apps/lib/acid_game.rb"
 #define ACID_KEYS_LIB_PATH "v2/apps/lib/acid_keys.rb"
 #define ACID_PALETTE_LIB_PATH "v2/apps/lib/acid_palette.rb"
+#define ACID_WAVEFORM_LIB_PATH "v2/apps/lib/acid_waveform.rb"
 
 /* mruby's Prism parser/codegen are not thread-safe -- concurrent parsing
  * across different app VMs' own pthreads (this project's POSIX port backs
@@ -204,6 +205,7 @@ vm_host_task( void * pvParameters )
     mrb_ccontext * cxt = mrb_ccontext_new( mrb );
     load_file_into_vm( mrb, cxt, ACID_KEYS_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_PALETTE_LIB_PATH );
+    load_file_into_vm( mrb, cxt, ACID_WAVEFORM_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_GAME_LIB_PATH );
     load_file_into_vm( mrb, cxt, params->script_path );
@@ -236,6 +238,26 @@ vm_host_task( void * pvParameters )
      * queue -- so this is the sole deletion point and safe to call once,
      * unconditionally, here. */
     kernel_window_unregister( ( void * ) xTaskGetCurrentTaskHandle() );
+
+    /* The canvas itself is freed HERE, not inside kernel_window_unregister
+     * -- deliberately, and only here. This is the one place guaranteed to
+     * run on the window's own owning task, strictly after its Ruby VM
+     * (mrb_close, above) has already stopped running, so no further draw
+     * call using this canvas is possible from this point on. Freeing it
+     * from kernel_window_unregister itself used to race a real
+     * use-after-free: the router's own task calls that function too (the
+     * close-button path, and acid_close_window's remote-close path), and
+     * as a DIFFERENT task from the one that owns this canvas, it has no
+     * way to know whether the owning app is mid-draw (on_tick/on_touch/
+     * on_idle, using its own cached ctx->canvas pointer) at that exact
+     * moment -- the shared gfx lock only serializes access to the canvas,
+     * it does nothing to stop a later draw call from using a pointer that
+     * was already freed. ctx.canvas (not a fresh lookup) is used here on
+     * purpose: by the time execution reaches this line, kernel_window_
+     * unregister above has already cleared the registry's own copy of
+     * this pointer to NULL. */
+    gfx_destroy_canvas( ctx.canvas );
+
     kernel_router_clear_focus( ( void * ) xTaskGetCurrentTaskHandle() );
     kernel_audio_release_owner( ( void * ) xTaskGetCurrentTaskHandle() );
     vQueueDelete( params->queue );

@@ -50,8 +50,10 @@ kernel_window_unregister( void * task )
     {
         if( g_windows[ i ].in_use && g_windows[ i ].task == task )
         {
+            /* No gfx_destroy_canvas here -- see this function's own doc
+             * comment in kernel_window.h for why the free moved to
+             * vm_host_task exclusively. */
             g_windows[ i ].in_use = 0;
-            gfx_destroy_canvas( g_windows[ i ].canvas );
             g_windows[ i ].canvas = NULL;
             gfx_mark_dirty();
             return;

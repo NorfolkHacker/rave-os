@@ -135,10 +135,12 @@ kernel_router_close_window( void * task )
          * input path in this file already has. */
         g_focus_task = NULL;
     }
-    /* No repaint call needed -- kernel_window_unregister already freed
-     * this window's canvas and marked it not-in-use, so the very next
+    /* No repaint call needed -- kernel_window_unregister already marked
+     * this window not-in-use (gfx_mark_dirty included), so the very next
      * composite tick simply stops blitting it, exposing whatever's
-     * underneath (or background) on its own. */
+     * underneath (or background) on its own. The canvas itself isn't
+     * freed here -- see kernel_window_unregister's own doc comment for
+     * why that now only ever happens on the window's own owning task. */
 }
 
 void *

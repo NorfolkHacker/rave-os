@@ -35,6 +35,18 @@ void kernel_audio_enqueue_configure_filter( int cutoff, int resonance, int filte
 void kernel_audio_enqueue_trigger_arp( int voice, const int notes[4],
                                         int count, int rate_ms );
 
+/* Enqueues an AUDIO_CMD_CONFIGURE_OSC command -- sets a voice's waveform
+ * (0=pulse, 1=saw, 2=triangle, 3=noise) and duty cycle (0..100, audible
+ * only on a pulse wave). Same best-effort/any-task-safe contract as the
+ * enqueue functions above. */
+void kernel_audio_enqueue_configure_osc( int voice, int waveform, int duty_percent );
+
+/* Enqueues an AUDIO_CMD_SET_RING_PARTNER command -- pairs `voice` with
+ * `partner` for ring modulation (audible only on a WAVE_TRIANGLE voice),
+ * or clears it if partner < 0. Same best-effort/any-task-safe contract
+ * as the enqueue functions above. */
+void kernel_audio_enqueue_set_ring_partner( int voice, int partner );
+
 /* Enqueues an AUDIO_CMD_RELEASE_OWNER command -- called synchronously from
  * vm_host_task's own unconditional per-app cleanup (Task 5), covering
  * every app-exit path, not just the close button. Unlike note_on/note_off,

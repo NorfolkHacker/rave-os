@@ -195,13 +195,6 @@ void synth_arp_on(int voice, int count) {
     synth_voices[voice].arp_active = 1;
 }
 
-void synth_arp_off(int voice) {
-    if (clamp_voice(voice) < 0) {
-        return;
-    }
-    synth_voices[voice].arp_active = 0;
-}
-
 void synth_set_arp_rate(int voice, int ms) {
     if (clamp_voice(voice) < 0) {
         return;

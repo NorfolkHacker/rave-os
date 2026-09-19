@@ -32,7 +32,20 @@ enum kernel_audio_command_type
      * wherever a previous run left off. NOTE_OFF turns the arp back off
      * (see apply()), so it never keeps stepping a silent, gated-off
      * voice. */
-    AUDIO_CMD_TRIGGER_ARP = 5
+    AUDIO_CMD_TRIGGER_ARP = 5,
+    /* Sets a voice's oscillator shape -- waveform (0=pulse, 1=saw,
+     * 2=triangle, 3=noise, matching enum synth_waveform) and duty cycle
+     * (0..100, only audible on a pulse wave). The engine has supported
+     * both since the audio phase shipped (synth_set_voice_waveform/
+     * synth_set_duty), but neither was ever reachable from Ruby -- every
+     * voice was permanently a plain pulse wave with a fixed 50% duty.
+     * Same audio-thread-only-mutation reasoning as CONFIGURE_VOICE. */
+    AUDIO_CMD_CONFIGURE_OSC = 6,
+    /* Pairs this voice with another for ring modulation (only audible on
+     * a WAVE_TRIANGLE voice -- see synth.h's own comment on why), or
+     * clears it if ring_partner < 0. Also engine-supported since the
+     * audio phase but never reachable from Ruby until now. */
+    AUDIO_CMD_SET_RING_PARTNER = 7
 };
 
 struct kernel_audio_command
@@ -57,6 +70,9 @@ struct kernel_audio_command
                             * first arp_count slots are used */
     int arp_count;          /* TRIGGER_ARP only -- 2..4 */
     int arp_rate_ms;        /* TRIGGER_ARP only -- ms per step */
+    int waveform;            /* CONFIGURE_OSC only -- 0..3, enum synth_waveform */
+    int duty_percent;        /* CONFIGURE_OSC only -- 0..100 */
+    int ring_partner;        /* SET_RING_PARTNER only -- another voice index, or < 0 to clear */
 };
 
 #endif

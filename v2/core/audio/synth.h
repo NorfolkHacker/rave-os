@@ -78,7 +78,11 @@ void synth_clear_ring_partner(int voice);
 void synth_set_voice_filter_route(int voice, int routed);
 void synth_set_arp_note(int voice, int slot, int note);
 void synth_arp_on(int voice, int count);
-void synth_arp_off(int voice);
+/* No synth_arp_off -- kernel_audio.c's own NOTE_OFF handler stops an
+ * arp by setting synth_voices[voice].arp_active = 0 directly (it already
+ * has to touch synth_voices[] there for the gate-off), so a wrapper
+ * function for that exact one-liner had zero callers and was removed in
+ * a dead-code audit. */
 void synth_set_arp_rate(int voice, int ms);
 
 /* ring_active/ring_partner_phase_accum only affect WAVE_TRIANGLE's fold

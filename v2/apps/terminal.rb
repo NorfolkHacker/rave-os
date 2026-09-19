@@ -4,6 +4,7 @@ class TerminalApp < AcidApp
   TITLE_BAR_H = 16
   LINE_H = 10
   ROOT_DIR = "v2/fsroot"
+  ROOT_SEGMENTS = ROOT_DIR.split("/")
   PROMPT = "$ "
 
   BODY_BG = 0x050607       # THEME_BG
@@ -125,19 +126,47 @@ class TerminalApp < AcidApp
     @lines << "help, clear, pwd, cd, ls, cat, echo, run <app>"
   end
 
-  # Resolves a user-typed path (absolute-from-root with a leading "/", ".."
-  # for one level up, or a plain relative name) against @cwd -- ".." only
-  # ever climbs, never escapes ROOT_DIR, same boundary file_manager.rb
-  # already enforces by construction (its own go_up stops at ROOT_DIR).
+  # Resolves a user-typed path (absolute-from-root with a leading "/", or
+  # relative to @cwd) into a clean, normalized path that can never climb
+  # above ROOT_DIR -- by segment, not by string matching a literal ".."
+  # argument. The previous version only special-cased a bare ".." (the
+  # whole argument, exactly) and otherwise pasted the raw argument onto
+  # @cwd unresolved (`"#{@cwd}/#{arg}"`) -- so anything with an EMBEDDED
+  # ".." segment, e.g. `cd foo/../../../..`, sailed straight through to
+  # Dir.open/File.open, which the real host filesystem resolves normally,
+  # walking this whole simulator process (running with the real user's
+  # own file permissions) out of v2/fsroot entirely. Found live during a
+  # security audit, not by a user report. Every resolved path is built
+  # from a segment list seeded at ROOT_SEGMENTS (for an absolute path) or
+  # @cwd's own segments (for a relative one) -- ".." pops one segment but
+  # is refused once the list is already down to ROOT_SEGMENTS.length, so
+  # there is no string this can ever produce that isn't inside ROOT_DIR.
+  # @cwd itself is always the RESULT of a previous resolve_path call, so
+  # it's always already clean -- this never has to re-normalize it.
   def resolve_path(arg)
-    return ROOT_DIR if arg.nil? || arg == "" || arg == "."
-    return arg[1, arg.length - 1] == "" ? ROOT_DIR : "#{ROOT_DIR}/#{arg[1, arg.length - 1]}" if arg[0, 1] == "/"
-    if arg == ".."
-      return @cwd if @cwd == ROOT_DIR
-      slash = @cwd.rindex("/")
-      return slash ? @cwd[0, slash] : ROOT_DIR
+    # No argument at all (bare `cd`) goes to ROOT_DIR, same as a real
+    # shell's `cd` with no args going home -- distinct from an explicit
+    # "." argument, which below now correctly means "stay in @cwd" (the
+    # previous version wrongly treated "." the same as "no argument",
+    # sending an explicit `cd .` to ROOT_DIR instead of leaving @cwd
+    # alone).
+    return ROOT_DIR if arg.nil? || arg == ""
+    if arg[0, 1] == "/"
+      segments = ROOT_SEGMENTS.dup
+      rest = arg[1, arg.length - 1]
+    else
+      segments = @cwd.split("/")
+      rest = arg
     end
-    "#{@cwd}/#{arg}"
+    rest.split("/").each do |part|
+      next if part == "" || part == "."
+      if part == ".."
+        segments.pop if segments.length > ROOT_SEGMENTS.length
+      else
+        segments << part
+      end
+    end
+    segments.join("/")
   end
 
   def cmd_cd(args)

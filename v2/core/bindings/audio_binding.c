@@ -79,6 +79,36 @@ acid_stop_note( mrb_state * mrb, mrb_value self )
     return mrb_nil_value();
 }
 
+/* Sets a voice's oscillator shape -- waveform (0=pulse, 1=saw,
+ * 2=triangle, 3=noise) and duty cycle (0..100, audible only on a pulse
+ * wave). The engine has supported both since the audio phase shipped;
+ * neither was ever reachable from Ruby until now -- found and fixed
+ * during a dead-code audit (synth_set_voice_waveform/synth_set_duty had
+ * zero callers anywhere in the tree). */
+static mrb_value
+acid_configure_osc( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int voice, waveform, duty_percent;
+    mrb_get_args( mrb, "iii", &voice, &waveform, &duty_percent );
+    kernel_audio_enqueue_configure_osc( ( int ) voice, ( int ) waveform, ( int ) duty_percent );
+    return mrb_nil_value();
+}
+
+/* Pairs `voice` with `partner` for ring modulation (audible only on a
+ * WAVE_TRIANGLE voice -- see synth.h's own comment on why), or clears it
+ * if partner is negative. Same "engine-supported but never exposed"
+ * history as acid_configure_osc above. */
+static mrb_value
+acid_set_ring_partner( mrb_state * mrb, mrb_value self )
+{
+    ( void ) self;
+    mrb_int voice, partner;
+    mrb_get_args( mrb, "ii", &voice, &partner );
+    kernel_audio_enqueue_set_ring_partner( ( int ) voice, ( int ) partner );
+    return mrb_nil_value();
+}
+
 /* System-wide output gain (0..100) -- for a Config app's volume control.
  * See kernel_audio_set_master_volume's own doc comment. */
 static mrb_value
@@ -112,6 +142,10 @@ acid_audio_bindings_register( mrb_state * mrb )
                                  acid_configure_filter, MRB_ARGS_REQ( 3 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_trigger_arp",
                                  acid_trigger_arp, MRB_ARGS_REQ( 7 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_configure_osc",
+                                 acid_configure_osc, MRB_ARGS_REQ( 3 ) );
+    mrb_define_module_function( mrb, mrb->kernel_module, "acid_set_ring_partner",
+                                 acid_set_ring_partner, MRB_ARGS_REQ( 2 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_set_volume",
                                  acid_set_volume, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_get_volume",
