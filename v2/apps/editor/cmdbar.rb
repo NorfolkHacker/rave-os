@@ -215,6 +215,9 @@ module EditorCmd
       cmd_prompt_open(:saveas, "save as")
     elsif ch == "q"
       cmd_quit
+    elsif ch == "h"
+      @hl_on = !@hl_on
+      @message = @hl_on ? "highlight on" : "highlight off"
     elsif ch == "?"
       @message = "ESC then a letter; see the strip"
     else

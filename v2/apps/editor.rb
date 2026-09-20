@@ -28,6 +28,11 @@ class EditorApp < AcidApp
     @scroll_y = 0
     @scroll_x = 0
     @message = nil
+    # On for Ruby, off for anything else -- a .txt file has no syntax to
+    # show and colouring prose at random is worse than leaving it alone.
+    # ESC h overrides it for this window.
+    @hl_on = @path.end_with?(".rb")
+    @hl_cache = []
   end
 
   def read_lines
@@ -87,7 +92,7 @@ class EditorApp < AcidApp
   def draw_status
     acid_fill_rect(0, STATUS_Y, WINDOW_W, LINE_H, BG_COLOR)
     left = @message ? @message : (file_label + (@buf.modified? ? " *" : ""))
-    right = "#{@buf.cy + 1},#{@buf.cx + 1}  #{@buf.line_count}L"
+    right = "#{@buf.cy + 1},#{@buf.cx + 1}  #{@buf.line_count}L#{@hl_on ? '  hl' : ''}"
     acid_draw_text(left[0, 28], 2, STATUS_Y + 1, STATUS_COLOR, BG_COLOR)
     acid_draw_text(right, WINDOW_W - right.length * CHAR_W - 2, STATUS_Y + 1,
                    STATUS_COLOR, BG_COLOR)
@@ -106,19 +111,97 @@ class EditorApp < AcidApp
     end
   end
 
+  SEL_BG = 0x123322    # THEME_PANEL's documented button-hover shade,
+                       # the same highlight file_manager.rb uses for its
+                       # selected row
+
   def draw_lines
+    hl_invalidate
     i = 0
     while i < visible_lines
       idx = @scroll_y + i
       y = TEXT_Y + i * LINE_H
       acid_fill_rect(TEXT_X, y, WINDOW_W - TEXT_X, LINE_H, BODY_BG)
+      sel = selection_span(idx)
+      unless sel.nil?
+        sx = sel[0] - @scroll_x
+        ex = sel[1] - @scroll_x
+        sx = 0 if sx < 0
+        ex = visible_cols if ex > visible_cols
+        acid_fill_rect(TEXT_X + sx * CHAR_W, y, (ex - sx) * CHAR_W, LINE_H, SEL_BG) if ex > sx
+      end
       if idx < @buf.line_count
-        text = @buf.line(idx)
-        visible_text = text[@scroll_x, visible_cols] || ""
-        acid_draw_text(visible_text, TEXT_X, y + 1, TEXT_COLOR, BODY_BG)
+        if @hl_on
+          draw_hl_line(idx, y)
+        else
+          visible_text = @buf.line(idx)[@scroll_x, visible_cols] || ""
+          acid_draw_text(visible_text, TEXT_X, y + 1, TEXT_COLOR, BODY_BG)
+        end
       end
       i += 1
     end
+  end
+
+  # Tokens for one line, tokenized on first sight and kept until that
+  # line changes. Buffer reports what went stale (take_dirty); :all means
+  # the line count itself moved, so every cached index past the edit is
+  # wrong and the cheapest correct answer is to start over.
+  def hl_tokens(index)
+    cached = @hl_cache[index]
+    return cached unless cached.nil?
+    toks = Hl.tokenize(@buf.line(index))
+    @hl_cache[index] = toks
+    toks
+  end
+
+  # Runs once per redraw, from draw_lines, so it must fire even when
+  # highlighting is off -- otherwise a buffer edited with colour disabled
+  # keeps stale tokens once it's switched back on. take_dirty is
+  # read-and-clear, so calling this again from hl_tokens (once per line,
+  # per the brief) would always see an empty result after the first line
+  # -- dead work in a per-line loop -- which is why it lives here only.
+  def hl_invalidate
+    dirty = @buf.take_dirty
+    return if dirty == []
+    if dirty == :all
+      @hl_cache = []
+      return
+    end
+    dirty.each { |i| @hl_cache[i] = nil }
+  end
+
+  def draw_hl_line(index, y)
+    col = 0
+    limit = @scroll_x + visible_cols
+    hl_tokens(index).each do |t|
+      text = t[0]
+      start_col = col
+      col += text.length
+      next if col <= @scroll_x
+      break if start_col >= limit
+      cut = @scroll_x - start_col
+      cut = 0 if cut < 0
+      vis = text[cut, text.length - cut]
+      screen_col = start_col + cut - @scroll_x
+      room = visible_cols - screen_col
+      vis = vis[0, room] if vis.length > room
+      acid_draw_text(vis, TEXT_X + screen_col * CHAR_W, y + 1, t[1], BODY_BG)
+    end
+  end
+
+  # The [start_col, end_col] of the selection on one line, or nil. A line
+  # fully inside a multi-line selection runs to its own length plus one,
+  # so the newline it swallowed is visible as a highlighted cell rather
+  # than the selection appearing to stop short at the end of the text.
+  def selection_span(index)
+    r = @buf.selection_range
+    return nil if r.nil?
+    sx, sy, ex, ey = r
+    return nil if index < sy || index > ey
+    from = (index == sy) ? sx : 0
+    to = (index == ey) ? ex : @buf.line(index).length + 1
+    return nil if to <= from
+    [from, to]
   end
 
   def draw_cursor
