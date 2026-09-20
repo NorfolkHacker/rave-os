@@ -31,4 +31,36 @@ module EditorLayout
   GUTTER_CHARS = 4
   GUTTER_W = GUTTER_CHARS * CHAR_W
   TEXT_X = GUTTER_W + 2
+
+  # The editor's own source, plus acid_app.rb (every app loads it, so a
+  # bad save there bricks every app, the editor included) -- task 12's
+  # "the editor must not be able to break itself" set. Both save_file
+  # (EditorApp) and cmd_run_file (EditorCmd, a mixin) need this, and a
+  # mixin's methods only resolve a bare constant through its OWN nesting
+  # and ancestry, never through whatever class includes it -- see the
+  # comment above on why this module exists. Living here, in the one
+  # module both sides already include, is what makes it visible to both.
+  #
+  # Suffixes, not full paths, matched with end_with?: the same file is
+  # reachable both as v2/apps/editor.rb and, through the fsroot/App
+  # symlink to v2/apps, as v2/fsroot/App/editor.rb, and a suffix match
+  # recognises both with no need to resolve the symlink -- there's no
+  # realpath binding in this mruby, and hardcoding a comparison that only
+  # works on the sim's real filesystem while doing nothing on the
+  # hardware target's stub FS would be worse than this explicit list.
+  # Each entry leads with "/" so "editor.rb" doesn't also match some
+  # unrelated file that merely ends in those letters, e.g. "xeditor.rb".
+  OWN_SOURCE_SUFFIXES = [
+    "/editor.rb",
+    "/editor/buffer.rb",
+    "/editor/hl.rb",
+    "/editor/cmdbar.rb",
+    "/editor/layout.rb",
+    "/editor/touch.rb",
+    "/lib/acid_app.rb",
+  ]
+
+  def own_source?(path)
+    OWN_SOURCE_SUFFIXES.any? { |suffix| path.end_with?(suffix) }
+  end
 end

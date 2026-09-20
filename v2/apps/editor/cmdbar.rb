@@ -241,10 +241,39 @@ module EditorCmd
       @message = "not a ruby file"
       return
     end
+    # Running the editor's own source (or one of its mixins/acid_app.rb)
+    # from inside itself doesn't open a harmless second window -- it
+    # crashes the spawned one. The real cause is fix 4, below: a launch
+    # through the fsroot/App symlink doesn't match the registry's
+    # canonical v2/apps path, so the spawned VM loads none of its libs
+    # and then blows up on `include EditorLayout`. Refusing here is the
+    # editor protecting itself even if fix 4 is ever undone elsewhere.
+    if own_source?(@path)
+      @message = "can't run the editor's own source from itself"
+      return
+    end
     return unless save_file
     w, h = run_geometry
-    acid_spawn_app(@path, w, h, "")
+    acid_spawn_app(canonical_app_path(@path), w, h, "")
     @message = "running #{file_label}"
+  end
+
+  # v2/fsroot/App is a real symlink to v2/apps (see editor.rb's on_create
+  # comment) -- the one symlink this OS has. window_binding.c's
+  # is_multi_by_path/libs_by_path match a launch path against the
+  # registry by exact strcmp against its canonical v2/apps form, so a
+  # path that arrived through the symlink matches neither and silently
+  # loads no libs (task 12's brief -- this is the actual fix-4 crash).
+  # Normalising here, in Ruby, rather than with a C-side realpath: the hw
+  # target's filesystem layer is a stub, and a canonicalisation that only
+  # works on the sim would be worse than this explicit, commented mapping
+  # of the one symlink that exists.
+  FSROOT_APP_PREFIX = "v2/fsroot/App/"
+  CANONICAL_APP_PREFIX = "v2/apps/"
+
+  def canonical_app_path(path)
+    return path unless path.start_with?(FSROOT_APP_PREFIX)
+    CANONICAL_APP_PREFIX + path[FSROOT_APP_PREFIX.length, path.length - FSROOT_APP_PREFIX.length]
   end
 
   # The app's own manifest decides its window size, exactly as the Menu

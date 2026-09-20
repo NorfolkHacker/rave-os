@@ -45,21 +45,105 @@ class EditorApp < AcidApp
     [""]
   end
 
+  # Sibling temp path, not touching @path until the new content is fully
+  # written and closed. File.open(@path, "w") truncates the target the
+  # instant it succeeds -- so a write that fails partway (a full disk, a
+  # yanked SD card on the hw target, anything) used to leave the original
+  # file gone, not merely unsaved, and with no way back in from inside
+  # this OS (see this task's brief). Writing to a sibling first and
+  # File.rename-ing it over @path only if that write fully succeeds means
+  # a failure before the rename leaves the original byte-for-byte
+  # untouched. The suffix is one no real file is likely to already be
+  # using -- @path itself, mid-edit in this very window, is the one path
+  # a plain ".tmp" or "~" convention risks colliding with.
+  SAVE_TMP_SUFFIX = ".editor-save-tmp"
+
   def save_file
-    f = File.open(@path, "w")
-    # Trailing newline, not just lines joined by one -- POSIX text files
-    # end in one, and this app regularly saves real source files under
-    # fsroot/App (the live v2/apps symlink): saving without it was
-    # confirmed live to strip an existing app.rb's final newline on every
-    # save, which is diff noise against git history for no reason.
-    f.write(@buf.lines.join("\n") + "\n")
-    f.close
-    @buf.mark_saved
-    @message = "saved"
-    true
-  rescue
-    @message = "save failed"
-    false
+    backup_failed = !backup_own_source
+    tmp = @path + SAVE_TMP_SUFFIX
+    wrote = false
+    f = nil
+    begin
+      f = File.open(tmp, "w")
+      # Trailing newline, not just lines joined by one -- POSIX text files
+      # end in one, and this app regularly saves real source files under
+      # fsroot/App (the live v2/apps symlink): saving without it was
+      # confirmed live to strip an existing app.rb's final newline on
+      # every save, which is diff noise against git history for no
+      # reason.
+      f.write(@buf.lines.join("\n") + "\n")
+      wrote = true
+    rescue
+      wrote = false
+    end
+    # Close on every path, including failure -- the old code never closed
+    # f once the write raised, leaking a descriptor on top of losing data.
+    f.close if f
+    saved = false
+    if wrote
+      begin
+        File.rename(tmp, @path)
+        saved = true
+      rescue
+        saved = false
+      end
+    end
+    # A half-written temp file (write failed) or a temp file the rename
+    # couldn't place (rename failed) is debris either way -- clean it up
+    # rather than leaving it for the user to find later. Best-effort: if
+    # even this fails there is nothing more useful to do about it.
+    unless saved
+      begin
+        File.delete(tmp) if File.exist?(tmp)
+      rescue
+      end
+    end
+    if saved
+      @buf.mark_saved
+      @message = backup_failed ? "saved (backup failed)" : "saved"
+    else
+      @message = "save failed"
+    end
+    saved
+  end
+
+  # Only for the files listed in EditorLayout::OWN_SOURCE_SUFFIXES -- the
+  # user chose this scope explicitly over backing up every save, since
+  # this app is the one editor that can edit and then immediately re-run
+  # the very code it's running as. Copies the CURRENT on-disk contents
+  # (not the buffer -- the buffer is what's about to overwrite it) to
+  # "<path>.bak" before that happens. A failure here (missing file on a
+  # first save, an unwritable sibling, anything) must never block the
+  # real save -- a user who can't save at all is worse off than one whose
+  # backup didn't take -- so this always returns rather than raising, and
+  # save_file only uses the result to add a note to @message.
+  def backup_own_source
+    return true unless own_source?(@path)
+    # A first save of a brand new own-source file has nothing to back up
+    # -- that's not a backup failure worth a "(backup failed)" note next
+    # to "saved", it's just the expected shape of creating something new.
+    return true unless File.exist?(@path)
+    current = nil
+    f = nil
+    begin
+      f = File.open(@path, "r")
+      current = f.read
+    rescue
+      current = nil
+    end
+    f.close if f
+    return false if current.nil?
+    out = nil
+    ok = false
+    begin
+      out = File.open(@path + ".bak", "w")
+      out.write(current)
+      ok = true
+    rescue
+      ok = false
+    end
+    out.close if out
+    ok
   end
 
   def visible_lines
