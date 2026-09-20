@@ -76,12 +76,22 @@ class AcidApp
     CANONICAL_APP_PREFIX + path[FSROOT_APP_PREFIX.length, path.length - FSROOT_APP_PREFIX.length]
   end
 
+  # How long acid_poll_event blocks when there is no event waiting, and so
+  # how often on_idle fires. 200ms is right for an app that only redraws in
+  # response to input; an app animating something (the terminal, while an
+  # easter egg is in flight -- see apps/lib/acid_eggs.rb) overrides this to
+  # a frame interval while the animation runs and returns to 200 after. Not
+  # a constant, because the answer changes while the app is running.
+  def poll_timeout_ms
+    200
+  end
+
   def start
     on_create
     redraw
     @running = true
     while @running
-      ev = acid_poll_event(200)
+      ev = acid_poll_event(poll_timeout_ms)
       if ev == :close
         @running = false
       elsif ev == :moved

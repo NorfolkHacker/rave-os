@@ -3,3 +3,4 @@ w = 260
 h = 160
 desc = Command-line shell
 multi = true
+libs = lib/acid_sprite.rb, lib/acid_eggs.rb

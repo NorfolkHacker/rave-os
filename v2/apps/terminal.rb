@@ -74,6 +74,11 @@ class TerminalApp < AcidApp
       @input += code.chr
     end
     redraw
+    # on_idle only fires when acid_poll_event times out, so a burst of
+    # keystrokes would otherwise stall the animation. AcidEggs.step is
+    # guarded by its own TICK_MS check, which makes this call free whenever
+    # it isn't time for a frame yet.
+    AcidEggs.step
   end
 
   def submit
@@ -98,6 +103,20 @@ class TerminalApp < AcidApp
   end
 
   def run_command(line)
+    # The easter eggs (apps/lib/acid_eggs.rb), matched before any real
+    # command and deliberately undocumented: nothing is printed, they are
+    # absent from cmd_help, and the animation is the whole response. Matched
+    # case-insensitively on the whole line, which submit has already
+    # stripped, so only a bare word with no arguments fires one.
+    #
+    # Returns whether or not the egg actually started: a refused start (one
+    # already in flight, or the overlay's canvas failed to allocate) must
+    # stay just as silent, rather than falling through to "command not
+    # found: dave" and announcing that the word means something.
+    if AcidEggs.names.include?(line.downcase)
+      AcidEggs.start(line.downcase)
+      return
+    end
     parts = line.split(" ")
     cmd = parts[0]
     args = parts[1, parts.length - 1] || []
@@ -228,6 +247,24 @@ class TerminalApp < AcidApp
       i += 1
     end
     @lines << "run: no app named #{args[0]}"
+  end
+
+  # While an egg is in flight the loop needs to wake up every frame rather
+  # than every 200ms. Typing is unaffected: a keystroke still arrives as an
+  # event the moment it happens.
+  def poll_timeout_ms
+    AcidEggs.active? ? AcidEggs::TICK_MS : 200
+  end
+
+  def on_idle
+    AcidEggs.step
+  end
+
+  def on_destroy
+    # Closing the terminal mid-flight takes the overlay with it, rather
+    # than leaving a sprite frozen on the screen with nothing left running
+    # to clear it.
+    AcidEggs.abort
   end
 end
 
