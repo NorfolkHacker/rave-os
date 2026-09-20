@@ -133,7 +133,17 @@ v2/apps/editor/buffer.rb   ~230  lines, cursor, undo/redo, selection, clipboard
 v2/apps/editor/hl.rb       ~160  Ruby tokenizer + per-line cache
 v2/apps/editor/cmdbar.rb   ~180  command mode, prompts, find, goto, save-as, run
 v2/apps/editor/touch.rb    ~110  tap-to-place, drag-select, flick-scroll
+v2/apps/editor/layout.rb    ~75  geometry constants shared by EditorApp, EditorCmd, EditorTouch
 ```
+
+`layout.rb` wasn't part of the original plan — it was pulled out mid-build after `EditorCmd`
+raised `uninitialized constant EditorCmd::STATUS_Y` on its first ESC. Ruby resolves a bare
+constant lexically, through a method's own module nesting and that nesting's ancestors,
+never through whatever class happens to include the module the method lives in — so
+`EditorApp include`-ing `EditorCmd` does not put `EditorApp`'s own constants (`STATUS_Y`,
+`GUTTER_W`, etc.) within `EditorCmd`'s reach. The fix isn't for a mixin to reach into its
+includer; it's `EditorLayout`, a module both `EditorApp` and its mixins (`EditorCmd`,
+`EditorTouch`) genuinely include, so the shared geometry is in every side's own ancestry.
 
 `buffer.rb` and `hl.rb` call no `acid_*` binding at all — they are pure data structures
 over arrays of strings. That is a testability decision as much as a layering one (see
@@ -187,8 +197,17 @@ unconditionally. The stack caps at 200 records, dropping oldest first.
 `@mark_x`/`@mark_y`, `nil` when unset. `selection_range` normalises mark and cursor into
 document order, so the rest of the code never asks which end is which. `copy` joins the
 spanned text with `\n` into `@clipboard`; `cut` copies then deletes as one undo record;
-`paste` inserts at the cursor as one record. Rendering fills the selected span of each
-visible line with `SEL_BG` before drawing its text.
+`paste` inserts at the cursor as one record — unless there's an active selection, in
+which case it costs two (`delete_selection`, then `insert_text`), not one compound
+record. That's deliberate, not an oversight: the intermediate state after only the
+first of the two is undone is exactly the post-delete buffer, the same state pressing
+`Delete` alone would leave, so it's a coherent stopping point rather than a corrupt
+half-step. A single compound record covering "replace this span with this text" would
+need a third undo-record type alongside the two primitives (`insert`/`delete`) the rest
+of the design already covers everything else with, for a case that already round-trips
+correctly through the existing two. Pinned by `test_editor.rb`'s "paste over selection
+(two-record behaviour)" group. Rendering fills the selected span of each visible line
+with `SEL_BG` before drawing its text.
 
 ### Ruby highlighting (`hl.rb`)
 
@@ -237,6 +256,29 @@ file with that manifest's `w`/`h` (falling back to 240×170 with no manifest). O
 `.rb` paths; anything else reports `not a ruby file` on the status line. Editing an app
 and seeing it run is then a two-keystroke loop with no rebuild — which is what the
 editor's own doc comment already claims the app is for.
+
+### Saving (`editor.rb`)
+
+`save_file` never truncates `@path` directly. It writes the full buffer to a sibling
+path (`@path + ".editor-save-tmp"`), and only on a fully successful write does
+`File.rename` move that sibling over `@path`. `File.open(@path, "w")` truncates the
+moment it succeeds, so writing straight to `@path` would leave a failed save (a full
+disk, a yanked SD card on the hardware target) with the original gone rather than
+merely unsaved, and no way back in from inside this OS. A write or rename failure
+leaves `@path` byte-for-byte untouched and best-effort deletes the leftover temp file.
+
+Before that write, `backup_own_source` copies whatever is currently on disk at `@path`
+to `<path>.bak` — but only when `EditorLayout#own_source?(@path)` is true. `own_source?`
+answers yes for the editor's own source and its mixins (this file, `buffer.rb`, `hl.rb`,
+`cmdbar.rb`, `layout.rb`, `touch.rb`) plus `lib/acid_app.rb` (every app loads it, so a bad
+save there bricks every app, the editor included) — anchored to the two roots those
+files can actually be reached through (`v2/apps/` and the live `v2/fsroot/App/` symlink)
+and matched against the exact relative path list, not a bare filename-tail suffix: an
+earlier suffix-only version of this check false-positived on a user's own
+`v2/fsroot/Home/editor.rb`. This is the one editor feature that can edit and immediately
+re-run the very code it's running as, so it's also the one editor feature that can brick
+itself on a bad save; the backup exists for exactly that case, and a backup failure never
+blocks the real save.
 
 ## Status line
 

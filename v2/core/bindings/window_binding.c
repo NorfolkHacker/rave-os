@@ -60,27 +60,14 @@ struct launchable_app
 static struct launchable_app g_registered[ MAX_REGISTERED_APPS ];
 static int g_registered_count = 0;
 
-static char *
-dup_cstr( const char * src )
-{
-    size_t len = strlen( src ) + 1;
-    char * copy = ( char * ) pvPortMalloc( len );
-    if( copy != NULL )
-    {
-        memcpy( copy, src, len );
-    }
-    return copy;
-}
-
-/* Same allocation/NUL-terminate/NULL-on-failure contract as dup_cstr, but
- * copies exactly `len` bytes instead of relying on strlen -- required for
- * an mrb_get_args "s" pointer, which is a pointer+length pair into an
- * mruby string's buffer with NO guarantee of NUL termination at that
- * length (a substring, e.g. desktop.rb's manifest parser's line[eq+1,
- * ...].strip, can share its parent string's underlying buffer, so
- * strlen() on it can run past the intended end and absorb whatever
- * follows in that shared buffer). Every mrb string reaching dup_cstr in
- * this file must go through here, not dup_cstr, for that reason. */
+/* Copies exactly `len` bytes and NUL-terminates the copy, rather than
+ * relying on strlen -- required for an mrb_get_args "s" pointer, which is
+ * a pointer+length pair into an mruby string's buffer with NO guarantee
+ * of NUL termination at that length (a substring, e.g. desktop.rb's
+ * manifest parser's line[eq+1, ...].strip, can share its parent string's
+ * underlying buffer, so strlen() on it can run past the intended end and
+ * absorb whatever follows in that shared buffer). Every mrb string
+ * reaching this file's heap copies goes through here for that reason. */
 static char *
 dup_cstr_len( const char * src, size_t len )
 {
@@ -91,6 +78,56 @@ dup_cstr_len( const char * src, size_t len )
         copy[ len ] = '\0';
     }
     return copy;
+}
+
+/* Clamps a cascade-computed spawn position so a window of size w x h
+ * actually lands fully on screen. Both spawn sites below cascade new
+ * windows by a simple offset that grows with kernel_window_count() (see
+ * either call site's own comment), tuned back when every window this OS
+ * spawned was around 240x170 against a 640x360 screen. That stopped
+ * holding once the editor grew to 420x280 (v2/apps/editor/layout.rb's
+ * WINDOW_W/WINDOW_H): the cascade's own raw maximum, x=418/y=233, puts a
+ * 420x280 editor's right edge at 838 and its bottom edge at 513 -- both
+ * well past KERNEL_SCREEN_W/KERNEL_SCREEN_H (640x360) -- and it's cheap
+ * to reach in practice, since the desktop itself counts toward
+ * kernel_window_count(), so a fourth real window is already enough. Seen
+ * live: the editor opened with its title bar and most of its text area
+ * off-screen, only the status line inside the visible area.
+ *
+ * Clamping here keeps every window fully reachable regardless of how
+ * large the raw cascade offset grows, while still letting successive
+ * windows cascade away from each other right up to the point where
+ * they'd run off an edge. A window taller or wider than the screen
+ * itself (shouldn't happen, but cheap to make safe) pins to the top-left
+ * corner of the usable area -- below the desktop strip -- rather than
+ * producing a negative coordinate. */
+static void
+cascade_clamp( int * x, int * y, int w, int h )
+{
+    int max_x = KERNEL_SCREEN_W - w;
+    int max_y = KERNEL_SCREEN_H - h;
+
+    if( max_x < 0 )
+    {
+        *x = 0;
+    }
+    else if( *x > max_x )
+    {
+        *x = max_x;
+    }
+
+    if( max_y < KERNEL_DESKTOP_STRIP_H )
+    {
+        *y = KERNEL_DESKTOP_STRIP_H;
+    }
+    else if( *y > max_y )
+    {
+        *y = max_y;
+    }
+    if( *y < KERNEL_DESKTOP_STRIP_H )
+    {
+        *y = KERNEL_DESKTOP_STRIP_H;
+    }
 }
 
 static mrb_value
@@ -270,6 +307,7 @@ acid_launcher_spawn( mrb_state * mrb, mrb_value self )
     int n = kernel_window_count();
     int x = 20 + ( ( n * 18 ) % 400 );
     int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 200 );
+    cascade_clamp( &x, &y, g_registered[ index ].w, g_registered[ index ].h );
 
     void * task = kernel_spawn_app( g_registered[ index ].path, x, y,
                                      g_registered[ index ].w, g_registered[ index ].h, 1, NULL,
@@ -302,33 +340,51 @@ acid_spawn_app( mrb_state * mrb, mrb_value self )
     mrb_int arg_len;
     mrb_get_args( mrb, "siis", &path, &path_len, &w, &h, &arg, &arg_len );
 
+    /* Built up front, before any of the three lookups below, and compared
+     * against from here on instead of the raw mrb pointer: mrb_get_args
+     * "s" hands back a pointer+length pair into an mruby string's buffer
+     * with NO guarantee of NUL termination at that length (see
+     * dup_cstr_len's own comment) -- a String#[] slice shares its
+     * parent's buffer, so a raw strcmp against `path` can run past the
+     * intended end and pick up whatever follows in that shared buffer.
+     * The dangerous one is libs_by_path: a spurious mismatch there
+     * returns NULL, the spawned VM silently loads none of its modules,
+     * and something as ordinary as `include EditorLayout` raises and
+     * takes the window down. */
+    char * path_copy = dup_cstr_len( path, ( size_t ) path_len );
+    if( path_copy == NULL )
+    {
+        return mrb_bool_value( 0 );
+    }
+
     /* Same singleton enforcement as acid_launcher_spawn -- looked up by
      * path against the registry (every app reachable this way, games
      * included, is registered at boot regardless of Menu visibility, so
      * this always finds a real multi flag rather than guessing one).
      * An app somehow not registered at all defaults to singleton, the
      * safer of the two behaviors. */
-    if( !is_multi_by_path( path ) )
+    if( !is_multi_by_path( path_copy ) )
     {
-        void * existing = find_running_task_by_path( path );
+        void * existing = find_running_task_by_path( path_copy );
         if( existing != NULL )
         {
             kernel_router_activate_window( existing );
+            /* Unlike the success path below, path_copy is never handed to
+             * kernel_spawn_app on this branch -- no window ends up owning
+             * it, so it would otherwise leak on every refocus of an
+             * already-open singleton. */
+            vPortFree( path_copy );
             return mrb_bool_value( 1 );
         }
     }
 
-    char * path_copy = dup_cstr_len( path, ( size_t ) path_len );
-    if( path_copy == NULL )
-    {
-        return mrb_bool_value( 0 );
-    }
     char * arg_copy = NULL;
     if( arg_len != 0 )
     {
         arg_copy = dup_cstr_len( arg, ( size_t ) arg_len );
         if( arg_copy == NULL )
         {
+            vPortFree( path_copy );
             return mrb_bool_value( 0 );
         }
     }
@@ -336,9 +392,10 @@ acid_spawn_app( mrb_state * mrb, mrb_value self )
     int n = kernel_window_count();
     int x = 20 + ( ( n * 18 ) % 400 );
     int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 200 );
+    cascade_clamp( &x, &y, ( int ) w, ( int ) h );
 
     void * task = kernel_spawn_app( path_copy, x, y, ( int ) w, ( int ) h, 1, arg_copy,
-                                     libs_by_path( path ) );
+                                     libs_by_path( path_copy ) );
     if( task != NULL )
     {
         kernel_router_activate_window( task );

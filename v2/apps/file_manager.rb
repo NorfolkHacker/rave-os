@@ -270,7 +270,8 @@ class FileManagerApp < AcidApp
     # actual ancestor chain at runtime (FileManagerApp < AcidApp), the
     # same way cmdbar.rb's bare `quit!` call already relies on AcidApp
     # without EditorCmd redefining it -- no shared module needed for a
-    # method the way OWN_SOURCE_SUFFIXES needed one for a constant.
+    # method the way OWN_SOURCE_ROOTS/OWN_SOURCE_RELATIVE_PATHS needed
+    # one for a constant.
     acid_spawn_app(canonical_app_path(rb_path), fields["w"].to_i, fields["h"].to_i, "")
   end
 

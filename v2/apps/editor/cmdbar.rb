@@ -260,9 +260,9 @@ module EditorCmd
     # (EditorApp < AcidApp), same as the bare `quit!` call below in
     # cmd_quit. Unlike a bare CONSTANT, a bare method call is never
     # subject to the mixin's-own-lexical-nesting trap that forced
-    # OWN_SOURCE_SUFFIXES/own_source? into EditorLayout -- so this one
-    # doesn't need a shared module, just a shared ancestor, which
-    # EditorCmd's own includer already has.
+    # OWN_SOURCE_ROOTS/OWN_SOURCE_RELATIVE_PATHS/own_source? into
+    # EditorLayout -- so this one doesn't need a shared module, just a
+    # shared ancestor, which EditorCmd's own includer already has.
     acid_spawn_app(canonical_app_path(@path), w, h, "")
     @message = "running #{file_label}"
   end

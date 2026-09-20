@@ -59,6 +59,21 @@ module EditorTouch
     # prompt is up (touch_command_strip, above).
     return false if cmd_prompt_active?
 
+    # Reaching here means the tap/drag lands on the text or the gutter --
+    # real editing surface, on the same footing as any non-ESCAPE keypress
+    # on the keyboard path (editor.rb's on_key, which clears this on every
+    # key but ESCAPE). Left uncleared here, @quit_armed survived a whole
+    # touch edit: tap q (arms), tap/drag in the text or gutter to actually
+    # edit the buffer, reopen the strip, tap q again -- and the window
+    # would close and discard those edits, because nothing on the touch
+    # path ever disarmed it. On the keyboardless Tab5 target this touch
+    # path is the primary (often only) way to edit, so this is the
+    # confirmation actually mattering there. The strip and the status line
+    # are deliberately NOT covered by this clear -- see their own call
+    # sites above: the strip already disarms via cmd_run for any letter
+    # but "q", and the status line is the only way to cancel a prompt with
+    # no keyboard, so it must stay untouched by this.
+    @quit_armed = false
     if x < GUTTER_W
       return touch_gutter(y, fresh)
     end
@@ -157,6 +172,24 @@ module EditorTouch
     row = @buf.line_count - 1 if row >= @buf.line_count
     col = (x - TEXT_X) / CHAR_W + @scroll_x
     col = 0 if col < 0
+    # A continuation with no anchor is not really a continuation: @drag_from
+    # is only ever assigned in the `fresh` branch below, and two reachable
+    # routes land here on a "continuation" (fresh == false) where it was
+    # never set. (1) A press starts in the gutter BELOW the last line --
+    # touch_gutter returns early without touching @drag_from -- and then
+    # drags into the text; on any file shorter than the gutter's ~25
+    # visible rows (including the default notes.txt) most of the gutter is
+    # below the last line, so this is routine, not a corner case. (2) A
+    # press-and-hold starts in the text while a find/goto/save-as prompt is
+    # open (editor_touch's prompt guard, above, returns before touch_text
+    # ever runs, so @drag_from is never assigned), the prompt is cancelled
+    # with ESC while still held, and the same hold then moves. Dereferencing
+    # a nil @drag_from here used to raise NoMethodError, uncaught by
+    # on_touch, which took the whole VM down and the window with it --
+    # unsaved work and all. Treating a missing anchor as a fresh press is
+    # the fix: it anchors right here, at the point the drag is first
+    # actually seen, instead of crashing on an anchor that was never set.
+    fresh = true if @drag_from.nil?
     if fresh
       @buf.clear_mark
       @buf.set_cursor(col, row)

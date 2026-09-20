@@ -107,7 +107,8 @@ class EditorApp < AcidApp
     saved
   end
 
-  # Only for the files listed in EditorLayout::OWN_SOURCE_SUFFIXES -- the
+  # Only for the files listed in EditorLayout::OWN_SOURCE_ROOTS /
+  # OWN_SOURCE_RELATIVE_PATHS -- the
   # user chose this scope explicitly over backing up every save, since
   # this app is the one editor that can edit and then immediately re-run
   # the very code it's running as. Copies the CURRENT on-disk contents
@@ -178,7 +179,19 @@ class EditorApp < AcidApp
     acid_fill_rect(0, STATUS_Y, WINDOW_W, LINE_H, BG_COLOR)
     left = @message ? @message : (file_label + (@buf.modified? ? " *" : ""))
     right = "#{@buf.cy + 1},#{@buf.cx + 1}  #{@buf.line_count}L#{@hl_on ? '  hl' : ''}"
-    acid_draw_text(left[0, 28], 2, STATUS_Y + 1, STATUS_COLOR, BG_COLOR)
+    # 28 was right for the old 240px window (35 columns total); at 420px
+    # (70 columns) the right-hand field only ever needs ~14-23 of them
+    # (see right, above -- even a 4-digit cursor position/line count plus
+    # "  hl" is 20 chars), so 28 was clipping real messages mid-word, e.g.
+    # "unsaved -- ESC q again to close" (31 chars) lost its last word.
+    # 48 leaves the right field a comfortable margin: left[0,48] ends at
+    # pixel 2+48*6=290, and `right` only reaches x=298 (its start pixel)
+    # at a 4-digit cursor row/col or line count -- an 8px gap -- and stays
+    # clear at any line count this editor is actually used at (nothing in
+    # this codebase's own source, the largest realistic file it edits,
+    # tops even 3 digits). Only a 5-digit line count (99999+) would ever
+    # collide, which is not a real file size here.
+    acid_draw_text(left[0, 48], 2, STATUS_Y + 1, STATUS_COLOR, BG_COLOR)
     acid_draw_text(right, WINDOW_W - right.length * CHAR_W - 2, STATUS_Y + 1,
                    STATUS_COLOR, BG_COLOR)
   end
