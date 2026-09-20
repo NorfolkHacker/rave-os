@@ -43,14 +43,22 @@ class AcidApp
     acid_am_i_focused
   end
 
+  # Ends the run loop from inside the app itself -- e.g. the editor's
+  # ESC q close confirmation. The other two ways this loop ends are the
+  # title-bar close button and the kernel's own :close event, both of
+  # which arrive here as that same event, not through this method.
+  def quit!
+    @running = false
+  end
+
   def start
     on_create
     redraw
-    running = true
-    while running
+    @running = true
+    while @running
       ev = acid_poll_event(200)
       if ev == :close
-        running = false
+        @running = false
       elsif ev == :moved
         redraw
         acid_notify_redraw_done

@@ -95,7 +95,11 @@ class EditorApp < AcidApp
     draw_lines
     draw_cursor
     draw_cmd_strip if cmd_active?
-    draw_status
+    if cmd_prompt_active?
+      draw_cmd_prompt
+    else
+      draw_status
+    end
     acid_draw_window_border
   end
 
@@ -148,8 +152,10 @@ class EditorApp < AcidApp
 
   def on_key(code, pressed)
     return unless pressed
+    return redraw if cmd_prompt_key(code)
     return redraw if cmd_key(code)
     @message = nil
+    @quit_armed = false
     if code == AcidKeys::ESCAPE
       cmd_open
       return redraw
