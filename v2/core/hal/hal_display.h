@@ -21,11 +21,14 @@ void hal_display_fill_rect( void * target, int x, int y, int w, int h, unsigned 
 void hal_display_fill_circle( void * target, int x, int y, int r, unsigned int color );
 void hal_display_draw_text( void * target, int x, int y, const char * str, unsigned int fg, unsigned int bg );
 
-/* Copies a canvas's current pixels onto the real screen at (x, y) -- a
- * plain in-memory blit, not a request the owning app has to service. The
- * router calls this once per visible window, every frame, to composite
- * the whole screen (see kernel_router.c's kernel_router_composite_frame). */
-void hal_display_blit_canvas( void * canvas, int x, int y );
+/* Copies `canvas`'s current pixels into `target` at (x, y) -- a plain
+ * in-memory blit, not a request the owning app has to service. `target`
+ * follows the same convention as the primitives above: NULL is the real
+ * screen, non-NULL is another canvas. The router composites every visible
+ * window into an offscreen back buffer with this (canvas-to-canvas), then
+ * makes the finished frame visible with a single canvas-to-screen call --
+ * see gfx.h's gfx_present and kernel_router_composite_frame. */
+void hal_display_blit_canvas( void * target, void * canvas, int x, int y );
 
 /* Fills the entire physical screen with one color, regardless of window
  * boundaries -- used by the router's own compositor before blitting any

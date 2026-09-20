@@ -50,9 +50,12 @@ static void send_event( struct kernel_window * win, int type, int x, int y, int 
  * window-relative coordinates, entirely independent of where the window
  * currently sits on screen (gfx_binding.c/chrome_binding.c). This
  * function is the ONLY place a canvas's pixels ever reach the real,
- * visible screen: paint the shared background, then walk every window
- * back-to-front in z-order and blit (copy) its current canvas onto the
- * screen at its current position. Called from kernel_router_task whenever
+ * visible screen: paint the shared background into an offscreen back
+ * buffer, walk every window back-to-front in z-order and blit (copy) its
+ * current canvas into that same back buffer at its current position, then
+ * gfx_present the finished frame to the screen in one go (see gfx.h's
+ * gfx_present -- building the frame on screen, a piece at a time, was
+ * itself a reported flicker bug). Called from kernel_router_task whenever
  * gfx_take_dirty() says something changed since the last tick (not on
  * every single tick regardless, and not reactively on move/raise/close
  * the way an earlier version of this file worked either -- see
@@ -89,6 +92,12 @@ kernel_router_composite_frame( void )
         z = win->z_order;
         gfx_blit_canvas( win->canvas, win->x, win->y );
     }
+
+    /* Everything above went into an offscreen back buffer, not the
+     * screen -- this is the one call that makes the finished frame
+     * visible, all at once. See gfx.h's gfx_present for why compositing
+     * straight onto the screen flickered. */
+    gfx_present();
 }
 
 void

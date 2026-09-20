@@ -109,9 +109,17 @@ extern "C" void hal_display_draw_text( void * target, int x, int y, const char *
     canvas->drawString( str, x, y );
 }
 
-extern "C" void hal_display_blit_canvas( void * canvas, int x, int y )
+extern "C" void hal_display_blit_canvas( void * target, void * canvas, int x, int y )
 {
-    as_canvas( canvas )->pushSprite( &lcd, x, y );
+    /* Canvas-to-canvas (target != NULL) is a pure memory copy that never
+     * touches Panel_sdl at all -- no per-call mutex, no waiting on the SDL
+     * render thread, and above all nothing presented to the window
+     * mid-frame. Only the canvas-to-screen case (target == NULL, the
+     * compositor's single gfx_present at the end of a frame) goes through
+     * the panel, as one writeImage under one Panel_sdl::lock_t, so the
+     * window is only ever updated with a complete frame. */
+    if( target == NULL ) { as_canvas( canvas )->pushSprite( &lcd, x, y ); return; }
+    as_canvas( canvas )->pushSprite( as_canvas( target ), x, y );
 }
 
 extern "C" void hal_input_poll_touch( int * x, int * y, bool * pressed )

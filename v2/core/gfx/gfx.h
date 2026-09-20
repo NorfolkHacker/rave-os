@@ -19,12 +19,38 @@ void gfx_destroy_canvas( void * canvas );
 void gfx_fill_rect( void * target, int x, int y, int w, int h, unsigned int color );
 void gfx_fill_circle( void * target, int x, int y, int r, unsigned int color );
 void gfx_draw_text( void * target, int x, int y, const char * str, unsigned int fg, unsigned int bg );
+/* Fills the compositor's back buffer with one flat color -- the
+ * background case of wallpaper_blit. Not visible until gfx_present. */
 void gfx_clear_screen( unsigned int color );
 
-/* Copies a canvas's current pixels onto the real screen at (x, y). The
- * only way a canvas's contents ever reach the actual display -- see
- * kernel_router.c's kernel_router_composite_frame, the sole caller. */
+/* Copies a canvas's current pixels into the compositor's back buffer at
+ * (x, y) -- see kernel_router.c's kernel_router_composite_frame, the sole
+ * caller. Nothing drawn here is visible until gfx_present. */
 void gfx_blit_canvas( void * canvas, int x, int y );
+
+/* Makes the frame built up by gfx_clear_screen/gfx_blit_canvas visible,
+ * as a single copy of the whole back buffer onto the real screen.
+ *
+ * The compositor used to draw its frame straight onto the screen, and
+ * that was itself a reported bug ("flicker when windows are moved over
+ * each other"). The sim's SDL backend updates the actual window after
+ * every individual draw call it receives (Panel_sdl::lock_t's destructor
+ * bumps the modified counter and wakes the render thread, per call), so
+ * a compositor pass that painted the background and then blitted each
+ * window in turn made every one of those intermediate states briefly
+ * visible: background-with-no-windows first, then the windows reappearing
+ * one at a time. Measured live by capturing the window at 120fps during a
+ * drag: ~2-9% of captured frames showed a partly-composited screen, some
+ * with no windows on them at all. Dragging recomposites every ~16ms, so
+ * that lands as continuous flicker, worst where windows overlap (the
+ * lower window is erased and re-exposed on every single frame).
+ *
+ * Building the frame offscreen first means the screen only ever receives
+ * whole frames. It's also cheaper: a canvas-to-canvas blit is a plain
+ * memory copy, where each blit straight to the screen round-tripped
+ * through the backend's own per-call synchronization (including a wait
+ * on the render thread) -- see hal_display_sim.cpp. */
+void gfx_present( void );
 
 /* Marks that the screen needs recompositing -- set automatically by
  * gfx_fill_rect/fill_circle/draw_text whenever they target a canvas (an

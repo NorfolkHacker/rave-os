@@ -2,6 +2,7 @@
 
 #include "gfx.h"
 #include "../hal/hal_display.h"
+#include "../kernel/kernel_layout.h"
 
 /* Serializes every access to the HAL's shared underlying display object
  * (e.g. the sim's single `static LGFX lcd`), which is touched from
@@ -27,10 +28,31 @@ static SemaphoreHandle_t g_gfx_lock = NULL;
  * write across threads is a real data race even for something this simple. */
 static bool g_dirty = true;
 
+/* The compositor's back buffer -- a full-screen offscreen canvas that
+ * kernel_router_composite_frame builds each frame into (wallpaper, then
+ * every window canvas in z-order), which gfx_present then copies to the
+ * real screen in one operation. See gfx.h's gfx_present for why the
+ * compositor can't just draw straight to the screen. Created once in
+ * gfx_init(), which runs single-threaded at boot, and never destroyed
+ * (it lives exactly as long as the display itself does). Calls
+ * hal_display_create_canvas directly rather than gfx_create_canvas
+ * because the lock gfx_create_canvas takes doesn't exist yet at this
+ * point -- and wouldn't be needed even if it did, for the same
+ * single-threaded-at-boot reason gfx_init() itself needs none.
+ *
+ * Stays NULL if the target's HAL doesn't do canvases (the hw target's
+ * current stub returns NULL from create_canvas). Every use below treats
+ * NULL as "draw straight to the screen", which is exactly the
+ * unbuffered behavior this file had before the back buffer existed --
+ * so a canvas-less target still works, it just flickers as it used
+ * to. */
+static void * g_backbuffer = NULL;
+
 void
 gfx_init( void )
 {
     hal_display_init();
+    g_backbuffer = hal_display_create_canvas( KERNEL_SCREEN_W, KERNEL_SCREEN_H );
     g_gfx_lock = xSemaphoreCreateMutex();
 }
 
@@ -112,7 +134,14 @@ void
 gfx_clear_screen( unsigned int color )
 {
     xSemaphoreTake( g_gfx_lock, portMAX_DELAY );
-    hal_display_clear_screen( color );
+    if( g_backbuffer != NULL )
+    {
+        hal_display_fill_rect( g_backbuffer, 0, 0, KERNEL_SCREEN_W, KERNEL_SCREEN_H, color );
+    }
+    else
+    {
+        hal_display_clear_screen( color );
+    }
     xSemaphoreGive( g_gfx_lock );
 }
 
@@ -120,6 +149,20 @@ void
 gfx_blit_canvas( void * canvas, int x, int y )
 {
     xSemaphoreTake( g_gfx_lock, portMAX_DELAY );
-    hal_display_blit_canvas( canvas, x, y );
+    hal_display_blit_canvas( g_backbuffer, canvas, x, y );
+    xSemaphoreGive( g_gfx_lock );
+}
+
+void
+gfx_present( void )
+{
+    if( g_backbuffer == NULL )
+    {
+        /* No back buffer on this target, so the frame was drawn straight
+         * to the screen and is already as visible as it is going to get. */
+        return;
+    }
+    xSemaphoreTake( g_gfx_lock, portMAX_DELAY );
+    hal_display_blit_canvas( NULL, g_backbuffer, 0, 0 );
     xSemaphoreGive( g_gfx_lock );
 }

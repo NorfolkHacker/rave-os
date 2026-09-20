@@ -44,9 +44,10 @@ hal_display_draw_text( void * target, int x, int y, const char * str, unsigned i
 }
 
 void
-hal_display_blit_canvas( void * canvas, int x, int y )
+hal_display_blit_canvas( void * target, void * canvas, int x, int y )
 {
-    ESP_LOGI( TAG, "hal_display_blit_canvas(canvas=%p, %d, %d): stub, not drawn", canvas, x, y );
+    ESP_LOGI( TAG, "hal_display_blit_canvas(target=%p, canvas=%p, %d, %d): stub, not drawn",
+              target, canvas, x, y );
 }
 
 void
