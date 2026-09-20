@@ -72,6 +72,27 @@ dup_cstr( const char * src )
     return copy;
 }
 
+/* Same allocation/NUL-terminate/NULL-on-failure contract as dup_cstr, but
+ * copies exactly `len` bytes instead of relying on strlen -- required for
+ * an mrb_get_args "s" pointer, which is a pointer+length pair into an
+ * mruby string's buffer with NO guarantee of NUL termination at that
+ * length (a substring, e.g. desktop.rb's manifest parser's line[eq+1,
+ * ...].strip, can share its parent string's underlying buffer, so
+ * strlen() on it can run past the intended end and absorb whatever
+ * follows in that shared buffer). Every mrb string reaching dup_cstr in
+ * this file must go through here, not dup_cstr, for that reason. */
+static char *
+dup_cstr_len( const char * src, size_t len )
+{
+    char * copy = ( char * ) pvPortMalloc( len + 1 );
+    if( copy != NULL )
+    {
+        memcpy( copy, src, len );
+        copy[ len ] = '\0';
+    }
+    return copy;
+}
+
 static mrb_value
 acid_launcher_register( mrb_state * mrb, mrb_value self )
 {
@@ -86,9 +107,6 @@ acid_launcher_register( mrb_state * mrb, mrb_value self )
     mrb_int libs_len;
     mrb_get_args( mrb, "ssiibs", &path, &path_len, &name, &name_len, &w, &h, &multi,
                   &libs, &libs_len );
-    ( void ) path_len;
-    ( void ) name_len;
-    ( void ) libs_len;
 
     if( g_registered_count >= MAX_REGISTERED_APPS )
     {
@@ -96,8 +114,8 @@ acid_launcher_register( mrb_state * mrb, mrb_value self )
     }
 
     struct launchable_app * slot = &g_registered[ g_registered_count ];
-    slot->path = dup_cstr( path );
-    slot->name = dup_cstr( name );
+    slot->path = dup_cstr_len( path, ( size_t ) path_len );
+    slot->name = dup_cstr_len( name, ( size_t ) name_len );
     if( slot->path == NULL || slot->name == NULL )
     {
         return mrb_bool_value( 0 );
@@ -107,7 +125,18 @@ acid_launcher_register( mrb_state * mrb, mrb_value self )
     slot->multi = multi ? 1 : 0;
     /* An empty manifest field and a missing one are the same thing to
      * vm_host, which takes NULL to mean "this app has no modules". */
-    slot->libs = ( libs[ 0 ] == '\0' ) ? NULL : dup_cstr( libs );
+    if( libs_len == 0 )
+    {
+        slot->libs = NULL;
+    }
+    else
+    {
+        slot->libs = dup_cstr_len( libs, ( size_t ) libs_len );
+        if( slot->libs == NULL )
+        {
+            return mrb_bool_value( 0 );
+        }
+    }
     g_registered_count++;
     return mrb_bool_value( 1 );
 }
@@ -272,8 +301,6 @@ acid_spawn_app( mrb_state * mrb, mrb_value self )
     char * arg;
     mrb_int arg_len;
     mrb_get_args( mrb, "siis", &path, &path_len, &w, &h, &arg, &arg_len );
-    ( void ) path_len;
-    ( void ) arg_len;
 
     /* Same singleton enforcement as acid_launcher_spawn -- looked up by
      * path against the registry (every app reachable this way, games
@@ -291,15 +318,15 @@ acid_spawn_app( mrb_state * mrb, mrb_value self )
         }
     }
 
-    char * path_copy = dup_cstr( path );
+    char * path_copy = dup_cstr_len( path, ( size_t ) path_len );
     if( path_copy == NULL )
     {
         return mrb_bool_value( 0 );
     }
     char * arg_copy = NULL;
-    if( arg[ 0 ] != '\0' )
+    if( arg_len != 0 )
     {
-        arg_copy = dup_cstr( arg );
+        arg_copy = dup_cstr_len( arg, ( size_t ) arg_len );
         if( arg_copy == NULL )
         {
             return mrb_bool_value( 0 );
