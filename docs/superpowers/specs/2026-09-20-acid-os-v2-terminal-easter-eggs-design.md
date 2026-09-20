@@ -74,11 +74,28 @@ focus it, and no task or VM exists for it.
 New `core/kernel/kernel_overlay.{h,c}`:
 
 ```c
-int    kernel_overlay_open( void );    /* allocate-on-first-use, clear to key, mark dirty */
-void   kernel_overlay_close( void );   /* flag only -- see lifetime note */
+int    kernel_overlay_open( void * owner_task );   /* allocate-on-first-use, clear, mark dirty */
+void   kernel_overlay_close( void * owner_task );  /* no-op unless owner -- see lifetime note */
+void   kernel_overlay_release_owner( void * owner_task );  /* vm_host cleanup */
 int    kernel_overlay_is_open( void );
-void * kernel_overlay_canvas( void );  /* NULL when closed */
+void * kernel_overlay_canvas( void );              /* the compositor's read; NULL when closed */
+void * kernel_overlay_canvas_for( void * owner_task ); /* a drawer's read; NULL unless owner */
 ```
+
+**One owner at a time, enforced here rather than in Ruby.** There is exactly one overlay
+canvas, so exactly one thing may animate on it: a second egg starting mid-flight would
+clear the first one's frames and the two would fight, which is the "not doubled up, not
+multiple sprites" requirement. A guard in `AcidEggs` alone cannot deliver that — the
+terminal is `multi = true`, so two terminal windows are two separate mruby VMs with two
+separate copies of the module's state, each believing it is the only one. `open` claims
+the overlay for a task handle and refuses any other task until it is released; `close`
+and `canvas_for` ignore a caller that is not the owner.
+
+`kernel_overlay_release_owner` exists because a claim must not outlive the task holding
+it — an app that crashes mid-egg would otherwise wedge the overlay closed to everyone
+forever. It is called from `vm_host_task`'s unconditional per-app cleanup, directly
+beside the `kernel_audio_release_owner` call already there, which is this codebase's
+established pattern for exactly this problem (`kernel_audio.h:60`).
 
 **Lifetime, deliberately.** The canvas is allocated lazily on the first `open` and then
 kept for the life of the OS; `close` only clears the open flag. Freeing it would mean
@@ -123,10 +140,13 @@ if( kernel_overlay_is_open() )
 
 | Binding | Behaviour |
 |---|---|
-| `acid_overlay_open` | opens the overlay; returns false if the canvas could not be allocated |
-| `acid_overlay_clear` | fills the whole canvas with the key colour (one frame's erase) |
-| `acid_overlay_fill_rect(x, y, w, h, color)` | screen-absolute; a no-op when closed |
-| `acid_overlay_close` | closes it; the next composite tick drops it |
+| `acid_overlay_open` | claims the overlay for the calling task; false if another task holds it or the canvas could not be allocated |
+| `acid_overlay_clear` | fills the whole canvas with the key colour (one frame's erase); a no-op for a non-owner |
+| `acid_overlay_fill_rect(x, y, w, h, color)` | screen-absolute; a no-op when closed or for a non-owner |
+| `acid_overlay_close` | releases it; the next composite tick drops it |
+
+Each passes `xTaskGetCurrentTaskHandle()` as the owner, the same self-identification
+pattern `acid_send_self_to_back` and the audio bindings already use.
 
 `acid_overlay_fill_rect` is the only drawing primitive the sprites need, so that is the
 entire surface. `gfx_fill_rect` already calls `gfx_mark_dirty` for any non-NULL target,
@@ -238,8 +258,12 @@ with it rather than leaving a sprite frozen on screen.
 
 **Unit.** `core/kernel/` gains `test_kernel_overlay.c` in the style of the existing
 standalone-`main` tests: closed by default; `open` reports open and returns a non-NULL
-canvas; a second `open` does not reallocate; `close` reports closed while the canvas
-pointer stays valid (the documented no-free lifetime); reopen after close works.
+canvas; a second `open` by the same owner does not reallocate; `close` reports closed
+while the canvas pointer stays valid (the documented no-free lifetime); reopen after
+close works. Ownership gets its own cases: a second task's `open` is refused while the
+first holds it, a non-owner's `close` and `canvas_for` do nothing, the overlay becomes
+claimable again after the owner closes, and `release_owner` frees a claim for the owning
+task only.
 
 **Manual, on the sim,** each of the three eggs:
 
@@ -251,7 +275,11 @@ pointer stays valid (the documented no-free lifetime); reopen after close works.
 4. typing continuously during the flight, confirming characters appear and the animation
    does not stall;
 5. closing the terminal mid-flight, confirming the overlay goes with it;
-6. for `maximbady` specifically, six bounces and a centred, legible **SOOOOOOOOO**.
+6. for `maximbady` specifically, six bounces and a centred, legible **SOOOOOOOOO**;
+7. typing a second egg while one is in flight, and typing an egg in a *second terminal
+   window* while the first terminal's egg is flying — in both cases exactly one sprite
+   is ever on screen, and the second request is silently ignored rather than fighting
+   the first for the canvas.
 
 **hw.** Source changes compile-checked only, as in every previous phase.
 

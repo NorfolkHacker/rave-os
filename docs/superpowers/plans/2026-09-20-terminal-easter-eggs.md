@@ -63,10 +63,21 @@ yet. Pure logic, so it gets a real standalone unit test with the gfx layer stubb
 **Interfaces:**
 - Consumes: `gfx_create_canvas`, `gfx_fill_rect`, `gfx_mark_dirty` (`v2/core/gfx/gfx.h`);
   `KERNEL_SCREEN_W` / `KERNEL_SCREEN_H` (`v2/core/kernel/kernel_layout.h`).
-- Produces: `int kernel_overlay_open( void )` (1 on success, 0 if the canvas could not be
-  allocated), `void kernel_overlay_close( void )`, `int kernel_overlay_is_open( void )`,
-  `void * kernel_overlay_canvas( void )` (NULL when closed), and the macro
+- Produces: `int kernel_overlay_open( void * owner_task )` (1 on success, 0 if another
+  task already holds the overlay or the canvas could not be allocated),
+  `void kernel_overlay_close( void * owner_task )`,
+  `void kernel_overlay_release_owner( void * owner_task )`,
+  `int kernel_overlay_is_open( void )`, `void * kernel_overlay_canvas( void )` (the
+  compositor's read; NULL when closed), `void * kernel_overlay_canvas_for( void * owner_task )`
+  (a drawer's read; NULL unless that task is the owner), and the macro
   `ACID_OVERLAY_KEY`.
+
+**Why ownership lives here and not in Ruby:** there is one overlay canvas, so exactly one
+thing may animate on it. A guard inside `AcidEggs` cannot enforce that — the terminal is
+`multi = true`, so two terminal windows are two mruby VMs with two independent copies of
+the module's state, each believing it is the only one, both drawing into this single
+canvas and clearing each other's frames. The claim is per-task, and
+`kernel_overlay_release_owner` stops a crashed app's claim outliving it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -125,6 +136,13 @@ gfx_mark_dirty( void )
     g_dirty_calls++;
 }
 
+/* Stand-ins for two different app tasks' handles: the overlay only ever
+ * compares these pointers, never dereferences them. */
+static int g_task_a_storage;
+static int g_task_b_storage;
+static void * TASK_A = &g_task_a_storage;
+static void * TASK_B = &g_task_b_storage;
+
 int
 main( void )
 {
@@ -139,7 +157,7 @@ main( void )
      * (so the very first composited frame shows nothing rather than the
      * black createSprite zero-fills it with), and marks the screen dirty
      * -- the open itself draws nothing, so nothing else would. */
-    assert( kernel_overlay_open() == 1 );
+    assert( kernel_overlay_open( TASK_A ) == 1 );
     assert( kernel_overlay_is_open() == 1 );
     assert( kernel_overlay_canvas() == g_fake_canvas );
     assert( g_create_calls == 1 );
@@ -149,26 +167,69 @@ main( void )
     assert( g_last_fill_color == ACID_OVERLAY_KEY );
     assert( g_dirty_calls == 1 );
 
-    /* Opening again reuses the same canvas -- never a second allocation. */
-    assert( kernel_overlay_open() == 1 );
+    /* Opening again from the SAME task reuses the same canvas -- never a
+     * second allocation. */
+    assert( kernel_overlay_open( TASK_A ) == 1 );
     assert( g_create_calls == 1 );
     assert( kernel_overlay_canvas() == g_fake_canvas );
+
+    /* --- one owner at a time --------------------------------------- */
+
+    /* A second task is refused outright while A holds the overlay. This is
+     * the whole "only one easter egg at a time" rule: two terminal windows
+     * are two separate mruby VMs, so a Ruby-side guard in AcidEggs cannot
+     * see the other one. Two sprites sharing one canvas would clear each
+     * other's frames. */
+    assert( kernel_overlay_open( TASK_B ) == 0 );
+    assert( kernel_overlay_is_open() == 1 );
+
+    /* ...and a non-owner can neither draw on it nor close it out from
+     * under the task that is using it. */
+    assert( kernel_overlay_canvas_for( TASK_B ) == NULL );
+    assert( kernel_overlay_canvas_for( TASK_A ) == g_fake_canvas );
+    kernel_overlay_close( TASK_B );
+    assert( kernel_overlay_is_open() == 1 );
+    assert( kernel_overlay_canvas_for( TASK_A ) == g_fake_canvas );
+
+    /* A non-owner's release is likewise ignored -- it must not be able to
+     * strip A's claim. */
+    kernel_overlay_release_owner( TASK_B );
+    assert( kernel_overlay_is_open() == 1 );
 
     /* Closing hides it from the compositor but deliberately does NOT free
      * the canvas: the task that closes it is an app task, while the router
      * task may be mid-blit on those same pixels. See kernel_overlay.c's own
      * comment. */
-    kernel_overlay_close();
+    kernel_overlay_close( TASK_A );
     assert( kernel_overlay_is_open() == 0 );
     assert( kernel_overlay_canvas() == NULL );
+    assert( kernel_overlay_canvas_for( TASK_A ) == NULL );
+
+    /* Once released, the next task in gets it. */
+    assert( kernel_overlay_open( TASK_B ) == 1 );
+    assert( kernel_overlay_canvas_for( TASK_B ) == g_fake_canvas );
+    assert( kernel_overlay_canvas_for( TASK_A ) == NULL );
+
+    /* A crash mid-egg must not wedge the overlay shut forever: vm_host's
+     * per-app cleanup releases whatever claim the dying task held. */
+    kernel_overlay_release_owner( TASK_B );
+    assert( kernel_overlay_is_open() == 0 );
+    assert( kernel_overlay_open( TASK_A ) == 1 );
 
     /* Reopening after a close reuses the surviving canvas and re-clears it,
      * so the previous egg's last frame can't flash up. */
+    kernel_overlay_close( TASK_A );
     int fills_before = g_fill_calls;
-    assert( kernel_overlay_open() == 1 );
+    assert( kernel_overlay_open( TASK_A ) == 1 );
     assert( g_create_calls == 1 );
     assert( g_fill_calls == fills_before + 1 );
-    kernel_overlay_close();
+    kernel_overlay_close( TASK_A );
+
+    /* Releasing a claim nobody holds is harmless -- vm_host calls it for
+     * every app that exits, and almost none of them ever touch the
+     * overlay. */
+    kernel_overlay_release_owner( TASK_A );
+    assert( kernel_overlay_is_open() == 0 );
 
     printf( "test_kernel_overlay: all assertions passed\n" );
     return 0;
@@ -215,12 +276,16 @@ gfx_mark_dirty( void )
 {
 }
 
+static int g_task_storage;
+
 int
 main( void )
 {
-    assert( kernel_overlay_open() == 0 );
+    void * task = &g_task_storage;
+    assert( kernel_overlay_open( task ) == 0 );
     assert( kernel_overlay_is_open() == 0 );
     assert( kernel_overlay_canvas() == NULL );
+    assert( kernel_overlay_canvas_for( task ) == NULL );
     printf( "test_kernel_overlay_alloc_fail: all assertions passed\n" );
     return 0;
 }
@@ -287,21 +352,51 @@ Create `v2/core/kernel/kernel_overlay.h`:
  * window canvas already has -- the blit is a plain memory copy, so the
  * worst case is one frame showing a sprite mid-move. */
 
-/* Opens the overlay, allocating its canvas on first use and clearing it to
- * ACID_OVERLAY_KEY. Returns 1, or 0 if the canvas could not be allocated
- * (in which case the overlay stays closed and the caller should simply do
- * nothing -- an easter egg that doesn't fire is not an error worth
- * reporting to a user). */
-int kernel_overlay_open( void );
+/* Claims the overlay for `owner_task`, allocating its canvas on first use
+ * and clearing it to ACID_OVERLAY_KEY. Returns 1, or 0 if ANOTHER task
+ * already holds it, or if the canvas could not be allocated. Re-opening
+ * from the task that already owns it succeeds and re-clears.
+ *
+ * One owner at a time, and that is the point: there is exactly one canvas,
+ * so a second animation starting mid-flight would clear the first one's
+ * frames and the two would fight over it. This cannot be enforced by the
+ * caller -- apps/terminal.rb is `multi = true`, so two terminal windows are
+ * two separate mruby VMs, each with its own copy of AcidEggs' module state,
+ * neither able to see the other. The claim is what makes "only one easter
+ * egg on screen at a time" true across the whole OS rather than inside one
+ * VM.
+ *
+ * A refusal is not an error worth showing anyone: an easter egg that
+ * declines to fire because another one is already flying should simply do
+ * nothing. */
+int kernel_overlay_open( void * owner_task );
 
-/* Hides the overlay from the compositor. Deliberately does NOT free the
- * canvas -- see kernel_overlay.c. */
-void kernel_overlay_close( void );
+/* Hides the overlay from the compositor and releases the claim. A no-op
+ * unless `owner_task` is the current owner, so one app can never close
+ * another's animation. Deliberately does NOT free the canvas -- see
+ * kernel_overlay.c. */
+void kernel_overlay_close( void * owner_task );
+
+/* Drops `owner_task`'s claim if it holds one, and does nothing otherwise.
+ * Called from vm_host_task's unconditional per-app cleanup for EVERY app
+ * that exits, beside the kernel_audio_release_owner call already there, so
+ * that an app which dies mid-animation -- normally, or on an unhandled Ruby
+ * exception -- cannot leave the overlay claimed forever by a task that no
+ * longer exists. */
+void kernel_overlay_release_owner( void * owner_task );
 
 int kernel_overlay_is_open( void );
 
-/* The canvas to draw into, or NULL when closed. */
+/* The compositor's read: the canvas to blit, or NULL when closed. Ownership
+ * is irrelevant here -- the router blits whatever is open, whoever opened
+ * it. */
 void * kernel_overlay_canvas( void );
+
+/* A drawer's read: the canvas to draw into, or NULL when the overlay is
+ * closed OR `owner_task` is not the task holding it. Every drawing binding
+ * goes through this rather than kernel_overlay_canvas, so a non-owner
+ * silently draws nothing instead of scribbling on someone else's frame. */
+void * kernel_overlay_canvas_for( void * owner_task );
 
 #endif
 ```
@@ -333,9 +428,19 @@ Create `v2/core/kernel/kernel_overlay.c`:
 static void * g_canvas = NULL;
 static int g_open = 0;
 
+/* Whoever currently holds the overlay, or NULL when nobody does. Compared
+ * as an opaque handle and never dereferenced -- it may well belong to a
+ * task that has already died by the time release_owner runs. */
+static void * g_owner = NULL;
+
 int
-kernel_overlay_open( void )
+kernel_overlay_open( void * owner_task )
 {
+    if( g_open && g_owner != owner_task )
+    {
+        return 0;
+    }
+
     if( g_canvas == NULL )
     {
         g_canvas = gfx_create_canvas( KERNEL_SCREEN_W, KERNEL_SCREEN_H );
@@ -351,6 +456,7 @@ kernel_overlay_open( void )
      * egg's last frame. */
     gfx_fill_rect( g_canvas, 0, 0, KERNEL_SCREEN_W, KERNEL_SCREEN_H, ACID_OVERLAY_KEY );
     g_open = 1;
+    g_owner = owner_task;
 
     /* gfx_fill_rect already marks dirty for a non-NULL target, but an open
      * has to survive that being true for other reasons too -- this is the
@@ -361,9 +467,31 @@ kernel_overlay_open( void )
 }
 
 void
-kernel_overlay_close( void )
+kernel_overlay_close( void * owner_task )
 {
+    if( !g_open || g_owner != owner_task )
+    {
+        return;
+    }
     g_open = 0;
+    g_owner = NULL;
+    gfx_mark_dirty();
+}
+
+void
+kernel_overlay_release_owner( void * owner_task )
+{
+    /* Same shape as kernel_overlay_close, and separate from it on purpose:
+     * close is a deliberate act by a running app, this is cleanup for one
+     * that may already be gone. Called for every app that exits, almost
+     * none of which ever touched the overlay, so the "not the owner" case
+     * is the common one and must stay silent. */
+    if( !g_open || g_owner != owner_task )
+    {
+        return;
+    }
+    g_open = 0;
+    g_owner = NULL;
     gfx_mark_dirty();
 }
 
@@ -377,6 +505,16 @@ void *
 kernel_overlay_canvas( void )
 {
     return g_open ? g_canvas : NULL;
+}
+
+void *
+kernel_overlay_canvas_for( void * owner_task )
+{
+    if( !g_open || g_owner != owner_task )
+    {
+        return NULL;
+    }
+    return g_canvas;
 }
 ```
 
@@ -572,15 +710,18 @@ small probe app so the whole path can be seen working before any sprite exists.
   its include block at `:9-15`
 - Modify: `v2/core/bindings/gfx_binding.c` (new statics before `acid_bindings_register`,
   new registrations inside it)
+- Modify: `v2/core/vm_host/vm_host.c:327` (the cleanup block, beside
+  `kernel_audio_release_owner`)
 - Create: `v2/apps/overlay_probe.rb`
 - Create: `v2/apps/overlay_probe.app.toml`
 
 **Interfaces:**
-- Consumes: `kernel_overlay_open/close/is_open/canvas`, `ACID_OVERLAY_KEY` (Task 1);
-  `gfx_blit_canvas_keyed` (Task 2).
-- Produces, to Ruby: `acid_overlay_open` → true/false, `acid_overlay_clear`,
+- Consumes: `kernel_overlay_open/close/release_owner/is_open/canvas/canvas_for`,
+  `ACID_OVERLAY_KEY` (Task 1); `gfx_blit_canvas_keyed` (Task 2).
+- Produces, to Ruby: `acid_overlay_open` → true/false (false when another app already
+  holds the overlay), `acid_overlay_clear`,
   `acid_overlay_fill_rect(x, y, w, h, color)` (screen-absolute, clipped to the screen,
-  silently ignored when closed), `acid_overlay_close`.
+  silently ignored when closed or when the caller is not the owner), `acid_overlay_close`.
 
 - [ ] **Step 1: Composite the overlay**
 
@@ -611,6 +752,9 @@ In `kernel_router_composite_frame`, between the window loop's closing brace and 
 In `v2/core/bindings/gfx_binding.c`, add to the includes at the top:
 
 ```c
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include "../kernel/kernel_overlay.h"
 #include "../kernel/kernel_layout.h"
 #include "../kernel/kernel_theme.h"
@@ -629,7 +773,11 @@ acid_overlay_open( mrb_state * mrb, mrb_value self )
 {
     ( void ) mrb;
     ( void ) self;
-    return mrb_bool_value( kernel_overlay_open() != 0 );
+    /* xTaskGetCurrentTaskHandle as the claim, the same self-identification
+     * pattern acid_send_self_to_back and the audio bindings already use.
+     * False here means another app is already animating -- see
+     * kernel_overlay_open. */
+    return mrb_bool_value( kernel_overlay_open( ( void * ) xTaskGetCurrentTaskHandle() ) != 0 );
 }
 
 static mrb_value
@@ -637,7 +785,7 @@ acid_overlay_clear( mrb_state * mrb, mrb_value self )
 {
     ( void ) mrb;
     ( void ) self;
-    void * canvas = kernel_overlay_canvas();
+    void * canvas = kernel_overlay_canvas_for( ( void * ) xTaskGetCurrentTaskHandle() );
     if( canvas == NULL )
     {
         return mrb_nil_value();
@@ -653,12 +801,13 @@ acid_overlay_fill_rect( mrb_state * mrb, mrb_value self )
     mrb_int x, y, w, h, color;
     mrb_get_args( mrb, "iiiii", &x, &y, &w, &h, &color );
 
-    void * canvas = kernel_overlay_canvas();
+    void * canvas = kernel_overlay_canvas_for( ( void * ) xTaskGetCurrentTaskHandle() );
     if( canvas == NULL )
     {
-        /* Closed overlay: silently nothing. A sprite whose animation ended
-         * a frame ago, or an egg that never got a canvas, must not be an
-         * error a user sees. */
+        /* Closed overlay, or a caller that doesn't own it: silently
+         * nothing. A sprite whose animation ended a frame ago, an egg that
+         * never got a canvas, and an app drawing while another one holds
+         * the overlay must none of them be an error a user sees. */
         return mrb_nil_value();
     }
 
@@ -688,7 +837,7 @@ acid_overlay_close( mrb_state * mrb, mrb_value self )
 {
     ( void ) mrb;
     ( void ) self;
-    kernel_overlay_close();
+    kernel_overlay_close( ( void * ) xTaskGetCurrentTaskHandle() );
     return mrb_nil_value();
 }
 ```
@@ -706,7 +855,28 @@ And inside `acid_bindings_register`, after the existing three:
                                  acid_overlay_close, MRB_ARGS_NONE() );
 ```
 
-- [ ] **Step 3: Write the probe app**
+- [ ] **Step 3: Release the claim when an app exits**
+
+In `v2/core/vm_host/vm_host.c`, add to the includes at the top, beside the other kernel
+headers:
+
+```c
+#include "../kernel/kernel_overlay.h"
+```
+
+and in the unconditional cleanup block, directly after the existing
+`kernel_audio_release_owner(...)` line:
+
+```c
+    /* Same reasoning as the audio release directly above: an app that held
+     * the overlay when it exited -- normally, or on an unhandled Ruby
+     * exception -- must not leave it claimed by a task that no longer
+     * exists, which would wedge it shut for every other app forever. A
+     * no-op for the overwhelming majority of apps, which never touch it. */
+    kernel_overlay_release_owner( ( void * ) xTaskGetCurrentTaskHandle() );
+```
+
+- [ ] **Step 4: Write the probe app**
 
 This is the overlay's manual test fixture and stays in the tree, the same way
 `core/audio/test_synth.c` and `tools/test_editor.rb` do. `menu = false` keeps it out of
@@ -769,7 +939,7 @@ end
 OverlayProbeApp.new.start
 ```
 
-- [ ] **Step 4: Build and verify the overlay end to end**
+- [ ] **Step 5: Build and verify the overlay end to end**
 
 ```bash
 cd /home/norfolkh/os
@@ -789,13 +959,17 @@ one of these:
 5. Drag a window across the bar and away: no smearing or leftover sprite pixels.
 6. Close the probe's window: the bar disappears completely and the screen underneath is
    intact.
+7. With the probe still running, open a Terminal and type `dave` — nothing happens (the
+   probe owns the overlay), and no error is printed. Close the probe, type `dave` again
+   once Task 6 is in: it fires. (Skip this check until Task 6 exists; it is listed here
+   because it is what the claim is for.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd /home/norfolkh/os
 git add v2/core/kernel/kernel_router.c v2/core/bindings/gfx_binding.c \
-  v2/apps/overlay_probe.rb v2/apps/overlay_probe.app.toml
+  v2/core/vm_host/vm_host.c v2/apps/overlay_probe.rb v2/apps/overlay_probe.app.toml
 git commit -m "$(cat <<'EOF'
 v2: composite the kernel overlay and expose it to Ruby
 
@@ -1755,12 +1929,20 @@ In the same terminal session:
 6. Type continuously while an egg is in flight — characters appear in the input line and
    the animation keeps moving.
 7. Type `dave` then immediately `joe` — the second is ignored while the first is flying,
-   and `joe` works normally once Dave has gone.
-8. Start an egg and close the terminal window mid-flight — the sprite disappears with
-   the window and the screen underneath is intact.
-9. After every egg, confirm the screen is undamaged: wallpaper, taskbar and window
-   contents all as they were.
-10. Open the Piano and play a note while an egg is flying — the egg's sound uses voice 6
+   and `joe` works normally once Dave has gone. Exactly one sprite is ever on screen.
+8. **Two terminals:** open a second Terminal window from the Menu (it is `multi = true`,
+   so this is a second window with its own mruby VM). Start `maximbady` in the first and
+   immediately type `dave` in the second — the second does nothing, silently, and only
+   one sprite is ever animating. This is the case the Ruby-side guard cannot catch and
+   `kernel_overlay_open`'s per-task claim exists for.
+9. Start an egg in terminal one, then close terminal one mid-flight and immediately type
+   `joe` in terminal two — it works, proving the claim was released with the dying app
+   rather than wedging the overlay shut.
+10. Start an egg and close the terminal window mid-flight — the sprite disappears with
+    the window and the screen underneath is intact.
+11. After every egg, confirm the screen is undamaged: wallpaper, taskbar and window
+    contents all as they were.
+12. Open the Piano and play a note while an egg is flying — the egg's sound uses voice 6
     and must not cut the piano off.
 
 - [ ] **Step 6: Re-run both Ruby test suites**
@@ -1795,6 +1977,10 @@ EOF
 - [ ] `test_acid_sprite.rb` and `test_acid_eggs.rb` pass.
 - [ ] `run overlay_probe` still demonstrates transparency and click-through.
 - [ ] All three eggs run over the wallpaper, the taskbar and other windows.
+- [ ] Only one egg is ever on screen: a second one typed mid-flight is silently ignored,
+      including from a second terminal window (a second VM), and including while
+      `overlay_probe` holds the overlay.
+- [ ] Closing an app mid-egg releases the overlay, and the next egg works.
 - [ ] The terminal is fully usable during and after every egg, and `help` never mentions
       them.
 - [ ] `v2/hw/main/CMakeLists.txt` lists `kernel_overlay.c` and
