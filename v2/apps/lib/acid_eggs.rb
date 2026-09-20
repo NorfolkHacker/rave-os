@@ -115,7 +115,18 @@ module AcidEggs
 
     @egg = name
     @now = now_ms.nil? ? now_millis : now_ms
-    @last_ms = @now - TICK_MS   # draw the first frame immediately
+    # Deliberately NOT backdated to @now - TICK_MS. start() draws nothing
+    # itself, so the first visible frame always comes from the first step()
+    # call, which the terminal's event loop reaches within one poll interval
+    # regardless -- backdating would only have bought back that one frame
+    # (33ms) of latency, which is imperceptible. What backdating actually
+    # costs is real: it makes step()'s own elapsed-time guard vacuous, since
+    # any step() called after a backdated start already shows a full
+    # TICK_MS elapsed and fires immediately no matter how soon it is called.
+    # That guard exists to stop the animation free-running off however
+    # often the caller happens to poll, and a guard that can never withhold
+    # a frame is not a guard.
+    @last_ms = @now
     @frame = 0
     @note_ticks = 0
     @phase = :fly
