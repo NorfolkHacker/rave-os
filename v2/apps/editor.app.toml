@@ -3,4 +3,4 @@ w = 420
 h = 280
 desc = Text editor for app source
 multi = true
-libs = editor/buffer.rb, editor/hl.rb, editor/cmdbar.rb, editor/touch.rb
+libs = editor/buffer.rb, editor/hl.rb, editor/layout.rb, editor/cmdbar.rb, editor/touch.rb

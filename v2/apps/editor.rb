@@ -1,25 +1,6 @@
 class EditorApp < AcidApp
+  include EditorLayout
   include EditorCmd
-
-  # Must match editor.app.toml and kernel_layout.h's KERNEL_TITLE_BAR_H.
-  # 420x280 gives 25 lines of 65 columns; the old 240x170 gave 14 of 35,
-  # which is a viewer more than an editor. The screen is 640x360, so two
-  # of these still fit side by side.
-  WINDOW_W = 420
-  WINDOW_H = 280
-  TITLE_BAR_H = 16
-  LINE_H = 10
-  CHAR_W = 6
-
-  # The status line moved to the bottom of the window: command mode (Task
-  # 6) raises its strip above it, and a command surface that grows upward
-  # from the bottom edge doesn't push the text you're looking at around.
-  STATUS_Y = WINDOW_H - LINE_H
-  TEXT_Y = TITLE_BAR_H
-
-  GUTTER_CHARS = 4
-  GUTTER_W = GUTTER_CHARS * CHAR_W
-  TEXT_X = GUTTER_W + 2
 
   DEFAULT_FILE = "v2/fsroot/Home/notes.txt"
 
@@ -155,7 +136,10 @@ class EditorApp < AcidApp
     return redraw if cmd_prompt_key(code)
     return redraw if cmd_key(code)
     @message = nil
-    @quit_armed = false
+    # Not on ESCAPE: this is the ESCAPE that reopens the strip after "q"
+    # auto-closed it (cmd_key's own ESCAPE branch handles the cancel
+    # case, where the strip was already open) -- see cmd_key's comment.
+    @quit_armed = false unless code == AcidKeys::ESCAPE
     if code == AcidKeys::ESCAPE
       cmd_open
       return redraw

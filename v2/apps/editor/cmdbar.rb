@@ -10,6 +10,8 @@
 # Prompts (find, goto, save-as) arrive in Task 7; this task is the strip
 # and the commands that act immediately.
 module EditorCmd
+  include EditorLayout
+
   # Three fixed rows, not a paging list: at 65 columns everything fits
   # with room to spare, and a fixed strip means a command never moves,
   # which is what makes the tap targets (Task 11) learnable.
@@ -91,8 +93,13 @@ module EditorCmd
       end
     elsif kind == :saveas
       return if text.length == 0
+      # Don't leave @path pointing at an unwritable file: try the new
+      # path and only keep it if the write actually succeeded, otherwise
+      # a later plain "s" would fail too with no way back to the file
+      # that did work.
+      prev_path = @path
       @path = text
-      save_file
+      @path = prev_path unless save_file
     end
     ensure_scroll
   end
@@ -146,14 +153,25 @@ module EditorCmd
   # unrecognised key closes the strip rather than sitting there swallowing
   # input -- a command surface you can get stuck inside is worse than one
   # you occasionally have to reopen.
+  # @quit_armed survives only the ESC that reopens the strip for a second
+  # "q" -- cmd_key closes the strip before cmd_run("q") runs, so the user
+  # has no way to press "q" twice without an ESC in between, and that ESC
+  # must not be mistaken for a cancel. Every OTHER way out of the strip
+  # (an explicit ESC-cancel here, or a stray non-printable key here) does
+  # disarm it, same as any other command letter (see cmd_run's preamble)
+  # or any key on the normal editing path (see editor.rb's on_key).
   def cmd_key(code)
     return false unless cmd_active?
     if code == AcidKeys::ESCAPE
       cmd_close
+      @quit_armed = false
       return true
     end
     cmd_close
-    return true if code < 32 || code > 126
+    if code < 32 || code > 126
+      @quit_armed = false
+      return true
+    end
     cmd_run(code.chr)
     true
   end
