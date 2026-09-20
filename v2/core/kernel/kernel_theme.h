@@ -13,5 +13,12 @@
 #define THEME_PANEL   0x0B1712u  /* --panel: window body, brightened for a flat renderer */
 #define THEME_TEXT    0xD4E6DBu  /* --text */
 #define THEME_MUTED   0x9DAAA3u  /* --muted */
+/* RaveOS v1's own purple (docs/BUILD_LOG.md: "EDITOR gets purple
+ * (0xB026FF)"), reused here rather than picking a fresh violet, for
+ * the same reason the five colors above are v1's verbatim. Used by
+ * file_manager.rb to mark .app.toml manifests -- the entries that
+ * launch an app when clicked -- apart from the plain files around
+ * them. */
+#define THEME_VIOLET  0xB026FFu  /* launchable/executable accent */
 
 #endif

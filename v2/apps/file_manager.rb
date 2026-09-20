@@ -11,6 +11,11 @@ class FileManagerApp < AcidApp
   BODY_BG = 0x050607       # THEME_BG -- list/preview rows
   TEXT_COLOR = 0xD4E6DB    # THEME_TEXT
   DIR_COLOR = 0x00FF66     # THEME_HARD -- accent for directory entries
+  TOML_COLOR = 0xB026FF    # THEME_VIOLET -- .app.toml manifests, i.e. the
+                           # entries that actually launch something when
+                           # clicked (activate_selected below), as opposed
+                           # to the .rb beside them, which only opens in
+                           # the editor
   SEL_BG = 0x123322        # THEME_PANEL's documented button-hover shade,
                            # reused for the selected-row highlight
 
@@ -110,11 +115,20 @@ class FileManagerApp < AcidApp
       row_bg = (i == @selected) ? SEL_BG : BODY_BG
       acid_fill_rect(0, y, WINDOW_W, ROW_H, row_bg)
       entry_label = e[:dir] ? "[#{e[:name]}]" : " #{e[:name]} (#{e[:size]}B)"
-      color = e[:dir] ? DIR_COLOR : TEXT_COLOR
+      color = entry_color(e)
       acid_draw_text(entry_label[0, 34], 2, y + 2, color, row_bg)
       y += ROW_H
       i += 1
     end
+  end
+
+  # Directories green, launchable .toml manifests violet, everything else
+  # plain text -- so a glance at v2/apps tells you which half of each
+  # <name>.rb / <name>.app.toml pair is the one that starts the app.
+  def entry_color(e)
+    return DIR_COLOR if e[:dir]
+    return TOML_COLOR if e[:name].end_with?(".toml")
+    TEXT_COLOR
   end
 
   def draw_preview
