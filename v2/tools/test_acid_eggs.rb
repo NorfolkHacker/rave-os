@@ -138,35 +138,54 @@ group("AcidEggs: dave and joe stay on screen vertically")
 
 # Run each egg many times: the height and direction are random per run, and
 # a sprite half off the top or bottom of the screen is the bug this catches.
-i = 0
-while i < 40
-  reset!
-  AcidEggs.start("dave", 0)
-  t = 0
-  while AcidEggs.active? && t < 20000
-    t += AcidEggs::TICK_MS
-    AcidEggs.step(t)
+# Both names are run, not just dave: joe has a different sprite height (8
+# rows vs dave's 10) and moves with a wobble rather than a bob, so running
+# only dave would leave joe's vertical geometry completely unexercised.
+["dave", "joe"].each do |name|
+  i = 0
+  while i < 40
+    reset!
+    AcidEggs.start(name, 0)
+    t = 0
+    while AcidEggs.active? && t < 20000
+      t += AcidEggs::TICK_MS
+      AcidEggs.step(t)
+    end
+    tops = $rects.map { |r| r[1] }
+    # The bottom edge, not just the top: a rect's stored y is its top, so
+    # checking only that against SCREEN_H would let a sprite whose bottom
+    # row hangs off the screen still pass.
+    bottoms = $rects.map { |r| r[1] + r[3] }
+    eq(tops.min >= 0, true, "#{name} never draws above the top of the screen")
+    eq(bottoms.max <= AcidEggs::SCREEN_H, true, "#{name} never draws below the bottom")
+    i += 1
   end
-  ys = $rects.map { |r| r[1] }
-  eq(ys.min >= 0, true, "dave never draws above the top of the screen")
-  eq(ys.max < AcidEggs::SCREEN_H, true, "dave never draws below the bottom")
-  i += 1
 end
 
 group("AcidEggs: maximbady bounces then shouts")
 
 reset!
 AcidEggs.start("maximbady", 0)
+# start() calls acid_configure_voice before the animation runs a single
+# tick, and that already appends a :configure entry to $notes. Without
+# clearing here, an assertion that merely checks $notes is non-empty would
+# pass even against an implementation that never bounced -- or made a sound
+# -- at all. Clearing means only sounds made DURING the animation count.
+$notes = []
 t = 0
-saw_bounce_sound = false
 while AcidEggs.active? && t < 60000
   t += AcidEggs::TICK_MS
   AcidEggs.step(t)
-  saw_bounce_sound = true if $notes.length > 0
 end
 eq(AcidEggs.active?, false, "maximbady finishes on its own")
 eq($closes, 1, "maximbady closes the overlay exactly once")
-eq(saw_bounce_sound, true, "maximbady makes a sound")
+# One boing per bounce (BOUNCE_LIMIT bounces) plus one slide when the word
+# phase begins, and both go through acid_play_note -- so at least
+# BOUNCE_LIMIT :play events is the real signature of "a sound on every
+# bounce", not just "a sound was made at some point".
+plays = $notes.select { |n| n[0] == :play }
+eq(plays.length >= AcidEggs::BOUNCE_LIMIT, true,
+   "maximbady makes a sound on every bounce (got #{plays.length} plays)")
 
 # Centring is asserted against the layout box, not against the drawn pixels:
 # both glyphs have blank columns in some of their rows, so the ink's own
