@@ -27,6 +27,13 @@ module EditorTouch
     unless pressed
       @touch_down = false
       @tap_consumed = false
+      # Not load-bearing today (every fresh press re-initialises this
+      # anyway, via `fresh ||` in touch_gutter), but leaving a gesture
+      # flag set across gestures is exactly the shape that caused the
+      # stale-mark bug this flag exists to prevent -- clear it here too
+      # so there is never a lingering "anchored" claim from a gesture
+      # that has already ended.
+      @gutter_anchored = false
       return false
     end
 
@@ -80,6 +87,12 @@ module EditorTouch
 
   def touch_status(x, y)
     return false if y < STATUS_Y
+    # Deliberately NOT guarded by cmd_prompt_active?, unlike the strip,
+    # text and gutter. On the target hardware there is no keyboard and
+    # so no ESC: a tap on the status line is the ONLY way to cancel a
+    # find/goto/save-as prompt that was opened by tapping. Blocking this
+    # target while a prompt is active would make prompts unescapable on
+    # the device this editor is for.
     if cmd_active?
       cmd_close
     else
@@ -91,6 +104,16 @@ module EditorTouch
 
   def touch_gutter(y, fresh)
     row = (y - TEXT_Y) / LINE_H + @scroll_y
+    # Same dead band as touch_text: the gutter only ever DRAWS
+    # visible_lines rows (draw_gutter stops at that same limit), so a tap
+    # in the sliver just above STATUS_Y can compute a row that is real
+    # (< line_count, so the check below alone wouldn't catch it) but was
+    # never on screen. Clamp to the last visible row BEFORE the
+    # line_count check, same order as touch_text, so a tap there selects
+    # the last line the user could actually see instead of one further
+    # down that they couldn't.
+    max_visible_row = @scroll_y + visible_lines - 1
+    row = max_visible_row if row > max_visible_row
     # The out-of-range bounds check has to come before we can decide
     # whether this row is usable, but it must NOT be allowed to skip
     # initialisation for the rest of the hold: a hold's first event can
