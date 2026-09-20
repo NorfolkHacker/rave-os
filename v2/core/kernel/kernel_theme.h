@@ -21,4 +21,14 @@
  * them. */
 #define THEME_VIOLET  0xB026FFu  /* launchable/executable accent */
 
+/* The overlay's transparent colour (see kernel_overlay.h). Every pixel an
+ * overlay leaves this colour shows whatever is underneath it instead --
+ * this codebase has no alpha compositing, and gfx_blit_canvas is a plain
+ * opaque copy, so a colour key is how a full-screen effect draws over the
+ * wallpaper and other windows without erasing them. Magenta because
+ * nothing in the five theme colours above, nor in the wallpaper's own neon
+ * palette (gfx/wallpaper_data.h), quantises onto it in RGB565 -- a sprite
+ * colour that did would punch holes in itself. */
+#define ACID_OVERLAY_KEY 0xFF00FFu
+
 #endif

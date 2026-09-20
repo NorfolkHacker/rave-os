@@ -154,6 +154,14 @@ gfx_blit_canvas( void * canvas, int x, int y )
 }
 
 void
+gfx_blit_canvas_keyed( void * canvas, int x, int y, unsigned int key )
+{
+    xSemaphoreTake( g_gfx_lock, portMAX_DELAY );
+    hal_display_blit_canvas_keyed( g_backbuffer, canvas, x, y, key );
+    xSemaphoreGive( g_gfx_lock );
+}
+
+void
 gfx_present( void )
 {
     if( g_backbuffer == NULL )

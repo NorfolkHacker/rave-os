@@ -51,6 +51,14 @@ hal_display_blit_canvas( void * target, void * canvas, int x, int y )
 }
 
 void
+hal_display_blit_canvas_keyed( void * target, void * canvas, int x, int y,
+                                unsigned int key )
+{
+    ESP_LOGI( TAG, "hal_display_blit_canvas_keyed(target=%p, canvas=%p, %d, %d, 0x%06x): stub, not drawn",
+              target, canvas, x, y, key );
+}
+
+void
 hal_display_clear_screen( unsigned int color )
 {
     ESP_LOGI( TAG, "hal_display_clear_screen(0x%06x): stub, not drawn", color );

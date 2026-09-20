@@ -10,6 +10,8 @@
 #include "kernel_window.h"
 #include "kernel_event.h"
 #include "kernel_layout.h"
+#include "kernel_overlay.h"
+#include "kernel_theme.h"
 #include "../hal/hal_input.h"
 #include "../gfx/gfx.h"
 #include "../gfx/wallpaper.h"
@@ -114,6 +116,44 @@ kernel_router_composite_frame( void )
     {
         z = win->z_order;
         gfx_blit_canvas( win->canvas, win->x, win->y );
+    }
+
+    /* Last, on top of every window: the kernel overlay, blitted with its
+     * key colour treated as transparent, so it draws over the whole screen
+     * while leaving everything it isn't actually painting visible
+     * underneath. Nothing else in this frame is keyed -- see
+     * kernel_overlay.h for why this is not a window.
+     *
+     * Read the pointer once and NULL-check THAT, rather than asking
+     * is_open() and then separately asking canvas() -- an app task can call
+     * kernel_overlay_close or kernel_overlay_release_owner in between those
+     * two calls, and the second one would then hand the compositor a NULL,
+     * which gfx_blit_canvas_keyed dereferences unconditionally (as_canvas(
+     * NULL)->pushSprite(...) in hal_display_sim.cpp is a null-this member
+     * call, i.e. a segfault of the whole OS, not just this frame). A single
+     * read can still race a close, but the worst it can hand back is a
+     * stale, non-NULL pointer to a canvas that just got marked closed --
+     * and that is harmless, because kernel_overlay never frees the canvas
+     * it allocates (see kernel_overlay.c). Blitting it one frame late just
+     * shows one extra frame of an animation that has already ended, never
+     * a use-after-free.
+     *
+     * This interleaving cannot actually happen on the sim today -- the
+     * router task runs at tskIDLE_PRIORITY + 2 (sim/sim_main.c) and every
+     * app task at tskIDLE_PRIORITY + 1 (core/kernel/kernel_spawn.c), and a
+     * single-core preemptive scheduler never runs a lower-priority task
+     * while a higher-priority one is ready -- but that is an unwritten
+     * invariant of this one build, not a guarantee this code can lean on.
+     * v2/hw runs ESP-IDF FreeRTOS, which is dual-core SMP, where an app
+     * task genuinely executes at the same instant as the router task on
+     * the other core. It is masked there today only because
+     * hal_display_create_canvas is a stub on hw that never allocates, so
+     * the overlay never opens on hw at all -- not because the race can't
+     * happen. */
+    void * overlay = kernel_overlay_canvas();
+    if( overlay != NULL )
+    {
+        gfx_blit_canvas_keyed( overlay, 0, 0, ACID_OVERLAY_KEY );
     }
 
     /* Everything above went into an offscreen back buffer, not the
