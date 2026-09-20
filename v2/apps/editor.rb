@@ -1,6 +1,7 @@
 class EditorApp < AcidApp
   include EditorLayout
   include EditorCmd
+  include EditorTouch
 
   DEFAULT_FILE = "v2/fsroot/Home/notes.txt"
 
@@ -212,6 +213,11 @@ class EditorApp < AcidApp
     x = TEXT_X + col * CHAR_W
     y = TEXT_Y + row * LINE_H
     acid_fill_rect(x, y + LINE_H - 2, CHAR_W, 2, CURSOR_COLOR)
+  end
+
+  def on_touch(x, y, pressed)
+    @message = nil if pressed
+    redraw if editor_touch(x, y, pressed)
   end
 
   def on_key(code, pressed)
