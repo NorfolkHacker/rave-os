@@ -13,7 +13,7 @@
 
 void *
 kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int closable,
-                   const char * arg )
+                   const char * arg, const char * libs )
 {
     /* Checked BEFORE creating the task, not after: xTaskCreate can start
      * the task running immediately (this is a pthread underneath, on the
@@ -65,6 +65,7 @@ kernel_spawn_app( const char * script_path, int x, int y, int w, int h, int clos
     params->redraw_done_sem = redraw_done_sem;
     params->canvas = canvas;
     params->arg = arg;
+    params->libs = libs;
     params->window_x = x;
     params->window_y = y;
     params->window_w = w;

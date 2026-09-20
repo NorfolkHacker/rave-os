@@ -10,6 +10,14 @@ struct vm_host_params
     void * redraw_done_sem;   /* opaque SemaphoreHandle_t (binary) */
     void * canvas;            /* opaque, see hal_display.h/kernel_window.h */
     const char * arg;         /* optional startup string, NULL if none -- see kernel_spawn.h */
+    /* Comma-separated list of this app's own Ruby modules, relative to
+     * v2/apps (e.g. "editor/buffer.rb, editor/hl.rb"), or NULL for an app
+     * that has none. Loaded into this VM after the shared apps/lib/*.rb
+     * set and before the app's own script, so a module can define classes
+     * the script then uses at its top level. Same ownership contract as
+     * script_path and arg: not copied here, the caller must keep it
+     * alive for the task's lifetime. */
+    const char * libs;
     int window_x;
     int window_y;
     int window_w;

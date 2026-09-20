@@ -43,6 +43,12 @@ struct launchable_app
      * user request); every other app is a singleton, see
      * find_running_task_by_path's own comment. */
     int multi;
+    /* This app's own Ruby modules, from its manifest's `libs` field --
+     * see vm_host.h. NULL for the great majority of apps, which have
+     * none. Held here rather than passed to acid_spawn_app because the
+     * registry is already the one place both launch paths (the Menu's
+     * acid_launcher_spawn and File Manager's acid_spawn_app) agree on. */
+    char * libs;
 };
 
 /* Bounded, not a Ruby-sized dynamic array -- matches this codebase's own
@@ -76,9 +82,13 @@ acid_launcher_register( mrb_state * mrb, mrb_value self )
     mrb_int name_len;
     mrb_int w, h;
     mrb_bool multi;
-    mrb_get_args( mrb, "ssiib", &path, &path_len, &name, &name_len, &w, &h, &multi );
+    char * libs;
+    mrb_int libs_len;
+    mrb_get_args( mrb, "ssiibs", &path, &path_len, &name, &name_len, &w, &h, &multi,
+                  &libs, &libs_len );
     ( void ) path_len;
     ( void ) name_len;
+    ( void ) libs_len;
 
     if( g_registered_count >= MAX_REGISTERED_APPS )
     {
@@ -95,6 +105,9 @@ acid_launcher_register( mrb_state * mrb, mrb_value self )
     slot->w = ( int ) w;
     slot->h = ( int ) h;
     slot->multi = multi ? 1 : 0;
+    /* An empty manifest field and a missing one are the same thing to
+     * vm_host, which takes NULL to mean "this app has no modules". */
+    slot->libs = ( libs[ 0 ] == '\0' ) ? NULL : dup_cstr( libs );
     g_registered_count++;
     return mrb_bool_value( 1 );
 }
@@ -139,6 +152,25 @@ is_multi_by_path( const char * path )
         }
     }
     return 0;
+}
+
+/* The registered `libs` for a script path -- the acid_spawn_app half of
+ * the same lookup is_multi_by_path does, so File Manager launching an app
+ * by path gets that app's modules exactly as the Menu does. NULL for an
+ * unregistered path, which is also the right answer: no manifest, no
+ * modules. */
+static const char *
+libs_by_path( const char * path )
+{
+    int i;
+    for( i = 0; i < g_registered_count; i++ )
+    {
+        if( strcmp( g_registered[ i ].path, path ) == 0 )
+        {
+            return g_registered[ i ].libs;
+        }
+    }
+    return NULL;
 }
 
 static mrb_value
@@ -211,7 +243,8 @@ acid_launcher_spawn( mrb_state * mrb, mrb_value self )
     int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 200 );
 
     void * task = kernel_spawn_app( g_registered[ index ].path, x, y,
-                                     g_registered[ index ].w, g_registered[ index ].h, 1, NULL );
+                                     g_registered[ index ].w, g_registered[ index ].h, 1, NULL,
+                                     g_registered[ index ].libs );
     if( task != NULL )
     {
         kernel_router_activate_window( task );
@@ -277,7 +310,8 @@ acid_spawn_app( mrb_state * mrb, mrb_value self )
     int x = 20 + ( ( n * 18 ) % 400 );
     int y = KERNEL_DESKTOP_STRIP_H + 10 + ( ( n * 18 ) % 200 );
 
-    void * task = kernel_spawn_app( path_copy, x, y, ( int ) w, ( int ) h, 1, arg_copy );
+    void * task = kernel_spawn_app( path_copy, x, y, ( int ) w, ( int ) h, 1, arg_copy,
+                                     libs_by_path( path ) );
     if( task != NULL )
     {
         kernel_router_activate_window( task );
@@ -516,7 +550,7 @@ acid_window_bindings_register( mrb_state * mrb )
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_close_window",
                                  acid_close_window, MRB_ARGS_REQ( 1 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_register",
-                                 acid_launcher_register, MRB_ARGS_REQ( 5 ) );
+                                 acid_launcher_register, MRB_ARGS_REQ( 6 ) );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_count",
                                  acid_launcher_count, MRB_ARGS_NONE() );
     mrb_define_module_function( mrb, mrb->kernel_module, "acid_launcher_path",
