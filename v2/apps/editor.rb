@@ -1,22 +1,25 @@
 class EditorApp < AcidApp
-  # Must match the kernel_spawn_app(...) call that spawns this app (Task 7)
-  # and kernel_layout.h's KERNEL_TITLE_BAR_H.
-  WINDOW_W = 240
-  WINDOW_H = 170
+  # Must match editor.app.toml and kernel_layout.h's KERNEL_TITLE_BAR_H.
+  # 420x280 gives 25 lines of 65 columns; the old 240x170 gave 14 of 35,
+  # which is a viewer more than an editor. The screen is 640x360, so two
+  # of these still fit side by side.
+  WINDOW_W = 420
+  WINDOW_H = 280
   TITLE_BAR_H = 16
   LINE_H = 10
   CHAR_W = 6
-  DEFAULT_FILE = "v2/fsroot/Home/notes.txt"
 
-  # Left gutter showing line numbers -- 4 digits is plenty for anything
-  # this OS's apps run to (the longest file in v2/apps so far is under
-  # 300 lines); a file longer than 9999 lines just loses its rightmost
-  # digit, same graceful-truncation approach every fixed-width label in
-  # this codebase already takes rather than reflowing layout for an edge
-  # case that doesn't come up in practice here.
+  # The status line moved to the bottom of the window: command mode (Task
+  # 6) raises its strip above it, and a command surface that grows upward
+  # from the bottom edge doesn't push the text you're looking at around.
+  STATUS_Y = WINDOW_H - LINE_H
+  TEXT_Y = TITLE_BAR_H
+
   GUTTER_CHARS = 4
   GUTTER_W = GUTTER_CHARS * CHAR_W
   TEXT_X = GUTTER_W + 2
+
+  DEFAULT_FILE = "v2/fsroot/Home/notes.txt"
 
   BG_COLOR = 0x0B1712      # THEME_PANEL -- status line
   BODY_BG = 0x050607       # THEME_BG -- text body
@@ -38,45 +41,40 @@ class EditorApp < AcidApp
     # the change on its next launch, no rebuild step.
     arg = acid_launch_arg
     @path = arg.empty? ? DEFAULT_FILE : arg
-    load_file
-    @cx = 0
-    @cy = 0
+    @buf = Buffer.new(read_lines)
     @scroll_y = 0
     @scroll_x = 0
+    @message = nil
   end
 
-  def load_file
-    begin
-      f = File.open(@path, "r")
-      text = f.read
-      f.close
-      @lines = text.split("\n")
-    rescue
-      @lines = [""]
-    end
-    @lines = [""] if @lines.empty?
+  def read_lines
+    f = File.open(@path, "r")
+    text = f.read
+    f.close
+    text.split("\n")
+  rescue
+    [""]
   end
 
   def save_file
-    begin
-      f = File.open(@path, "w")
-      # Trailing newline, not just lines joined by one -- POSIX text files
-      # end in one, and this app now regularly saves real source files
-      # under fsroot/App (the live v2/apps symlink), not just its own
-      # scratch notes file: saving without it was confirmed live to strip
-      # an existing app.rb's final newline on every single save, which
-      # would show up as unwanted diff noise against git history for no
-      # reason.
-      f.write(@lines.join("\n") + "\n")
-      f.close
-      @saved_flash = true
-    rescue
-      @saved_flash = false
-    end
+    f = File.open(@path, "w")
+    # Trailing newline, not just lines joined by one -- POSIX text files
+    # end in one, and this app regularly saves real source files under
+    # fsroot/App (the live v2/apps symlink): saving without it was
+    # confirmed live to strip an existing app.rb's final newline on every
+    # save, which is diff noise against git history for no reason.
+    f.write(@buf.lines.join("\n") + "\n")
+    f.close
+    @buf.mark_saved
+    @message = "saved"
+    true
+  rescue
+    @message = "save failed"
+    false
   end
 
   def visible_lines
-    (WINDOW_H - TITLE_BAR_H - LINE_H) / LINE_H
+    (STATUS_Y - TEXT_Y) / LINE_H
   end
 
   def visible_cols
@@ -91,154 +89,99 @@ class EditorApp < AcidApp
   def redraw
     acid_clear_user_area
     acid_draw_window_frame(window_title)
-    draw_status
     draw_gutter
     draw_lines
     draw_cursor
+    draw_status
     acid_draw_window_border
   end
 
   def draw_status
-    acid_fill_rect(0, TITLE_BAR_H, WINDOW_W, LINE_H, BG_COLOR)
-    left = @saved_flash ? "saved" : file_label
-    right = "#{@cy + 1},#{@cx + 1}  #{@lines.length}L"
-    acid_draw_text(left[0, 20], 2, TITLE_BAR_H + 1, STATUS_COLOR, BG_COLOR)
-    acid_draw_text(right, WINDOW_W - right.length * CHAR_W - 2, TITLE_BAR_H + 1, STATUS_COLOR, BG_COLOR)
+    acid_fill_rect(0, STATUS_Y, WINDOW_W, LINE_H, BG_COLOR)
+    left = @message ? @message : (file_label + (@buf.modified? ? " *" : ""))
+    right = "#{@buf.cy + 1},#{@buf.cx + 1}  #{@buf.line_count}L"
+    acid_draw_text(left[0, 28], 2, STATUS_Y + 1, STATUS_COLOR, BG_COLOR)
+    acid_draw_text(right, WINDOW_W - right.length * CHAR_W - 2, STATUS_Y + 1,
+                   STATUS_COLOR, BG_COLOR)
   end
 
   def draw_gutter
-    y = TITLE_BAR_H + LINE_H
-    acid_fill_rect(0, y, GUTTER_W, WINDOW_H - y, GUTTER_BG)
+    acid_fill_rect(0, TEXT_Y, GUTTER_W, STATUS_Y - TEXT_Y, GUTTER_BG)
     i = 0
     while i < visible_lines
       idx = @scroll_y + i
-      break if idx >= @lines.length
-      num = ( idx + 1 ).to_s
-      acid_draw_text(num, GUTTER_W - num.length * CHAR_W - 2, y + i * LINE_H + 1, GUTTER_COLOR, GUTTER_BG)
+      break if idx >= @buf.line_count
+      num = (idx + 1).to_s
+      acid_draw_text(num, GUTTER_W - num.length * CHAR_W - 2,
+                     TEXT_Y + i * LINE_H + 1, GUTTER_COLOR, GUTTER_BG)
       i += 1
     end
   end
 
   def draw_lines
-    y = TITLE_BAR_H + LINE_H
     i = 0
     while i < visible_lines
       idx = @scroll_y + i
-      text = idx < @lines.length ? @lines[idx] : ""
+      y = TEXT_Y + i * LINE_H
       acid_fill_rect(TEXT_X, y, WINDOW_W - TEXT_X, LINE_H, BODY_BG)
-      visible_text = text[@scroll_x, visible_cols] || ""
-      acid_draw_text(visible_text, TEXT_X, y + 1, TEXT_COLOR, BODY_BG)
-      y += LINE_H
+      if idx < @buf.line_count
+        text = @buf.line(idx)
+        visible_text = text[@scroll_x, visible_cols] || ""
+        acid_draw_text(visible_text, TEXT_X, y + 1, TEXT_COLOR, BODY_BG)
+      end
       i += 1
     end
   end
 
   def draw_cursor
-    row = @cy - @scroll_y
+    row = @buf.cy - @scroll_y
     return if row < 0 || row >= visible_lines
-    col = @cx - @scroll_x
+    col = @buf.cx - @scroll_x
     return if col < 0 || col >= visible_cols
     x = TEXT_X + col * CHAR_W
-    y = TITLE_BAR_H + LINE_H + row * LINE_H
+    y = TEXT_Y + row * LINE_H
     acid_fill_rect(x, y + LINE_H - 2, CHAR_W, 2, CURSOR_COLOR)
   end
 
   def on_key(code, pressed)
     return unless pressed
-    @saved_flash = false
-    if code == AcidKeys::ESCAPE
-      save_file
-    elsif code == AcidKeys::UP
-      move_cursor(0, -1)
+    @message = nil
+    if code == AcidKeys::UP
+      @buf.move(0, -1)
     elsif code == AcidKeys::DOWN
-      move_cursor(0, 1)
+      @buf.move(0, 1)
     elsif code == AcidKeys::LEFT
-      move_cursor(-1, 0)
+      @buf.move(-1, 0)
     elsif code == AcidKeys::RIGHT
-      move_cursor(1, 0)
+      @buf.move(1, 0)
     elsif code == AcidKeys::ENTER
-      split_line
+      @buf.split_line
     elsif code == AcidKeys::BACKSPACE
-      backspace
+      @buf.backspace
+    elsif code == AcidKeys::DELETE
+      @buf.delete_forward
+    elsif code == AcidKeys::TAB
+      # Two spaces, not a tab character: every width calculation in this
+      # app counts characters, and a literal tab would make the cursor
+      # column and the drawn column disagree from that point on.
+      @buf.insert_text("  ")
     elsif code >= 32 && code <= 126
-      insert_char(code)
+      @buf.insert_char(code.chr)
     end
     ensure_scroll
     redraw
   end
 
-  def current_line
-    @lines[@cy]
-  end
-
-  def move_cursor(dx, dy)
-    if dy != 0
-      @cy += dy
-      @cy = 0 if @cy < 0
-      @cy = @lines.length - 1 if @cy >= @lines.length
-      @cx = current_line.length if @cx > current_line.length
-    end
-    if dx != 0
-      @cx += dx
-      if @cx < 0
-        if @cy > 0
-          @cy -= 1
-          @cx = current_line.length
-        else
-          @cx = 0
-        end
-      elsif @cx > current_line.length
-        if @cy < @lines.length - 1
-          @cy += 1
-          @cx = 0
-        else
-          @cx = current_line.length
-        end
-      end
-    end
-  end
-
-  def insert_char(code)
-    line = current_line
-    ch = code.chr
-    @lines[@cy] = line[0, @cx] + ch + line[@cx, line.length - @cx]
-    @cx += 1
-  end
-
-  def split_line
-    line = current_line
-    before = line[0, @cx]
-    after = line[@cx, line.length - @cx]
-    @lines[@cy] = before
-    @lines.insert(@cy + 1, after)
-    @cy += 1
-    @cx = 0
-  end
-
-  def backspace
-    if @cx > 0
-      line = current_line
-      @lines[@cy] = line[0, @cx - 1] + line[@cx, line.length - @cx]
-      @cx -= 1
-    elsif @cy > 0
-      prev_len = @lines[@cy - 1].length
-      @lines[@cy - 1] = @lines[@cy - 1] + @lines[@cy]
-      @lines.delete_at(@cy)
-      @cy -= 1
-      @cx = prev_len
-    end
-  end
-
   def ensure_scroll
-    if @cy < @scroll_y
-      @scroll_y = @cy
-    elsif @cy >= @scroll_y + visible_lines
-      @scroll_y = @cy - visible_lines + 1
+    if @buf.cy < @scroll_y
+      @scroll_y = @buf.cy
+    elsif @buf.cy >= @scroll_y + visible_lines
+      @scroll_y = @buf.cy - visible_lines + 1
     end
-    if @cx < @scroll_x
-      @scroll_x = @cx
-    elsif @cx >= @scroll_x + visible_cols
-      @scroll_x = @cx - visible_cols + 1
+    if @buf.cx < @scroll_x
+      @scroll_x = @buf.cx
+    elsif @buf.cx >= @scroll_x + visible_cols
+      @scroll_x = @buf.cx - visible_cols + 1
     end
   end
 end

@@ -197,8 +197,8 @@ class FileManagerApp < AcidApp
   # the same convention this codebase already uses for other cross-file
   # constants (e.g. desktop.rb's SCREEN_W).
   EDITOR_PATH = "v2/apps/editor.rb"
-  EDITOR_W = 240
-  EDITOR_H = 170
+  EDITOR_W = 420
+  EDITOR_H = 280
 
   def activate_selected
     entry = @entries[@selected]
