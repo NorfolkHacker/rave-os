@@ -1,5 +1,0 @@
-name = Overlay Probe
-w = 150
-h = 70
-menu = false
-desc = Manual test fixture for the kernel overlay
