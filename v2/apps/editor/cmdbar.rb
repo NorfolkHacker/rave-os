@@ -215,6 +215,8 @@ module EditorCmd
       cmd_prompt_open(:saveas, "save as")
     elsif ch == "q"
       cmd_quit
+    elsif ch == "!"
+      cmd_run_file
     elsif ch == "h"
       @hl_on = !@hl_on
       @message = @hl_on ? "highlight on" : "highlight off"
@@ -224,6 +226,51 @@ module EditorCmd
       @message = "no command '#{ch}'"
     end
     ensure_scroll
+  end
+
+  DEFAULT_RUN_W = 240
+  DEFAULT_RUN_H = 170
+
+  # Save, then launch the file being edited as a live app window. The
+  # whole point of this editor is that fsroot/App is a real symlink to
+  # v2/apps, so a change to an app's source is live on its next launch
+  # with no rebuild step -- this makes that a two-keystroke loop instead
+  # of a trip through the File Manager.
+  def cmd_run_file
+    unless @path.end_with?(".rb")
+      @message = "not a ruby file"
+      return
+    end
+    return unless save_file
+    w, h = run_geometry
+    acid_spawn_app(@path, w, h, "")
+    @message = "running #{file_label}"
+  end
+
+  # The app's own manifest decides its window size, exactly as the Menu
+  # and File Manager do. A .rb with no manifest beside it is still worth
+  # running -- it just gets a default-sized window.
+  def run_geometry
+    toml = @path[0, @path.length - 3] + ".app.toml"
+    f = File.open(toml, "r")
+    text = f.read
+    f.close
+    w = nil
+    h = nil
+    text.split("\n").each do |line|
+      line = line.strip
+      next if line.empty? || line.start_with?("#")
+      eq = line.index("=")
+      next unless eq
+      key = line[0, eq].strip
+      value = line[eq + 1, line.length - eq - 1].strip
+      w = value.to_i if key == "w"
+      h = value.to_i if key == "h"
+    end
+    return [DEFAULT_RUN_W, DEFAULT_RUN_H] if w.nil? || h.nil? || w < 1 || h < 1
+    [w, h]
+  rescue
+    [DEFAULT_RUN_W, DEFAULT_RUN_H]
   end
 
   # Two presses to lose unsaved work, and the second one has to be the
