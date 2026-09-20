@@ -41,26 +41,34 @@ module EditorLayout
   # comment above on why this module exists. Living here, in the one
   # module both sides already include, is what makes it visible to both.
   #
-  # Suffixes, not full paths, matched with end_with?: the same file is
-  # reachable both as v2/apps/editor.rb and, through the fsroot/App
-  # symlink to v2/apps, as v2/fsroot/App/editor.rb, and a suffix match
-  # recognises both with no need to resolve the symlink -- there's no
-  # realpath binding in this mruby, and hardcoding a comparison that only
-  # works on the sim's real filesystem while doing nothing on the
-  # hardware target's stub FS would be worse than this explicit list.
-  # Each entry leads with "/" so "editor.rb" doesn't also match some
-  # unrelated file that merely ends in those letters, e.g. "xeditor.rb".
-  OWN_SOURCE_SUFFIXES = [
-    "/editor.rb",
-    "/editor/buffer.rb",
-    "/editor/hl.rb",
-    "/editor/cmdbar.rb",
-    "/editor/layout.rb",
-    "/editor/touch.rb",
-    "/lib/acid_app.rb",
+  # Anchored to the two roots this file can actually be reached through
+  # -- v2/apps (canonical) and v2/fsroot/App (the live symlink to it) --
+  # not a bare filename-tail suffix. A bare suffix match ("ends with
+  # /editor.rb") was tried first and shipped a real bug: a user's OWN
+  # script at v2/fsroot/Home/editor.rb, or v2/fsroot/Home/lib/acid_app.rb,
+  # also ends with those letters, so it got a spurious .bak on every save
+  # and ESC ! refused to run it with a message about the EDITOR's own
+  # source -- baffling on a text-editing OS where naming a script
+  # "editor.rb" is entirely plausible. Stripping a known root first and
+  # comparing the REST against the exact relative path list means a file
+  # under fsroot/Home can never match no matter what it's named, while
+  # both real forms of each own-source file still do.
+  OWN_SOURCE_ROOTS = ["v2/apps/", "v2/fsroot/App/"]
+  OWN_SOURCE_RELATIVE_PATHS = [
+    "editor.rb",
+    "editor/buffer.rb",
+    "editor/hl.rb",
+    "editor/cmdbar.rb",
+    "editor/layout.rb",
+    "editor/touch.rb",
+    "lib/acid_app.rb",
   ]
 
   def own_source?(path)
-    OWN_SOURCE_SUFFIXES.any? { |suffix| path.end_with?(suffix) }
+    OWN_SOURCE_ROOTS.any? do |root|
+      next false unless path.start_with?(root)
+      rel = path[root.length, path.length - root.length]
+      OWN_SOURCE_RELATIVE_PATHS.include?(rel)
+    end
   end
 end

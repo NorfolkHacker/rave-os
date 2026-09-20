@@ -248,28 +248,16 @@ class FileManagerApp < AcidApp
     end
     return unless fields["w"] && fields["h"]
     rb_path = "#{@dir}/#{name[0, name.length - ".app.toml".length]}.rb"
+    # canonical_app_path is defined on AcidApp (v2/apps/lib/acid_app.rb),
+    # not here -- browsing to a manifest under fsroot/App (which this app
+    # itself makes possible) built rb_path still under fsroot/App, and
+    # the launcher registry only matches the canonical v2/apps form (see
+    # AcidApp's comment on why). A bare call here resolves through self's
+    # actual ancestor chain at runtime (FileManagerApp < AcidApp), the
+    # same way cmdbar.rb's bare `quit!` call already relies on AcidApp
+    # without EditorCmd redefining it -- no shared module needed for a
+    # method the way OWN_SOURCE_SUFFIXES needed one for a constant.
     acid_spawn_app(canonical_app_path(rb_path), fields["w"].to_i, fields["h"].to_i, "")
-  end
-
-  # v2/fsroot/App is a real symlink to v2/apps -- browsing here and
-  # clicking a manifest under fsroot/App (as this app itself makes
-  # possible) built rb_path from @dir, i.e. still under fsroot/App.
-  # window_binding.c's is_multi_by_path/libs_by_path match the launch
-  # path against the registry by exact strcmp against its canonical
-  # v2/apps form, so an fsroot/App path matches neither and the spawned
-  # VM silently loads none of its libs (task 12's brief). Normalising
-  # here, in Ruby, rather than with a C-side realpath: the hw target's
-  # filesystem layer is a stub, and a canonicalisation that only works on
-  # the sim would be worse than this explicit, commented mapping of the
-  # one symlink that exists. (Same fix, same rationale, as EditorCmd's
-  # canonical_app_path -- duplicated rather than shared since the two
-  # apps have no common ancestry to hang a shared helper on.)
-  FSROOT_APP_PREFIX = "v2/fsroot/App/"
-  CANONICAL_APP_PREFIX = "v2/apps/"
-
-  def canonical_app_path(path)
-    return path unless path.start_with?(FSROOT_APP_PREFIX)
-    CANONICAL_APP_PREFIX + path[FSROOT_APP_PREFIX.length, path.length - FSROOT_APP_PREFIX.length]
   end
 
   def go_up
