@@ -220,6 +220,81 @@ eq(b.find("zzz", 0, 0), nil, "find reports no match")
 eq(b.find("", 0, 0), nil, "find on an empty query is nil")
 eq(b.find("beta", 1, 0), [6, 0], "find matches later on the cursor's own line")
 
+group("Buffer: paste over selection (two-record behaviour)")
+
+# Pasting over an active selection takes two undo records: one for
+# delete_selection, one for insert_text. This is intentional: after one undo,
+# the buffer is in the post-delete state, which is reachable by pressing
+# Delete alone, so it is a coherent state, not corrupt.
+b = Buffer.new(["hello world"])
+b.set_cursor(0, 0)
+b.toggle_mark
+b.set_cursor(5, 0)
+b.copy
+b.clear_mark
+b.set_cursor(6, 0)
+b.toggle_mark
+b.set_cursor(11, 0)
+b.paste
+eq(b.lines, ["hello hello"], "paste replaces the selection")
+b.undo
+eq(b.lines, ["hello "], "undo of a replacing paste steps back to the post-delete state")
+b.undo
+eq(b.lines, ["hello world"], "a second undo restores the replaced text")
+
+group("Buffer: stale mark coordinates")
+
+# When the buffer mutates elsewhere, mark coordinates become stale.
+# Clamping at read time prevents selected_text and delete_selection from
+# producing nil or corrupting the buffer.
+
+# Reproduction 1: backspace shrinks the line the mark sits on
+b = Buffer.new(["short", "target line here", "third"])
+b.set_cursor(16, 1)
+b.toggle_mark
+b.set_cursor(10, 1)
+10.times { b.backspace }
+# Mark is stale at (16, 1), line 1 now has 6 chars ("e here")
+# After clamping mark_x to 6: selection is [0, 1, 6, 1] = "e here"
+selected = b.selected_text
+eq(selected.nil?, false, "selected_text with stale mark is not nil")
+eq(selected, "e here", "selected_text clamping gives correct range")
+eq(b.delete_selection, true, "delete_selection with stale mark succeeds")
+eq(b.lines, ["short", "", "third"], "delete_selection with stale mark removes clamped range")
+b.undo
+eq(b.lines, ["short", "e here", "third"], "undo of delete with stale mark restores")
+
+# Reproduction 2: insert before the mark
+b = Buffer.new(["hello world"])
+b.set_cursor(6, 0)
+b.toggle_mark
+b.set_cursor(0, 0)
+b.insert_text("XXX ")
+# Mark is stale at (6, 0), cursor at (4, 0), line is now "XXX hello world"
+# Clamped mark is (6, 0), so selection is [4, 0, 6, 0] = "he"
+selected = b.selected_text
+eq(selected.nil?, false, "selected_text after insert-before-mark is not nil")
+eq(selected, "he", "selected_text clamping gives in-range result")
+
+# Reproduction 3: mark left past the end of the buffer
+b = Buffer.new(["line 1", "line 2", "line 3"])
+b.set_cursor(6, 2)
+b.toggle_mark
+b.set_cursor(0, 0)
+# Remove lines 1 and 2, leaving just "line 3", but don't update the mark
+b.delete_range(0, 0, 0, 2)
+eq(b.lines, ["line 3"], "deleted lines 0-1")
+# Mark is stale at (6, 2), but only line 0 exists now
+# After clamping: mark_y clamps to 0, mark_x stays 6 (line length is 6)
+# Cursor is at (0, 0), so selection is [0, 0, 6, 0]
+r = b.selection_range
+eq(r.nil?, false, "selection_range with out-of-range mark_y clamped and valid")
+selected = b.selected_text
+eq(selected.nil?, false, "selected_text with out-of-range mark_y is not nil")
+eq(selected, "line 3", "selected_text covers the clamped range")
+b.undo
+eq(b.lines, ["line 1", "line 2", "line 3"], "undo restores the deleted lines")
+
 # ----------------------------------------------------------------- done
 
 raise "#{$fails} failure(s)" if $fails > 0

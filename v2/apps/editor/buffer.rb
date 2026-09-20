@@ -296,13 +296,26 @@ class Buffer
   # [sx, sy, ex, ey] in document order, or nil when there's no mark or the
   # mark is exactly on the cursor -- so no caller has to ask which end
   # came first, and none has to special-case a zero-width span.
+  #
+  # Clamps stale mark coordinates to keep them in range, in case the buffer
+  # mutated elsewhere and left the mark invalid. Read-time clamping only; the
+  # mark is not updated. This prevents selected_text and delete_selection from
+  # producing nil from String#[] or corrupting the buffer.
   def selection_range
     return nil unless mark_set?
-    return nil if @mark_x == @cx && @mark_y == @cy
-    if @mark_y < @cy || (@mark_y == @cy && @mark_x < @cx)
-      [@mark_x, @mark_y, @cx, @cy]
+    # Clamp mark_y into range, then clamp mark_x to that line's length
+    my = @mark_y
+    my = 0 if my < 0
+    my = @lines.length - 1 if my >= @lines.length
+    mx = @mark_x
+    mx = 0 if mx < 0
+    mx = line(my).length if mx > line(my).length
+    # Use clamped coordinates for comparison and return
+    return nil if mx == @cx && my == @cy
+    if my < @cy || (my == @cy && mx < @cx)
+      [mx, my, @cx, @cy]
     else
-      [@cx, @cy, @mark_x, @mark_y]
+      [@cx, @cy, mx, my]
     end
   end
 
