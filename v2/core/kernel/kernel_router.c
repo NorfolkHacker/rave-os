@@ -10,6 +10,8 @@
 #include "kernel_window.h"
 #include "kernel_event.h"
 #include "kernel_layout.h"
+#include "kernel_overlay.h"
+#include "kernel_theme.h"
 #include "../hal/hal_input.h"
 #include "../gfx/gfx.h"
 #include "../gfx/wallpaper.h"
@@ -114,6 +116,16 @@ kernel_router_composite_frame( void )
     {
         z = win->z_order;
         gfx_blit_canvas( win->canvas, win->x, win->y );
+    }
+
+    /* Last, on top of every window: the kernel overlay, blitted with its
+     * key colour treated as transparent, so it draws over the whole screen
+     * while leaving everything it isn't actually painting visible
+     * underneath. Nothing else in this frame is keyed -- see
+     * kernel_overlay.h for why this is not a window. */
+    if( kernel_overlay_is_open() )
+    {
+        gfx_blit_canvas_keyed( kernel_overlay_canvas(), 0, 0, ACID_OVERLAY_KEY );
     }
 
     /* Everything above went into an offscreen back buffer, not the

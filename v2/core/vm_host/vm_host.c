@@ -24,6 +24,7 @@
 #include "../kernel/kernel_app_context.h"
 #include "../kernel/kernel_window.h"
 #include "../kernel/kernel_audio.h"
+#include "../kernel/kernel_overlay.h"
 #include "../kernel/kernel_router.h"
 
 /* Loaded into every app's VM before its own script, so AcidApp is always
@@ -326,6 +327,13 @@ vm_host_task( void * pvParameters )
 
     kernel_router_clear_focus( ( void * ) xTaskGetCurrentTaskHandle() );
     kernel_audio_release_owner( ( void * ) xTaskGetCurrentTaskHandle() );
+
+    /* Same reasoning as the audio release directly above: an app that held
+     * the overlay when it exited -- normally, or on an unhandled Ruby
+     * exception -- must not leave it claimed by a task that no longer
+     * exists, which would wedge it shut for every other app forever. A
+     * no-op for the overwhelming majority of apps, which never touch it. */
+    kernel_overlay_release_owner( ( void * ) xTaskGetCurrentTaskHandle() );
     vQueueDelete( params->queue );
 
     /* vPortFree, not free -- params was allocated with pvPortMalloc in
