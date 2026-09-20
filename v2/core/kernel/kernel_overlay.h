@@ -21,8 +21,17 @@
  * Not thread-safe against itself: one caller at a time, which is what the
  * single acid_overlay_* binding surface gives. Drawing into the canvas from
  * an app task while the router task blits it is the same benign race every
- * window canvas already has -- the blit is a plain memory copy, so the
- * worst case is one frame showing a sprite mid-move. */
+ * window canvas already has -- the blit is a plain memory copy, so it never
+ * tears mid-pixel -- but it is not as mild as "a sprite mid-move": every
+ * animation frame is acid_overlay_clear (a full-screen key fill) followed
+ * by roughly thirty separate acid_overlay_fill_rect calls, each taking and
+ * releasing the gfx lock independently, so there is a real window where the
+ * canvas is fully cleared to key with none of the sprite's rects drawn yet.
+ * A composite landing inside that window blits an all-key canvas, so the
+ * worst case is one frame showing NO SPRITE AT ALL -- the sprite blinks out
+ * for a frame, not "mid-move". Still acceptable: that draw burst is tens of
+ * microseconds against the router's ~16ms tick, and every window canvas in
+ * this OS already draws with this identical clear-then-draw pattern. */
 
 /* Claims the overlay for `owner_task`, allocating its canvas on first use
  * and clearing it to ACID_OVERLAY_KEY. Returns 1, or 0 if ANOTHER task
