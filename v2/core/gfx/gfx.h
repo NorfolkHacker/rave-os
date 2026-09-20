@@ -28,6 +28,11 @@ void gfx_clear_screen( unsigned int color );
  * caller. Nothing drawn here is visible until gfx_present. */
 void gfx_blit_canvas( void * canvas, int x, int y );
 
+/* As gfx_blit_canvas, but pixels equal to `key` are skipped -- see
+ * hal_display.h. Used only by the compositor, only for the kernel overlay
+ * (kernel_overlay.h). */
+void gfx_blit_canvas_keyed( void * canvas, int x, int y, unsigned int key );
+
 /* Makes the frame built up by gfx_clear_screen/gfx_blit_canvas visible,
  * as a single copy of the whole back buffer onto the real screen.
  *

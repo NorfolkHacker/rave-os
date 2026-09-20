@@ -122,6 +122,19 @@ extern "C" void hal_display_blit_canvas( void * target, void * canvas, int x, in
     as_canvas( canvas )->pushSprite( as_canvas( target ), x, y );
 }
 
+extern "C" void hal_display_blit_canvas_keyed( void * target, void * canvas, int x, int y,
+                                                unsigned int key )
+{
+    /* LovyanGFX's own transparent-colour overload (LGFX_Sprite.hpp) runs
+     * `key` through the same _write_conv.convert path every fillRect colour
+     * in this project already goes through, so a key written as 0xFF00FF
+     * matches pixels filled as 0xFF00FF, with no separate RGB565
+     * translation needed at the call site. Same target convention as
+     * hal_display_blit_canvas above. */
+    if( target == NULL ) { as_canvas( canvas )->pushSprite( &lcd, x, y, key ); return; }
+    as_canvas( canvas )->pushSprite( as_canvas( target ), x, y, key );
+}
+
 extern "C" void hal_input_poll_touch( int * x, int * y, bool * pressed )
 {
     lgfx::v1::touch_point_t tp;

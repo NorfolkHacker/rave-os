@@ -30,6 +30,15 @@ void hal_display_draw_text( void * target, int x, int y, const char * str, unsig
  * see gfx.h's gfx_present and kernel_router_composite_frame. */
 void hal_display_blit_canvas( void * target, void * canvas, int x, int y );
 
+/* As hal_display_blit_canvas, but every pixel of `canvas` equal to `key` is
+ * left untouched in `target` instead of copied. The one thing in this
+ * codebase that isn't an opaque copy: it is how the kernel's overlay
+ * (kernel_overlay.h) draws over the whole screen without erasing the
+ * wallpaper and windows it passes over. `key` is an RGB888 literal, the
+ * same as every other colour argument here. */
+void hal_display_blit_canvas_keyed( void * target, void * canvas, int x, int y,
+                                     unsigned int key );
+
 /* Fills the entire physical screen with one color, regardless of window
  * boundaries -- used by the router's own compositor before blitting any
  * window canvases on top. Each target knows its own real resolution;
