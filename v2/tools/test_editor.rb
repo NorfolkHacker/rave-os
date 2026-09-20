@@ -297,5 +297,51 @@ eq(b.lines, ["line 1", "line 2", "line 3"], "undo restores the deleted lines")
 
 # ----------------------------------------------------------------- done
 
+group("Hl: tokenizer")
+
+def toks(line)
+  Hl.tokenize(line).map { |t| [t[0], t[1]] }
+end
+
+def colors_of(line, word)
+  Hl.tokenize(line).each { |t| return t[1] if t[0] == word }
+  nil
+end
+
+eq(Hl.tokenize("").length, 0, "an empty line has no tokens")
+
+eq(Hl.tokenize("abc").map { |t| t[0] }.join(""), "abc",
+   "tokens cover the whole line")
+eq(Hl.tokenize("x = foo(1, :bar) # note").map { |t| t[0] }.join(""),
+   "x = foo(1, :bar) # note", "tokens cover a busy line exactly")
+
+eq(colors_of("def hi", "def"), Hl::KEYWORD, "def is a keyword")
+eq(colors_of("ending = 1", "ending"), Hl::PLAIN,
+   "a keyword inside an identifier is not a keyword")
+eq(colors_of("x.end", "end"), Hl::KEYWORD, "end after a dot still reads as one")
+
+eq(colors_of("s = \"hi\"", "\"hi\""), Hl::STRING, "double-quoted string")
+eq(colors_of("s = 'hi'", "'hi'"), Hl::STRING, "single-quoted string")
+eq(colors_of("s = \"a#b\"", "\"a#b\""), Hl::STRING,
+   "a # inside a string does not start a comment")
+eq(colors_of("s = \"a\\\"b\"", "\"a\\\"b\""), Hl::STRING,
+   "an escaped quote does not end the string")
+
+eq(colors_of("x # note", "# note"), Hl::COMMENT, "comment to end of line")
+eq(colors_of("# whole", "# whole"), Hl::COMMENT, "whole-line comment")
+
+eq(colors_of("x = :sym", ":sym"), Hl::SYMBOL, "symbol")
+eq(colors_of("A::B", "::"), Hl::PLAIN, ":: is not a symbol")
+eq(colors_of("A::B", "A"), Hl::SYMBOL, "a constant shares the symbol colour")
+eq(colors_of("AcidKeys::ESCAPE", "ESCAPE"), Hl::SYMBOL,
+   "the name after :: is a constant, not a symbol")
+
+eq(colors_of("@ivar = 1", "@ivar"), Hl::IVAR, "instance variable")
+eq(colors_of("x = 42", "42"), Hl::NUMBER, "number")
+eq(colors_of("x = 0xFF66", "0xFF66"), Hl::NUMBER, "hex literal reads as one number")
+eq(colors_of("1.upto(3)", "1"), Hl::NUMBER,
+   "a number before a method call does not swallow the dot")
+eq(colors_of("x = 1.5", "1.5"), Hl::NUMBER, "a decimal keeps its point")
+
 raise "#{$fails} failure(s)" if $fails > 0
 puts "all passed"
