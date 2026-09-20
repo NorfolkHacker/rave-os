@@ -64,6 +64,7 @@ add_executable(acidos_sim
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_window.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_spawn.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_router.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_overlay.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/kernel/kernel_audio.c
     ${LGFX_SOURCES}
 )

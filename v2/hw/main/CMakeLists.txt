@@ -21,6 +21,7 @@ idf_component_register(
         ../../core/kernel/kernel_window.c
         ../../core/kernel/kernel_spawn.c
         ../../core/kernel/kernel_router.c
+        ../../core/kernel/kernel_overlay.c
         ../../core/kernel/kernel_audio.c
     INCLUDE_DIRS
         ../../core/vm_host
