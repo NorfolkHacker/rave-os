@@ -26,6 +26,29 @@ static int g_drag_offset_x = 0;
 static int g_drag_offset_y = 0;
 static bool g_was_pressed = false;
 static void * g_desktop_task = NULL;
+
+/* The window a touch gesture began on, held until the finger lifts --
+ * pointer capture, the same shape g_drag_task already gives a title-bar
+ * drag, extended to ordinary taps.
+ *
+ * Without it, the held and release branches below re-ran
+ * kernel_window_find_at on EVERY ~16ms tick, so a gesture was delivered
+ * to whatever happened to be under the finger at that instant rather
+ * than to the window it started on. Three things went wrong, all
+ * reported as "taps behaving erratically":
+ *
+ *   - Tapping a Menu entry spawns an app UNDER the finger, and the rest
+ *     of that same tap landed inside the new window. Reproduced every
+ *     time: Menu -> File Manager opened already navigated into
+ *     v2/fsroot/Bin, because the tail of the tap hit its file list.
+ *   - Dragging from one window across another delivered touches to the
+ *     second one mid-gesture.
+ *   - Tapping a close button sent the remainder of the tap to whatever
+ *     the closed window had been covering.
+ *
+ * A gesture belongs to one window for its whole life. NULL means no
+ * gesture is in progress. */
+static void * g_touch_task = NULL;
 static int g_last_x = 0;
 static int g_last_y = 0;
 
@@ -144,6 +167,14 @@ kernel_router_close_window( void * task )
          * input path in this file already has. */
         g_focus_task = NULL;
     }
+    if( g_touch_task == task )
+    {
+        /* Same reasoning as the focus handle above: don't leave a dead
+         * task as the gesture's owner. kernel_window_by_task would return
+         * NULL for it anyway, but clearing it here keeps "a gesture is in
+         * progress" and "that window still exists" from disagreeing. */
+        g_touch_task = NULL;
+    }
     /* No repaint call needed -- kernel_window_unregister already marked
      * this window not-in-use (gfx_mark_dirty included), so the very next
      * composite tick simply stops blitting it, exposing whatever's
@@ -222,7 +253,11 @@ kernel_router_poll( void )
     bool fresh_release = !pressed && g_was_pressed;
     g_was_pressed = pressed;
 
-    if( g_desktop_task != NULL && g_drag_mode == DRAG_NONE && g_last_y < KERNEL_DESKTOP_STRIP_H )
+    /* g_touch_task == NULL in the condition: the strip's special case
+     * claims a gesture that BEGINS in it, never one already owned by a
+     * window whose finger has since wandered up here. */
+    if( g_desktop_task != NULL && g_drag_mode == DRAG_NONE && g_touch_task == NULL
+        && g_last_y < KERNEL_DESKTOP_STRIP_H )
     {
         struct kernel_window * desktop = kernel_window_by_task( g_desktop_task );
         if( desktop != NULL && ( fresh_press || pressed || fresh_release ) )
@@ -308,13 +343,19 @@ kernel_router_poll( void )
         }
 
         kernel_router_activate_window( win->task );
+        g_touch_task = win->task;
         send_event( win, KERNEL_EVENT_TOUCH, rel_x, rel_y, 1 );
         return;
     }
 
     if( pressed )
     {
-        struct kernel_window * win = kernel_window_find_at( x, y );
+        /* Deliberately NOT kernel_window_find_at( x, y ) -- see
+         * g_touch_task. A gesture with no owner (it began on a close
+         * button, or in the strip, or over nothing) delivers nothing
+         * rather than leaking into whichever window is under the finger
+         * now. */
+        struct kernel_window * win = kernel_window_by_task( g_touch_task );
         if( win != NULL )
         {
             send_event( win, KERNEL_EVENT_TOUCH, x - win->x, y - win->y, 1 );
@@ -324,11 +365,17 @@ kernel_router_poll( void )
 
     if( fresh_release )
     {
-        struct kernel_window * win = kernel_window_find_at( g_last_x, g_last_y );
+        /* The release belongs to the window that got the press, even if
+         * the finger has since moved off it -- an app that tracks its own
+         * press/release pairs (editor/touch.rb) would otherwise never see
+         * the end of a gesture that wandered, and would treat the next
+         * unrelated press as a continuation of it. */
+        struct kernel_window * win = kernel_window_by_task( g_touch_task );
         if( win != NULL )
         {
             send_event( win, KERNEL_EVENT_TOUCH, g_last_x - win->x, g_last_y - win->y, 0 );
         }
+        g_touch_task = NULL;
     }
 }
 
