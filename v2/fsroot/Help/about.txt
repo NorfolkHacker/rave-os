@@ -1,7 +1,6 @@
 acid OS v2
 
-FreeRTOS + mruby, one
-Ruby VM per app window.
+FreeRTOS + mruby.
 
 Menu (top left) opens
 the app launcher.
