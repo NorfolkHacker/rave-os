@@ -17,7 +17,7 @@ class Buffer
   # mysterious allocation failure hours later.
   UNDO_MAX = 200
 
-  attr_reader :cx, :cy
+  attr_reader :cx, :cy, :clipboard
 
   def initialize(lines)
     @lines = (lines.nil? || lines.empty?) ? [""] : lines
@@ -32,6 +32,9 @@ class Buffer
     @group_closed = false
     @dirty = []
     @dirty_all = true
+    @mark_x = nil
+    @mark_y = nil
+    @clipboard = ""
   end
 
   def lines
@@ -262,6 +265,117 @@ class Buffer
     @dirty = []
     @dirty_all = false
     out
+  end
+
+  # ---- selection ----
+  #
+  # A mark, not shift-and-arrow: Shift is resolved into the character at
+  # translate time (hal_input_sim.cpp), so a shifted arrow is
+  # indistinguishable from a plain one and shift-selection cannot be
+  # implemented at all here. Setting a mark and then moving is the same
+  # idea reached by the one road that's open.
+
+  def mark_set?
+    !@mark_y.nil?
+  end
+
+  def toggle_mark
+    if mark_set?
+      clear_mark
+    else
+      @mark_x = @cx
+      @mark_y = @cy
+    end
+  end
+
+  def clear_mark
+    @mark_x = nil
+    @mark_y = nil
+  end
+
+  # [sx, sy, ex, ey] in document order, or nil when there's no mark or the
+  # mark is exactly on the cursor -- so no caller has to ask which end
+  # came first, and none has to special-case a zero-width span.
+  def selection_range
+    return nil unless mark_set?
+    return nil if @mark_x == @cx && @mark_y == @cy
+    if @mark_y < @cy || (@mark_y == @cy && @mark_x < @cx)
+      [@mark_x, @mark_y, @cx, @cy]
+    else
+      [@cx, @cy, @mark_x, @mark_y]
+    end
+  end
+
+  def selected_text
+    r = selection_range
+    return nil if r.nil?
+    sx, sy, ex, ey = r
+    return line(sy)[sx, ex - sx] if sy == ey
+    parts = [line(sy)[sx, line(sy).length - sx]]
+    i = sy + 1
+    while i < ey
+      parts << line(i)
+      i += 1
+    end
+    parts << line(ey)[0, ex]
+    parts.join("\n")
+  end
+
+  def delete_selection
+    r = selection_range
+    return false if r.nil?
+    sx, sy, ex, ey = r
+    clear_mark
+    delete_range(sx, sy, ex, ey)
+    end_group
+    true
+  end
+
+  # ---- clipboard ----
+  #
+  # App-local. A clipboard shared with the Terminal and File Manager would
+  # be a kernel service with its own ownership and lifetime questions;
+  # this is the version that earns its keep today.
+
+  def copy
+    t = selected_text
+    return false if t.nil?
+    @clipboard = t
+    true
+  end
+
+  def cut
+    return false unless copy
+    delete_selection
+  end
+
+  def paste
+    return false if @clipboard.nil? || @clipboard.length == 0
+    delete_selection if mark_set?
+    insert_text(@clipboard)
+    end_group
+    true
+  end
+
+  # ---- find ----
+
+  # Searches forward from (from_x, from_y), wrapping to the top of the
+  # buffer exactly once, and returns [x, y] or nil. It wraps because a
+  # query that only appears above the cursor still has to be findable --
+  # scanning to the end and stopping would report "not found" for text
+  # plainly on screen.
+  def find(query, from_x, from_y)
+    return nil if query.nil? || query.length == 0
+    n = @lines.length
+    i = 0
+    while i <= n
+      y = (from_y + i) % n
+      start = (i == 0) ? from_x : 0
+      hit = line(y).index(query, start)
+      return [hit, y] unless hit.nil?
+      i += 1
+    end
+    nil
   end
 
   private

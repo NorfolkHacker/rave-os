@@ -138,6 +138,88 @@ eq(b.take_dirty, [1], "a single-line edit dirties only that line")
 b.insert_text("\n")
 eq(b.take_dirty, :all, "a line-count change dirties everything")
 
+group("Buffer: selection")
+
+b = Buffer.new(["abcd"])
+b.set_cursor(1, 0)
+b.toggle_mark
+b.set_cursor(3, 0)
+eq(b.selection_range, [1, 0, 3, 0], "mark before cursor")
+eq(b.selected_text, "bc", "selected text on one line")
+
+b = Buffer.new(["abcd"])
+b.set_cursor(3, 0)
+b.toggle_mark
+b.set_cursor(1, 0)
+eq(b.selection_range, [1, 0, 3, 0], "mark after cursor normalises")
+eq(b.selected_text, "bc", "selected text is the same either way")
+
+b = Buffer.new(["one", "two", "three"])
+b.set_cursor(1, 0)
+b.toggle_mark
+b.set_cursor(2, 2)
+eq(b.selected_text, "ne\ntwo\nth", "selection spans lines")
+
+b = Buffer.new(["abc"])
+b.set_cursor(1, 0)
+b.toggle_mark
+eq(b.selection_range, nil, "an empty selection is no selection")
+b.toggle_mark
+eq(b.mark_set?, false, "toggle_mark clears an existing mark")
+
+group("Buffer: clipboard")
+
+b = Buffer.new(["hello world"])
+b.set_cursor(0, 0)
+b.toggle_mark
+b.set_cursor(5, 0)
+eq(b.copy, true, "copy reports success")
+eq(b.clipboard, "hello", "copy takes the selected text")
+eq(b.lines, ["hello world"], "copy leaves the buffer alone")
+
+b = Buffer.new(["hello world"])
+b.set_cursor(0, 0)
+b.toggle_mark
+b.set_cursor(6, 0)
+eq(b.cut, true, "cut reports success")
+eq(b.lines, ["world"], "cut removes the selection")
+eq(b.mark_set?, false, "cut clears the mark")
+b.undo
+eq(b.lines, ["hello world"], "cut undoes as one step")
+
+b = Buffer.new(["ab"])
+b.set_cursor(2, 0)
+b.toggle_mark
+b.set_cursor(0, 0)
+b.cut
+b.set_cursor(0, 0)
+eq(b.paste, true, "paste reports success")
+eq(b.lines, ["ab"], "paste puts it back")
+
+b = Buffer.new(["xy"])
+b.set_cursor(1, 0)
+eq(b.paste, false, "paste with an empty clipboard is a no-op")
+
+b = Buffer.new(["one", "two"])
+b.set_cursor(0, 0)
+b.toggle_mark
+b.set_cursor(3, 1)
+b.cut
+eq(b.lines, [""], "cutting everything leaves one empty line")
+b.set_cursor(0, 0)
+b.paste
+eq(b.lines, ["one", "two"], "pasting multi-line text restores the lines")
+
+group("Buffer: find")
+
+b = Buffer.new(["alpha beta", "gamma", "beta delta"])
+eq(b.find("beta", 0, 0), [6, 0], "find forward on the first line")
+eq(b.find("beta", 7, 0), [0, 2], "find continues onto later lines")
+eq(b.find("alpha", 0, 2), [0, 0], "find wraps to the top")
+eq(b.find("zzz", 0, 0), nil, "find reports no match")
+eq(b.find("", 0, 0), nil, "find on an empty query is nil")
+eq(b.find("beta", 1, 0), [6, 0], "find matches later on the cursor's own line")
+
 # ----------------------------------------------------------------- done
 
 raise "#{$fails} failure(s)" if $fails > 0
