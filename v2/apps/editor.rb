@@ -1,4 +1,6 @@
 class EditorApp < AcidApp
+  include EditorCmd
+
   # Must match editor.app.toml and kernel_layout.h's KERNEL_TITLE_BAR_H.
   # 420x280 gives 25 lines of 65 columns; the old 240x170 gave 14 of 35,
   # which is a viewer more than an editor. The screen is 640x360, so two
@@ -92,6 +94,7 @@ class EditorApp < AcidApp
     draw_gutter
     draw_lines
     draw_cursor
+    draw_cmd_strip if cmd_active?
     draw_status
     acid_draw_window_border
   end
@@ -145,8 +148,12 @@ class EditorApp < AcidApp
 
   def on_key(code, pressed)
     return unless pressed
+    return redraw if cmd_key(code)
     @message = nil
-    if code == AcidKeys::UP
+    if code == AcidKeys::ESCAPE
+      cmd_open
+      return redraw
+    elsif code == AcidKeys::UP
       @buf.move(0, -1)
     elsif code == AcidKeys::DOWN
       @buf.move(0, 1)
