@@ -339,7 +339,11 @@ class DesktopApp < AcidApp
     # (acid_launcher_spawn/acid_spawn_app focus the existing window
     # instead of opening a second one).
     multi = fields["multi"] == "true"
-    return unless acid_launcher_register(rb_path, fields["name"], fields["w"].to_i, fields["h"].to_i, multi)
+    # An app with no `libs` line passes "", which window_binding.c reads as
+    # "no modules" -- see its own comment on slot->libs.
+    libs = fields["libs"] || ""
+    return unless acid_launcher_register(rb_path, fields["name"], fields["w"].to_i,
+                                         fields["h"].to_i, multi, libs)
     @menu_visible << ( fields["menu"] != "false" )
   rescue
     # One malformed/unreadable manifest shouldn't take the whole scan

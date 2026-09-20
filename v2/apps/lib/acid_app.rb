@@ -43,14 +43,47 @@ class AcidApp
     acid_am_i_focused
   end
 
+  # Ends the run loop from inside the app itself -- e.g. the editor's
+  # ESC q close confirmation. The other two ways this loop ends are the
+  # title-bar close button and the kernel's own :close event, both of
+  # which arrive here as that same event, not through this method.
+  def quit!
+    @running = false
+  end
+
+  # v2/fsroot/App is a real symlink to v2/apps -- an OS layout fact, not
+  # something specific to any one app, which is why this lives here on
+  # the shared base class every app's VM already loads, rather than
+  # being duplicated into each app that happens to need it. (It was
+  # duplicated into EditorCmd and FileManagerApp at first, on the
+  # mistaken belief they had no shared ancestry to hang it on -- they do,
+  # this one -- and two copies of a symlink mapping is exactly the kind
+  # of thing that drifts if the layout ever changes.)
+  #
+  # window_binding.c's is_multi_by_path/libs_by_path match a launch path
+  # against the launcher registry by exact strcmp against its canonical
+  # v2/apps form, so a path that arrived through the symlink matches
+  # neither and the spawned VM silently loads none of its libs. Fixed in
+  # Ruby, not with a C-side realpath: the hw target's filesystem layer is
+  # a stub, and a canonicalisation that only works on the sim would be
+  # worse than this explicit, commented mapping of the one symlink that
+  # exists.
+  FSROOT_APP_PREFIX = "v2/fsroot/App/"
+  CANONICAL_APP_PREFIX = "v2/apps/"
+
+  def canonical_app_path(path)
+    return path unless path.start_with?(FSROOT_APP_PREFIX)
+    CANONICAL_APP_PREFIX + path[FSROOT_APP_PREFIX.length, path.length - FSROOT_APP_PREFIX.length]
+  end
+
   def start
     on_create
     redraw
-    running = true
-    while running
+    @running = true
+    while @running
       ev = acid_poll_event(200)
       if ev == :close
-        running = false
+        @running = false
       elsif ev == :moved
         redraw
         acid_notify_redraw_done

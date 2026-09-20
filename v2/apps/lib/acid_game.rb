@@ -4,6 +4,10 @@ class AcidGame < AcidApp
   def on_tick
   end
 
+  # Own loop, own local `running` -- deliberately does not read @running,
+  # so AcidApp#quit! (which only sets that ivar) has no effect on a game.
+  # No game calls it today; if one ever wants a self-close, it needs its
+  # own flag checked in this loop, not the inherited quit!.
   def start
     on_create
     running = true

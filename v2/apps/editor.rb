@@ -1,22 +1,9 @@
 class EditorApp < AcidApp
-  # Must match the kernel_spawn_app(...) call that spawns this app (Task 7)
-  # and kernel_layout.h's KERNEL_TITLE_BAR_H.
-  WINDOW_W = 240
-  WINDOW_H = 170
-  TITLE_BAR_H = 16
-  LINE_H = 10
-  CHAR_W = 6
-  DEFAULT_FILE = "v2/fsroot/Home/notes.txt"
+  include EditorLayout
+  include EditorCmd
+  include EditorTouch
 
-  # Left gutter showing line numbers -- 4 digits is plenty for anything
-  # this OS's apps run to (the longest file in v2/apps so far is under
-  # 300 lines); a file longer than 9999 lines just loses its rightmost
-  # digit, same graceful-truncation approach every fixed-width label in
-  # this codebase already takes rather than reflowing layout for an edge
-  # case that doesn't come up in practice here.
-  GUTTER_CHARS = 4
-  GUTTER_W = GUTTER_CHARS * CHAR_W
-  TEXT_X = GUTTER_W + 2
+  DEFAULT_FILE = "v2/fsroot/Home/notes.txt"
 
   BG_COLOR = 0x0B1712      # THEME_PANEL -- status line
   BODY_BG = 0x050607       # THEME_BG -- text body
@@ -38,45 +25,129 @@ class EditorApp < AcidApp
     # the change on its next launch, no rebuild step.
     arg = acid_launch_arg
     @path = arg.empty? ? DEFAULT_FILE : arg
-    load_file
-    @cx = 0
-    @cy = 0
+    @buf = Buffer.new(read_lines)
     @scroll_y = 0
     @scroll_x = 0
+    @message = nil
+    # On for Ruby, off for anything else -- a .txt file has no syntax to
+    # show and colouring prose at random is worse than leaving it alone.
+    # ESC h overrides it for this window.
+    @hl_on = @path.end_with?(".rb")
+    @hl_cache = []
   end
 
-  def load_file
-    begin
-      f = File.open(@path, "r")
-      text = f.read
-      f.close
-      @lines = text.split("\n")
-    rescue
-      @lines = [""]
-    end
-    @lines = [""] if @lines.empty?
+  def read_lines
+    f = File.open(@path, "r")
+    text = f.read
+    f.close
+    text.split("\n")
+  rescue
+    [""]
   end
+
+  # Sibling temp path, not touching @path until the new content is fully
+  # written and closed. File.open(@path, "w") truncates the target the
+  # instant it succeeds -- so a write that fails partway (a full disk, a
+  # yanked SD card on the hw target, anything) used to leave the original
+  # file gone, not merely unsaved, and with no way back in from inside
+  # this OS (see this task's brief). Writing to a sibling first and
+  # File.rename-ing it over @path only if that write fully succeeds means
+  # a failure before the rename leaves the original byte-for-byte
+  # untouched. The suffix is one no real file is likely to already be
+  # using -- @path itself, mid-edit in this very window, is the one path
+  # a plain ".tmp" or "~" convention risks colliding with.
+  SAVE_TMP_SUFFIX = ".editor-save-tmp"
 
   def save_file
+    backup_failed = !backup_own_source
+    tmp = @path + SAVE_TMP_SUFFIX
+    wrote = false
+    f = nil
     begin
-      f = File.open(@path, "w")
+      f = File.open(tmp, "w")
       # Trailing newline, not just lines joined by one -- POSIX text files
-      # end in one, and this app now regularly saves real source files
-      # under fsroot/App (the live v2/apps symlink), not just its own
-      # scratch notes file: saving without it was confirmed live to strip
-      # an existing app.rb's final newline on every single save, which
-      # would show up as unwanted diff noise against git history for no
+      # end in one, and this app regularly saves real source files under
+      # fsroot/App (the live v2/apps symlink): saving without it was
+      # confirmed live to strip an existing app.rb's final newline on
+      # every save, which is diff noise against git history for no
       # reason.
-      f.write(@lines.join("\n") + "\n")
-      f.close
-      @saved_flash = true
+      f.write(@buf.lines.join("\n") + "\n")
+      wrote = true
     rescue
-      @saved_flash = false
+      wrote = false
     end
+    # Close on every path, including failure -- the old code never closed
+    # f once the write raised, leaking a descriptor on top of losing data.
+    f.close if f
+    saved = false
+    if wrote
+      begin
+        File.rename(tmp, @path)
+        saved = true
+      rescue
+        saved = false
+      end
+    end
+    # A half-written temp file (write failed) or a temp file the rename
+    # couldn't place (rename failed) is debris either way -- clean it up
+    # rather than leaving it for the user to find later. Best-effort: if
+    # even this fails there is nothing more useful to do about it.
+    unless saved
+      begin
+        File.delete(tmp) if File.exist?(tmp)
+      rescue
+      end
+    end
+    if saved
+      @buf.mark_saved
+      @message = backup_failed ? "saved (backup failed)" : "saved"
+    else
+      @message = "save failed"
+    end
+    saved
+  end
+
+  # Only for the files listed in EditorLayout::OWN_SOURCE_SUFFIXES -- the
+  # user chose this scope explicitly over backing up every save, since
+  # this app is the one editor that can edit and then immediately re-run
+  # the very code it's running as. Copies the CURRENT on-disk contents
+  # (not the buffer -- the buffer is what's about to overwrite it) to
+  # "<path>.bak" before that happens. A failure here (missing file on a
+  # first save, an unwritable sibling, anything) must never block the
+  # real save -- a user who can't save at all is worse off than one whose
+  # backup didn't take -- so this always returns rather than raising, and
+  # save_file only uses the result to add a note to @message.
+  def backup_own_source
+    return true unless own_source?(@path)
+    # A first save of a brand new own-source file has nothing to back up
+    # -- that's not a backup failure worth a "(backup failed)" note next
+    # to "saved", it's just the expected shape of creating something new.
+    return true unless File.exist?(@path)
+    current = nil
+    f = nil
+    begin
+      f = File.open(@path, "r")
+      current = f.read
+    rescue
+      current = nil
+    end
+    f.close if f
+    return false if current.nil?
+    out = nil
+    ok = false
+    begin
+      out = File.open(@path + ".bak", "w")
+      out.write(current)
+      ok = true
+    rescue
+      ok = false
+    end
+    out.close if out
+    ok
   end
 
   def visible_lines
-    (WINDOW_H - TITLE_BAR_H - LINE_H) / LINE_H
+    (STATUS_Y - TEXT_Y) / LINE_H
   end
 
   def visible_cols
@@ -91,154 +162,196 @@ class EditorApp < AcidApp
   def redraw
     acid_clear_user_area
     acid_draw_window_frame(window_title)
-    draw_status
     draw_gutter
     draw_lines
     draw_cursor
+    draw_cmd_strip if cmd_active?
+    if cmd_prompt_active?
+      draw_cmd_prompt
+    else
+      draw_status
+    end
     acid_draw_window_border
   end
 
   def draw_status
-    acid_fill_rect(0, TITLE_BAR_H, WINDOW_W, LINE_H, BG_COLOR)
-    left = @saved_flash ? "saved" : file_label
-    right = "#{@cy + 1},#{@cx + 1}  #{@lines.length}L"
-    acid_draw_text(left[0, 20], 2, TITLE_BAR_H + 1, STATUS_COLOR, BG_COLOR)
-    acid_draw_text(right, WINDOW_W - right.length * CHAR_W - 2, TITLE_BAR_H + 1, STATUS_COLOR, BG_COLOR)
+    acid_fill_rect(0, STATUS_Y, WINDOW_W, LINE_H, BG_COLOR)
+    left = @message ? @message : (file_label + (@buf.modified? ? " *" : ""))
+    right = "#{@buf.cy + 1},#{@buf.cx + 1}  #{@buf.line_count}L#{@hl_on ? '  hl' : ''}"
+    acid_draw_text(left[0, 28], 2, STATUS_Y + 1, STATUS_COLOR, BG_COLOR)
+    acid_draw_text(right, WINDOW_W - right.length * CHAR_W - 2, STATUS_Y + 1,
+                   STATUS_COLOR, BG_COLOR)
   end
 
   def draw_gutter
-    y = TITLE_BAR_H + LINE_H
-    acid_fill_rect(0, y, GUTTER_W, WINDOW_H - y, GUTTER_BG)
+    acid_fill_rect(0, TEXT_Y, GUTTER_W, STATUS_Y - TEXT_Y, GUTTER_BG)
     i = 0
     while i < visible_lines
       idx = @scroll_y + i
-      break if idx >= @lines.length
-      num = ( idx + 1 ).to_s
-      acid_draw_text(num, GUTTER_W - num.length * CHAR_W - 2, y + i * LINE_H + 1, GUTTER_COLOR, GUTTER_BG)
+      break if idx >= @buf.line_count
+      num = (idx + 1).to_s
+      acid_draw_text(num, GUTTER_W - num.length * CHAR_W - 2,
+                     TEXT_Y + i * LINE_H + 1, GUTTER_COLOR, GUTTER_BG)
       i += 1
     end
   end
 
+  SEL_BG = 0x123322    # THEME_PANEL's documented button-hover shade,
+                       # the same highlight file_manager.rb uses for its
+                       # selected row
+
   def draw_lines
-    y = TITLE_BAR_H + LINE_H
+    hl_invalidate
     i = 0
     while i < visible_lines
       idx = @scroll_y + i
-      text = idx < @lines.length ? @lines[idx] : ""
+      y = TEXT_Y + i * LINE_H
       acid_fill_rect(TEXT_X, y, WINDOW_W - TEXT_X, LINE_H, BODY_BG)
-      visible_text = text[@scroll_x, visible_cols] || ""
-      acid_draw_text(visible_text, TEXT_X, y + 1, TEXT_COLOR, BODY_BG)
-      y += LINE_H
+      sel = selection_span(idx)
+      unless sel.nil?
+        sx = sel[0] - @scroll_x
+        ex = sel[1] - @scroll_x
+        sx = 0 if sx < 0
+        ex = visible_cols if ex > visible_cols
+        acid_fill_rect(TEXT_X + sx * CHAR_W, y, (ex - sx) * CHAR_W, LINE_H, SEL_BG) if ex > sx
+      end
+      if idx < @buf.line_count
+        if @hl_on
+          draw_hl_line(idx, y)
+        else
+          visible_text = @buf.line(idx)[@scroll_x, visible_cols] || ""
+          acid_draw_text(visible_text, TEXT_X, y + 1, TEXT_COLOR, BODY_BG)
+        end
+      end
       i += 1
     end
+  end
+
+  # Tokens for one line, tokenized on first sight and kept until that
+  # line changes. Buffer reports what went stale (take_dirty); :all means
+  # the line count itself moved, so every cached index past the edit is
+  # wrong and the cheapest correct answer is to start over.
+  def hl_tokens(index)
+    cached = @hl_cache[index]
+    return cached unless cached.nil?
+    toks = Hl.tokenize(@buf.line(index))
+    @hl_cache[index] = toks
+    toks
+  end
+
+  # Runs once per redraw, from draw_lines, so it must fire even when
+  # highlighting is off -- otherwise a buffer edited with colour disabled
+  # keeps stale tokens once it's switched back on. take_dirty is
+  # read-and-clear, so calling this again from hl_tokens (once per line,
+  # per the brief) would always see an empty result after the first line
+  # -- dead work in a per-line loop -- which is why it lives here only.
+  def hl_invalidate
+    dirty = @buf.take_dirty
+    return if dirty == []
+    if dirty == :all
+      @hl_cache = []
+      return
+    end
+    dirty.each { |i| @hl_cache[i] = nil }
+  end
+
+  def draw_hl_line(index, y)
+    col = 0
+    limit = @scroll_x + visible_cols
+    hl_tokens(index).each do |t|
+      text = t[0]
+      start_col = col
+      col += text.length
+      next if col <= @scroll_x
+      break if start_col >= limit
+      cut = @scroll_x - start_col
+      cut = 0 if cut < 0
+      vis = text[cut, text.length - cut]
+      screen_col = start_col + cut - @scroll_x
+      room = visible_cols - screen_col
+      vis = vis[0, room] if vis.length > room
+      acid_draw_text(vis, TEXT_X + screen_col * CHAR_W, y + 1, t[1], BODY_BG)
+    end
+  end
+
+  # The [start_col, end_col] of the selection on one line, or nil. A line
+  # fully inside a multi-line selection runs to its own length plus one,
+  # so the newline it swallowed is visible as a highlighted cell rather
+  # than the selection appearing to stop short at the end of the text.
+  def selection_span(index)
+    r = @buf.selection_range
+    return nil if r.nil?
+    sx, sy, ex, ey = r
+    return nil if index < sy || index > ey
+    from = (index == sy) ? sx : 0
+    to = (index == ey) ? ex : @buf.line(index).length + 1
+    return nil if to <= from
+    [from, to]
   end
 
   def draw_cursor
-    row = @cy - @scroll_y
+    row = @buf.cy - @scroll_y
     return if row < 0 || row >= visible_lines
-    col = @cx - @scroll_x
+    col = @buf.cx - @scroll_x
     return if col < 0 || col >= visible_cols
     x = TEXT_X + col * CHAR_W
-    y = TITLE_BAR_H + LINE_H + row * LINE_H
+    y = TEXT_Y + row * LINE_H
     acid_fill_rect(x, y + LINE_H - 2, CHAR_W, 2, CURSOR_COLOR)
+  end
+
+  def on_touch(x, y, pressed)
+    @message = nil if pressed
+    redraw if editor_touch(x, y, pressed)
   end
 
   def on_key(code, pressed)
     return unless pressed
-    @saved_flash = false
+    return redraw if cmd_prompt_key(code)
+    return redraw if cmd_key(code)
+    @message = nil
+    # Not on ESCAPE: this is the ESCAPE that reopens the strip after "q"
+    # auto-closed it (cmd_key's own ESCAPE branch handles the cancel
+    # case, where the strip was already open) -- see cmd_key's comment.
+    @quit_armed = false unless code == AcidKeys::ESCAPE
     if code == AcidKeys::ESCAPE
-      save_file
+      cmd_open
+      return redraw
     elsif code == AcidKeys::UP
-      move_cursor(0, -1)
+      @buf.move(0, -1)
     elsif code == AcidKeys::DOWN
-      move_cursor(0, 1)
+      @buf.move(0, 1)
     elsif code == AcidKeys::LEFT
-      move_cursor(-1, 0)
+      @buf.move(-1, 0)
     elsif code == AcidKeys::RIGHT
-      move_cursor(1, 0)
+      @buf.move(1, 0)
     elsif code == AcidKeys::ENTER
-      split_line
+      @buf.split_line
     elsif code == AcidKeys::BACKSPACE
-      backspace
+      @buf.backspace
+    elsif code == AcidKeys::DELETE
+      @buf.delete_forward
+    elsif code == AcidKeys::TAB
+      # Two spaces, not a tab character: every width calculation in this
+      # app counts characters, and a literal tab would make the cursor
+      # column and the drawn column disagree from that point on.
+      @buf.insert_text("  ")
     elsif code >= 32 && code <= 126
-      insert_char(code)
+      @buf.insert_char(code.chr)
     end
     ensure_scroll
     redraw
   end
 
-  def current_line
-    @lines[@cy]
-  end
-
-  def move_cursor(dx, dy)
-    if dy != 0
-      @cy += dy
-      @cy = 0 if @cy < 0
-      @cy = @lines.length - 1 if @cy >= @lines.length
-      @cx = current_line.length if @cx > current_line.length
-    end
-    if dx != 0
-      @cx += dx
-      if @cx < 0
-        if @cy > 0
-          @cy -= 1
-          @cx = current_line.length
-        else
-          @cx = 0
-        end
-      elsif @cx > current_line.length
-        if @cy < @lines.length - 1
-          @cy += 1
-          @cx = 0
-        else
-          @cx = current_line.length
-        end
-      end
-    end
-  end
-
-  def insert_char(code)
-    line = current_line
-    ch = code.chr
-    @lines[@cy] = line[0, @cx] + ch + line[@cx, line.length - @cx]
-    @cx += 1
-  end
-
-  def split_line
-    line = current_line
-    before = line[0, @cx]
-    after = line[@cx, line.length - @cx]
-    @lines[@cy] = before
-    @lines.insert(@cy + 1, after)
-    @cy += 1
-    @cx = 0
-  end
-
-  def backspace
-    if @cx > 0
-      line = current_line
-      @lines[@cy] = line[0, @cx - 1] + line[@cx, line.length - @cx]
-      @cx -= 1
-    elsif @cy > 0
-      prev_len = @lines[@cy - 1].length
-      @lines[@cy - 1] = @lines[@cy - 1] + @lines[@cy]
-      @lines.delete_at(@cy)
-      @cy -= 1
-      @cx = prev_len
-    end
-  end
-
   def ensure_scroll
-    if @cy < @scroll_y
-      @scroll_y = @cy
-    elsif @cy >= @scroll_y + visible_lines
-      @scroll_y = @cy - visible_lines + 1
+    if @buf.cy < @scroll_y
+      @scroll_y = @buf.cy
+    elsif @buf.cy >= @scroll_y + visible_lines
+      @scroll_y = @buf.cy - visible_lines + 1
     end
-    if @cx < @scroll_x
-      @scroll_x = @cx
-    elsif @cx >= @scroll_x + visible_cols
-      @scroll_x = @cx - visible_cols + 1
+    if @buf.cx < @scroll_x
+      @scroll_x = @buf.cx
+    elsif @buf.cx >= @scroll_x + visible_cols
+      @scroll_x = @buf.cx - visible_cols + 1
     end
   end
 end

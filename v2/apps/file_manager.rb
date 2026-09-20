@@ -211,8 +211,8 @@ class FileManagerApp < AcidApp
   # the same convention this codebase already uses for other cross-file
   # constants (e.g. desktop.rb's SCREEN_W).
   EDITOR_PATH = "v2/apps/editor.rb"
-  EDITOR_W = 240
-  EDITOR_H = 170
+  EDITOR_W = 420
+  EDITOR_H = 280
 
   def activate_selected
     entry = @entries[@selected]
@@ -262,7 +262,16 @@ class FileManagerApp < AcidApp
     end
     return unless fields["w"] && fields["h"]
     rb_path = "#{@dir}/#{name[0, name.length - ".app.toml".length]}.rb"
-    acid_spawn_app(rb_path, fields["w"].to_i, fields["h"].to_i, "")
+    # canonical_app_path is defined on AcidApp (v2/apps/lib/acid_app.rb),
+    # not here -- browsing to a manifest under fsroot/App (which this app
+    # itself makes possible) built rb_path still under fsroot/App, and
+    # the launcher registry only matches the canonical v2/apps form (see
+    # AcidApp's comment on why). A bare call here resolves through self's
+    # actual ancestor chain at runtime (FileManagerApp < AcidApp), the
+    # same way cmdbar.rb's bare `quit!` call already relies on AcidApp
+    # without EditorCmd redefining it -- no shared module needed for a
+    # method the way OWN_SOURCE_SUFFIXES needed one for a constant.
+    acid_spawn_app(canonical_app_path(rb_path), fields["w"].to_i, fields["h"].to_i, "")
   end
 
   def go_up

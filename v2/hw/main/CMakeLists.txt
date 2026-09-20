@@ -7,6 +7,7 @@ idf_component_register(
         hal_meminfo_hw.c
         hal_network_hw.c
         ../../core/vm_host/vm_host.c
+        ../../core/vm_host/lib_paths.c
         ../../core/bindings/gfx_binding.c
         ../../core/bindings/event_binding.c
         ../../core/bindings/chrome_binding.c

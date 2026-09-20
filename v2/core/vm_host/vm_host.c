@@ -12,6 +12,7 @@
 #include "mruby/proc.h"
 
 #include "vm_host.h"
+#include "lib_paths.h"
 #include "../bindings/gfx_binding.h"
 #include "../bindings/event_binding.h"
 #include "../bindings/chrome_binding.h"
@@ -35,6 +36,12 @@
 #define ACID_KEYS_LIB_PATH "v2/apps/lib/acid_keys.rb"
 #define ACID_PALETTE_LIB_PATH "v2/apps/lib/acid_palette.rb"
 #define ACID_WAVEFORM_LIB_PATH "v2/apps/lib/acid_waveform.rb"
+
+/* Every per-app module path from a manifest resolves under here, and
+ * lib_path_is_safe (lib_paths.h) has already guaranteed the path can't
+ * climb out of it. */
+#define ACID_APPS_DIR "v2/apps/"
+#define ACID_LIB_ENTRY_MAX 128
 
 /* mruby's Prism parser/codegen are not thread-safe -- concurrent parsing
  * across different app VMs' own pthreads (this project's POSIX port backs
@@ -177,6 +184,64 @@ vm_host_init( void )
     g_parse_lock = xSemaphoreCreateMutex();
 }
 
+/* Splits a manifest's comma-separated `libs` value and loads each entry,
+ * skipping (with a message, not a crash) anything unsafe or overlong --
+ * one bad entry in a manifest shouldn't stop the app from starting, the
+ * same tolerance desktop.rb's own manifest scan already has for a
+ * malformed file. */
+static void
+load_libs_into_vm( mrb_state * mrb, mrb_ccontext * cxt, const char * libs )
+{
+    if( libs == NULL )
+    {
+        return;
+    }
+
+    const char * p = libs;
+    while( *p != '\0' )
+    {
+        while( *p == ' ' || *p == ',' )
+        {
+            p++;
+        }
+        const char * start = p;
+        while( *p != '\0' && *p != ',' )
+        {
+            p++;
+        }
+        const char * end = p;
+        while( end > start && end[ -1 ] == ' ' )
+        {
+            end--;
+        }
+
+        size_t len = ( size_t ) ( end - start );
+        if( len == 0 )
+        {
+            continue;
+        }
+        if( len >= ACID_LIB_ENTRY_MAX )
+        {
+            fprintf( stderr, "acid OS v2: lib path too long, skipped\n" );
+            continue;
+        }
+
+        char entry[ ACID_LIB_ENTRY_MAX ];
+        memcpy( entry, start, len );
+        entry[ len ] = '\0';
+
+        if( !lib_path_is_safe( entry ) )
+        {
+            fprintf( stderr, "acid OS v2: rejected unsafe lib path %s\n", entry );
+            continue;
+        }
+
+        char full[ sizeof( ACID_APPS_DIR ) + ACID_LIB_ENTRY_MAX ];
+        snprintf( full, sizeof( full ), ACID_APPS_DIR "%s", entry );
+        load_file_into_vm( mrb, cxt, full );
+    }
+}
+
 void
 vm_host_task( void * pvParameters )
 {
@@ -208,6 +273,7 @@ vm_host_task( void * pvParameters )
     load_file_into_vm( mrb, cxt, ACID_WAVEFORM_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_APP_LIB_PATH );
     load_file_into_vm( mrb, cxt, ACID_GAME_LIB_PATH );
+    load_libs_into_vm( mrb, cxt, params->libs );
     load_file_into_vm( mrb, cxt, params->script_path );
     mrb_ccontext_free( mrb, cxt );
     mrb_close( mrb );
