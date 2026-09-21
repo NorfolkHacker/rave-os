@@ -1,11 +1,12 @@
-# Test environment for AcidBlaster (apps/acid_blaster.rb), loaded BEFORE
-# it -- the app file ends in `AcidBlaster.new.start`, so the AcidGame
-# stub below has to exist (and has to NOT enter a real event loop)
-# before that line runs. Every acid_* binding is stubbed; the audio ones
-# record what they were called with, since "was the note ever turned
-# off" is the whole point of these tests.
+# Shared test environment for the AcidGame apps (apps/acid_blaster.rb,
+# apps/breakout.rb), loaded BEFORE the app under test -- each app file
+# ends in `<Class>.new.start`, so the AcidGame stub below has to exist
+# (and has to NOT enter a real event loop) before that line runs. Every
+# acid_* binding those games call is stubbed; the audio ones record what
+# they were called with, since "was the note ever turned off" is the
+# whole point of these tests.
 #
-# Run: see the command at the top of test_acid_blaster.rb.
+# Run: see the command at the top of each test_*.rb.
 
 $notes = []
 

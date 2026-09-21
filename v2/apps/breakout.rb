@@ -70,6 +70,15 @@ class Breakout < AcidGame
       end
       row += 1
     end
+    # Silence anything still gated before dropping the bookkeeping that
+    # would have silenced it. A restart tap arrives from on_touch while
+    # the game-over sting is usually still playing, and tick_sfx is the
+    # ONLY thing that ever sends a note-off -- clearing @sfx without
+    # this leaves the voice with no note-off coming, so its arpeggio
+    # cycles and its envelope sustains forever. (Same fix as
+    # acid_blaster.rb's; the shorter gate here only made it rarer to
+    # hit, not impossible.)
+    stop_all_sfx
     @sfx = []
     @just_destroyed = []
     @drawn_ball = nil
@@ -83,6 +92,13 @@ class Breakout < AcidGame
     acid_play_note(voice, notes[0], volume)
     acid_trigger_arp(voice, notes[0], notes[1], notes[2], notes[3], count, rate_ms)
     @sfx << { voice: voice, ticks: ticks }
+  end
+
+  # Safe to call before the first reset_game, when @sfx is still nil.
+  def stop_all_sfx
+    return unless @sfx
+    @sfx.each { |s| acid_stop_note(s[:voice]) }
+    @sfx = []
   end
 
   def tick_sfx

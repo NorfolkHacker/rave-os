@@ -1,12 +1,12 @@
 # Headless tests for AcidBlaster (apps/acid_blaster.rb). Loaded AFTER the
-# app itself; blaster_test_env.rb (loaded before it) supplies the stubbed
+# app itself; game_test_env.rb (loaded before it) supplies the stubbed
 # bindings and the non-looping AcidGame.
 #
 # Run (this runtime has no require, so the sources are concatenated in,
 # the way vm_host loads them into a real app VM):
 #
 #   cd /home/norfolkh/os && cat v2/apps/lib/acid_palette.rb \
-#     v2/tools/blaster_test_env.rb v2/apps/acid_blaster.rb \
+#     v2/tools/game_test_env.rb v2/apps/acid_blaster.rb \
 #     v2/tools/test_acid_blaster.rb | ./v2/components/mruby/build/host/bin/mruby -
 
 $fails = 0
