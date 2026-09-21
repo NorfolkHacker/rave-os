@@ -16,6 +16,32 @@ class AcidBlaster < AcidGame
   ENEMY_COLOR = 0x00FF66  # THEME_HARD
   TEXT_COLOR = 0xD4E6DB   # THEME_TEXT
 
+  # Every enemy used to be the one THEME_HARD green, which is exactly the
+  # "everything looks like the same few shades of green" that AcidPalette
+  # was written for (it names this game in its own comment). Most stay
+  # green so the play field still reads as this app's, but one enemy in
+  # ENEMY_ALT_CHANCE spawns on a random point of the full hue wheel --
+  # occasional, not a rainbow swarm. Purely cosmetic: the colour rides
+  # along in the enemy hash and only ever reaches draw_alien, so nothing
+  # about spawning, movement, tapping or scoring reads it.
+  ENEMY_ALT_CHANCE = 5
+
+  # A few fixed stars behind the play field, so the background is a night
+  # sky the enemies fly across instead of flat black. Deliberately dim
+  # (well below TEXT/ENEMY brightness) and 1px, so they never compete
+  # with an enemy for the player's eye or get mistaken for a tiny one.
+  # Kept clear of the SCORE line's 8px-tall text at the top, which draws
+  # its own background and would otherwise fight with any star under it.
+  # STAR_MARGIN keeps every star clear of the 1px window outline AND of
+  # the 3px rounded corners behind it (chrome_binding.c's CORNER_RADIUS)
+  # -- the stars repaint after the border on every incremental frame, so
+  # one placed on the edge would sit on top of the outline, or outside
+  # the rounded corner entirely, for the whole game.
+  STAR_COUNT = 14
+  STAR_MARGIN = 4
+  STAR_TOP = TITLE_BAR_H + 12
+  STAR_COLORS = [ 0x1E2B26, 0x1E2B26, 0x35514A, 0x6B8F84 ]
+
   # A small pixel-art alien instead of a plain filled circle -- an
   # original silhouette (not a copy of any specific game's own alien
   # glyph), drawn as a grid of small squares to match this OS's existing
@@ -63,9 +89,15 @@ class AcidBlaster < AcidGame
   OVER_ONA = 25
   OVER_NOTES = [ OVER_ONA, OVER_ONA - 3, OVER_ONA - 7, OVER_ONA - 12 ]
   OVER_ARP_COUNT = 4
-  OVER_ARP_RATE_MS = 70
+  # The gate (OVER_TICKS * TICK_MS) is deliberately exactly one pass of
+  # this arpeggio (OVER_ARP_COUNT * OVER_ARP_RATE_MS = 4 * 75 = 300ms =
+  # 6 * 50ms). An arp cycles up-only-WITH-WRAPAROUND until the note is
+  # stopped (see synth.h), so a longer gate doesn't hold the last note --
+  # it restarts the descending run and then chops it off mid-way, which
+  # is what made game-over drag on past its own ending.
+  OVER_ARP_RATE_MS = 75
   OVER_VOLUME = 40
-  OVER_TICKS = 8
+  OVER_TICKS = 6
 
   # By default every synth voice is an unfiltered pulse wave with an
   # instant attack and instant release (see synth_init()'s own comment) --
@@ -87,10 +119,19 @@ class AcidBlaster < AcidGame
     @enemies = []
     @spawn_timer = 0
     @game_over = false
+    # Silence anything still gated before dropping the bookkeeping that
+    # would have silenced it. A restart tap arrives from on_touch while
+    # the game-over sting is usually still playing (the player is
+    # mid-tapping when they lose), and tick_sfx is the ONLY thing that
+    # ever sends a note-off -- clearing @sfx without this leaves the
+    # voice with no note-off coming, so its arpeggio cycles and its
+    # envelope sustains forever.
+    stop_all_sfx
     @sfx = []
     # Dirty-tracking state for draw() -- see its own comment for why this
     # exists. needs_frame starts true so the very first draw does a full
     # clear+chrome paint.
+    @stars = build_stars
     @drawn_enemies = []
     @drawn_score = nil
     @drawn_game_over = false
@@ -102,6 +143,29 @@ class AcidBlaster < AcidGame
     acid_play_note(voice, notes[0], volume)
     acid_trigger_arp(voice, notes[0], notes[1], notes[2], notes[3], arp_count, arp_rate_ms)
     @sfx << { voice: voice, ticks: ticks }
+  end
+
+  # A fresh sky per round. Anything inside the target's outer ring is
+  # skipped rather than drawn-then-covered, since draw_target paints over
+  # that circle every frame anyway.
+  def build_stars
+    stars = []
+    while stars.length < STAR_COUNT
+      x = STAR_MARGIN + rand(WINDOW_W - 2 * STAR_MARGIN)
+      y = STAR_TOP + rand(WINDOW_H - STAR_MARGIN - STAR_TOP)
+      ddx = x - CENTER_X
+      ddy = y - CENTER_Y
+      next if (ddx * ddx + ddy * ddy) <= (TARGET_R1 * TARGET_R1)
+      stars << { x: x, y: y, color: STAR_COLORS[rand(STAR_COLORS.length)] }
+    end
+    stars
+  end
+
+  # Safe to call before the first reset_game, when @sfx is still nil.
+  def stop_all_sfx
+    return unless @sfx
+    @sfx.each { |s| acid_stop_note(s[:voice]) }
+    @sfx = []
   end
 
   def tick_sfx
@@ -158,7 +222,8 @@ class AcidBlaster < AcidGame
       vy = dy <=> 0
     end
 
-    @enemies << { x: x, y: y, dx: vx, dy: vy }
+    color = rand(ENEMY_ALT_CHANCE) == 0 ? AcidPalette.hue(rand(256)) : ENEMY_COLOR
+    @enemies << { x: x, y: y, dx: vx, dy: vy, color: color }
   end
 
   # Returns true if any enemy reached the center this tick. Also removes
@@ -263,8 +328,11 @@ class AcidBlaster < AcidGame
     if @needs_frame
       acid_clear_user_area
       acid_draw_window_frame(window_title)
-      draw_target
       acid_draw_window_border
+      # No draw_stars/draw_target here: both branches below repaint the
+      # background unconditionally (@drawn_game_over was just reset, so
+      # the game-over branch runs too), and painting it twice on the
+      # same frame is the slowest frame doing the most redundant work.
       @drawn_enemies = []
       @drawn_score = nil
       @drawn_game_over = false
@@ -274,6 +342,13 @@ class AcidBlaster < AcidGame
     if @game_over
       unless @drawn_game_over
         erase_drawn_enemies
+        # That erase leaves BG-coloured patches over whatever background
+        # the last aliens were standing on, and nothing repaints during
+        # the game-over screen -- so restore the background it swallowed
+        # before the text goes down, or the sky loses stars (and the
+        # target loses bites) for as long as the screen is up.
+        draw_stars
+        draw_target
         draw_game_over
         @drawn_game_over = true
       end
@@ -288,13 +363,21 @@ class AcidBlaster < AcidGame
     # this tick, fixes any such nick every frame instead of leaving a
     # permanent bite out of it (the same erase-overwrites-something-else
     # bug class as breakout.rb's side-border fix, different shape).
+    # The stars are background too, and an erase patch swallows any star
+    # it covers, so they get repainted here for exactly the same reason
+    # -- before the target, which wins wherever the two would overlap.
+    draw_stars
     draw_target
-    @enemies.each { |e| draw_alien(e[:x], e[:y], ENEMY_COLOR) }
+    @enemies.each { |e| draw_alien(e[:x], e[:y], e[:color]) }
     @drawn_enemies = @enemies.map { |e| { x: e[:x], y: e[:y] } }
 
     return if @drawn_score == @score
     acid_draw_text("SCORE: #{@score}", 4, TITLE_BAR_H + 2, TEXT_COLOR, BG_COLOR)
     @drawn_score = @score
+  end
+
+  def draw_stars
+    @stars.each { |s| acid_fill_rect(s[:x], s[:y], 1, 1, s[:color]) }
   end
 
   def draw_target
