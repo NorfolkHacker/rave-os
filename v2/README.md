@@ -8,6 +8,10 @@ spec (ESP32-P4 + ESP32-C6).
 See `docs/superpowers/specs/2026-09-13-acid-os-v2-bringup-design.md` for
 the design this directory implements.
 
+**Writing apps: see [The acid OS v2 Manual](../docs/manual/README.md)** — the
+app lifecycle, graphics, the [synthesiser](../docs/manual/05-sound.md), games,
+the system APIs, and a [full `acid_*` reference](../docs/manual/09-api-reference.md).
+
 ## Layout
 
 - `sim/` — native Linux build (plain CMake). FreeRTOS's own POSIX port +

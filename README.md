@@ -2,6 +2,12 @@
 
 Rave-OS is a hobby x86 operating system built from scratch in C and assembly — its own two-stage bootloader, a mouse-driven windowing GUI, a flat-file filesystem with a Unix-like directory layout, a from-scratch Forth dialect as its scripting language, and an 8-voice SID-style software synthesizer, all running with no libc and no floating point. It also has a real, if still foundational, userspace: identity-mapped paging, a ring 3 + `int 0x80` syscall ABI, a syscall surface covering filesystem/graphics/audio/window operations, and a loadable flat-binary program format (see [Userspace internals](#userspace-internals) below — none of this is user-reachable yet, it's kernel-level groundwork). It exists as a learning project: a record of learning x86 assembly, freestanding C, and OS-level programming by building one, staged deliberately (bootable groundwork → GUI → Forth → self-hosting → userspace) rather than attempted all at once.
 
+> **acid OS v2** — the successor, a FreeRTOS + mruby OS for the M5Stack Tab5
+> (ESP32-P4) where every app is a Ruby script in its own VM, lives in
+> [`v2/`](v2/). Its apps are documented in
+> **[The acid OS v2 Manual](docs/manual/README.md)** — how to write apps in
+> Ruby, including the [8-voice synthesiser API](docs/manual/05-sound.md).
+
 Everything below has been verified in QEMU. A real-hardware boot has not yet been attempted — see [Known limitations](#known-limitations).
 
 ## Install
