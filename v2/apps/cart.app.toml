@@ -1,0 +1,5 @@
+name = Load Cart
+w = 300
+h = 210
+desc = Install .cart programs from a card
+libs = cart/cartfile.rb

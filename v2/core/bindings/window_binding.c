@@ -54,9 +54,17 @@ struct launchable_app
 /* Bounded, not a Ruby-sized dynamic array -- matches this codebase's own
  * style elsewhere (KERNEL_WINDOW_MAX, etc.). desktop.rb's own dropdown
  * only has room to ever show MAX_LAUNCHER_ITEMS (6) of these regardless;
- * this is deliberately a little larger so a scan that finds more doesn't
- * silently drop entries the UI might grow room for later. */
-#define MAX_REGISTERED_APPS 16
+ * this is deliberately a lot larger so a scan that finds more doesn't
+ * silently drop entries the UI might grow room for later.
+ *
+ * Raised from 16 when Load Cart (apps/cart.rb) landed: v2/apps ships 12
+ * manifests, so the old cap left room for exactly four installed carts
+ * before acid_launcher_register started refusing -- and it refuses the
+ * apps that sort LAST, which would have quietly cost the user Terminal
+ * or Tetris rather than the cart that overflowed the table. Installing
+ * apps from a card is the whole point of that app, so the ceiling has
+ * to sit well above the number of apps in the tree. */
+#define MAX_REGISTERED_APPS 48
 static struct launchable_app g_registered[ MAX_REGISTERED_APPS ];
 static int g_registered_count = 0;
 

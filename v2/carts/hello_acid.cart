@@ -1,0 +1,63 @@
+# name: Hello Acid
+# w: 200
+# h: 150
+# desc: Example cart -- colour-cycling bars
+# libs: lib/acid_palette.rb
+#
+# A cart is a whole app in one file, written outside the OS and carried
+# in by Load Cart. The five `# key: value` lines above are the header the
+# loader reads: it writes them into the .app.toml it generates beside the
+# installed source. All five are optional -- with none of them a cart
+# still installs, named after its own filename at a default window size,
+# with no modules loaded.
+#
+# `libs` names modules from v2/apps/lib, exactly as a hand-written
+# manifest spells them. Only modules that really exist there are accepted.
+#
+# The rest of this file is an ordinary acid OS app: subclass AcidApp,
+# override what you need, call .new.start at the bottom.
+
+class HelloAcidApp < AcidApp
+  # Must match the `# w:`/`# h:` above -- same convention every app in
+  # v2/apps follows with its own manifest.
+  WINDOW_W = 200
+  WINDOW_H = 150
+  TITLE_BAR_H = 16
+  BAR_H = 8
+  TEXT_Y = 70
+
+  def on_create
+    @step = 0
+  end
+
+  # ~25fps while this window has focus; the base class polls events at
+  # this interval and fires on_idle when nothing arrives.
+  def poll_timeout_ms
+    40
+  end
+
+  def on_idle
+    return unless focused?
+    @step += 3
+    redraw
+  end
+
+  def redraw
+    acid_clear_user_area
+    acid_draw_window_frame(window_title)
+    y = TITLE_BAR_H
+    row = 0
+    while y < WINDOW_H
+      h = ( y + BAR_H > WINDOW_H ) ? WINDOW_H - y : BAR_H
+      acid_fill_rect(0, y, WINDOW_W, h, AcidPalette.hue(@step + row * 12))
+      y += BAR_H
+      row += 1
+    end
+    label_bg = AcidPalette.hue(@step + ( ( TEXT_Y - TITLE_BAR_H ) / BAR_H ) * 12)
+    acid_fill_rect(0, TEXT_Y, WINDOW_W, BAR_H, label_bg)
+    acid_draw_text("HELLO FROM A CART", 36, TEXT_Y, 0x050607, label_bg)
+    acid_draw_window_border
+  end
+end
+
+HelloAcidApp.new.start
